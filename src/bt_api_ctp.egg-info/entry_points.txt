@@ -1,0 +1,2 @@
+[bt_api.plugins]
+ctp = bt_api_ctp.plugin:register_plugin

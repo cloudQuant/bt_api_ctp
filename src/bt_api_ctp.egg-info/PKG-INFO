@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: bt_api_ctp
+Version: 2.0.0
+Summary: CTP exchange plugin for bt_api
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: bt_api_base<1.0,>=0.15

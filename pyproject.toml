@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bt_api_ctp"
+version = "2.0.0"
+description = "CTP exchange plugin for bt_api"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "bt_api_base>=0.15,<1.0",
+]
+
+[project.entry-points."bt_api.plugins"]
+ctp = "bt_api_ctp.plugin:register_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
