@@ -24,8 +24,20 @@ fix = true
 show-fixes = true
 
 [tool.ruff.lint]
-extend-select = ["I", "UP", "F401", "F403", "E402", "E501", "E711", "E713", "E714", "E721", "W191", "W291", "W292"]
-ignore = ["Q000", "Q003", "E501", "F401", "F403"]
+select = ["I", "UP", "E", "F", "W"]
+ignore = [
+    "E501",  # line too long
+    "E731",  # lambda assignment
+    "TC002",  # dynamic import
+    "TRY003",  # broad Exception
+    "F403",  # star import
+    "F841",  # unused variable
+    "Q000",  # bad quoting
+    "Q003",  # bad escaping
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/bt_api_ctp/ctp/__init__.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "single"
