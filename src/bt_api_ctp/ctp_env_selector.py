@@ -71,7 +71,7 @@ def _is_set1_available(now: datetime) -> bool:
 
 
 def get_ctp_fronts(
-    env: str = "",
+    env: str = '',
     now: datetime | None = None,
 ) -> tuple[str, str, str]:
     """
@@ -94,11 +94,11 @@ def get_ctp_fronts(
         now = datetime.now()
 
     if not env:
-        env = os.environ.get("CTP_ENV", "auto").strip().lower()
+        env = os.environ.get('CTP_ENV', 'auto').strip().lower()
 
-    if env == "set1":
+    if env == 'set1':
         return _get_set1_fronts()
-    elif env == "set2":
+    elif env == 'set2':
         return _get_set2_fronts()
     else:
         # auto 模式
@@ -110,23 +110,23 @@ def get_ctp_fronts(
 
 def _get_set1_fronts() -> tuple[str, str, str]:
     """获取第一套环境前置地址（根据 CTP_SET1_GROUP 选组）"""
-    group = os.environ.get("CTP_SET1_GROUP", "1").strip()
-    td = os.environ.get(f"CTP_SET1_TD_FRONT_{group}", "tcp://182.254.243.31:30001")
-    md = os.environ.get(f"CTP_SET1_MD_FRONT_{group}", "tcp://182.254.243.31:30011")
+    group = os.environ.get('CTP_SET1_GROUP', '1').strip()
+    td = os.environ.get(f'CTP_SET1_TD_FRONT_{group}', 'tcp://182.254.243.31:30001')
+    md = os.environ.get(f'CTP_SET1_MD_FRONT_{group}', 'tcp://182.254.243.31:30011')
     # 同步写入兼容变量
-    os.environ["CTP_TD_FRONT"] = td
-    os.environ["CTP_MD_FRONT"] = md
-    return td, md, f"set1_group{group}"
+    os.environ['CTP_TD_FRONT'] = td
+    os.environ['CTP_MD_FRONT'] = md
+    return td, md, f'set1_group{group}'
 
 
 def _get_set2_fronts() -> tuple[str, str, str]:
     """获取第二套 7x24 环境前置地址"""
-    td = os.environ.get("CTP_SET2_TD_FRONT", "tcp://182.254.243.31:40001")
-    md = os.environ.get("CTP_SET2_MD_FRONT", "tcp://182.254.243.31:40011")
+    td = os.environ.get('CTP_SET2_TD_FRONT', 'tcp://182.254.243.31:40001')
+    md = os.environ.get('CTP_SET2_MD_FRONT', 'tcp://182.254.243.31:40011')
     # 同步写入兼容变量
-    os.environ["CTP_TD_FRONT"] = td
-    os.environ["CTP_MD_FRONT"] = md
-    return td, md, "set2_7x24"
+    os.environ['CTP_TD_FRONT'] = td
+    os.environ['CTP_MD_FRONT'] = md
+    return td, md, 'set2_7x24'
 
 
 def apply_ctp_env() -> tuple[str, str, str]:

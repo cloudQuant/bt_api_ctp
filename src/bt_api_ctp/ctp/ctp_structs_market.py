@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcDisseminationField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     SequenceSeries = property(
@@ -21,7 +21,9 @@ class CThostFtdcDisseminationField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcDisseminationField_swiginit(self, _ctp.new_CThostFtdcDisseminationField())
+        _ctp.CThostFtdcDisseminationField_swiginit(
+            self, _ctp.new_CThostFtdcDisseminationField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcDisseminationField
 
@@ -32,14 +34,16 @@ _ctp.CThostFtdcDisseminationField_swigregister(CThostFtdcDisseminationField)
 
 class CThostFtdcExchangeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
-        _ctp.CThostFtdcExchangeField_ExchangeID_get, _ctp.CThostFtdcExchangeField_ExchangeID_set
+        _ctp.CThostFtdcExchangeField_ExchangeID_get,
+        _ctp.CThostFtdcExchangeField_ExchangeID_set,
     )
     ExchangeName = property(
-        _ctp.CThostFtdcExchangeField_ExchangeName_get, _ctp.CThostFtdcExchangeField_ExchangeName_set
+        _ctp.CThostFtdcExchangeField_ExchangeName_get,
+        _ctp.CThostFtdcExchangeField_ExchangeName_set,
     )
     ExchangeProperty = property(
         _ctp.CThostFtdcExchangeField_ExchangeProperty_get,
@@ -58,27 +62,32 @@ _ctp.CThostFtdcExchangeField_swigregister(CThostFtdcExchangeField)
 
 class CThostFtdcProductField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
-        _ctp.CThostFtdcProductField_reserve1_get, _ctp.CThostFtdcProductField_reserve1_set
+        _ctp.CThostFtdcProductField_reserve1_get,
+        _ctp.CThostFtdcProductField_reserve1_set,
     )
     ProductName = property(
-        _ctp.CThostFtdcProductField_ProductName_get, _ctp.CThostFtdcProductField_ProductName_set
+        _ctp.CThostFtdcProductField_ProductName_get,
+        _ctp.CThostFtdcProductField_ProductName_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcProductField_ExchangeID_get, _ctp.CThostFtdcProductField_ExchangeID_set
+        _ctp.CThostFtdcProductField_ExchangeID_get,
+        _ctp.CThostFtdcProductField_ExchangeID_set,
     )
     ProductClass = property(
-        _ctp.CThostFtdcProductField_ProductClass_get, _ctp.CThostFtdcProductField_ProductClass_set
+        _ctp.CThostFtdcProductField_ProductClass_get,
+        _ctp.CThostFtdcProductField_ProductClass_set,
     )
     VolumeMultiple = property(
         _ctp.CThostFtdcProductField_VolumeMultiple_get,
         _ctp.CThostFtdcProductField_VolumeMultiple_set,
     )
     PriceTick = property(
-        _ctp.CThostFtdcProductField_PriceTick_get, _ctp.CThostFtdcProductField_PriceTick_set
+        _ctp.CThostFtdcProductField_PriceTick_get,
+        _ctp.CThostFtdcProductField_PriceTick_set,
     )
     MaxMarketOrderVolume = property(
         _ctp.CThostFtdcProductField_MaxMarketOrderVolume_get,
@@ -97,14 +106,16 @@ class CThostFtdcProductField:
         _ctp.CThostFtdcProductField_MinLimitOrderVolume_set,
     )
     PositionType = property(
-        _ctp.CThostFtdcProductField_PositionType_get, _ctp.CThostFtdcProductField_PositionType_set
+        _ctp.CThostFtdcProductField_PositionType_get,
+        _ctp.CThostFtdcProductField_PositionType_set,
     )
     PositionDateType = property(
         _ctp.CThostFtdcProductField_PositionDateType_get,
         _ctp.CThostFtdcProductField_PositionDateType_set,
     )
     CloseDealType = property(
-        _ctp.CThostFtdcProductField_CloseDealType_get, _ctp.CThostFtdcProductField_CloseDealType_set
+        _ctp.CThostFtdcProductField_CloseDealType_get,
+        _ctp.CThostFtdcProductField_CloseDealType_set,
     )
     TradeCurrencyID = property(
         _ctp.CThostFtdcProductField_TradeCurrencyID_get,
@@ -115,14 +126,16 @@ class CThostFtdcProductField:
         _ctp.CThostFtdcProductField_MortgageFundUseRange_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcProductField_reserve2_get, _ctp.CThostFtdcProductField_reserve2_set
+        _ctp.CThostFtdcProductField_reserve2_get,
+        _ctp.CThostFtdcProductField_reserve2_set,
     )
     UnderlyingMultiple = property(
         _ctp.CThostFtdcProductField_UnderlyingMultiple_get,
         _ctp.CThostFtdcProductField_UnderlyingMultiple_set,
     )
     ProductID = property(
-        _ctp.CThostFtdcProductField_ProductID_get, _ctp.CThostFtdcProductField_ProductID_set
+        _ctp.CThostFtdcProductField_ProductID_get,
+        _ctp.CThostFtdcProductField_ProductID_set,
     )
     ExchangeProductID = property(
         _ctp.CThostFtdcProductField_ExchangeProductID_get,
@@ -149,24 +162,28 @@ _ctp.CThostFtdcProductField_swigregister(CThostFtdcProductField)
 
 class CThostFtdcInstrumentField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
-        _ctp.CThostFtdcInstrumentField_reserve1_get, _ctp.CThostFtdcInstrumentField_reserve1_set
+        _ctp.CThostFtdcInstrumentField_reserve1_get,
+        _ctp.CThostFtdcInstrumentField_reserve1_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcInstrumentField_ExchangeID_get, _ctp.CThostFtdcInstrumentField_ExchangeID_set
+        _ctp.CThostFtdcInstrumentField_ExchangeID_get,
+        _ctp.CThostFtdcInstrumentField_ExchangeID_set,
     )
     InstrumentName = property(
         _ctp.CThostFtdcInstrumentField_InstrumentName_get,
         _ctp.CThostFtdcInstrumentField_InstrumentName_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcInstrumentField_reserve2_get, _ctp.CThostFtdcInstrumentField_reserve2_set
+        _ctp.CThostFtdcInstrumentField_reserve2_get,
+        _ctp.CThostFtdcInstrumentField_reserve2_set,
     )
     reserve3 = property(
-        _ctp.CThostFtdcInstrumentField_reserve3_get, _ctp.CThostFtdcInstrumentField_reserve3_set
+        _ctp.CThostFtdcInstrumentField_reserve3_get,
+        _ctp.CThostFtdcInstrumentField_reserve3_set,
     )
     ProductClass = property(
         _ctp.CThostFtdcInstrumentField_ProductClass_get,
@@ -201,16 +218,20 @@ class CThostFtdcInstrumentField:
         _ctp.CThostFtdcInstrumentField_VolumeMultiple_set,
     )
     PriceTick = property(
-        _ctp.CThostFtdcInstrumentField_PriceTick_get, _ctp.CThostFtdcInstrumentField_PriceTick_set
+        _ctp.CThostFtdcInstrumentField_PriceTick_get,
+        _ctp.CThostFtdcInstrumentField_PriceTick_set,
     )
     CreateDate = property(
-        _ctp.CThostFtdcInstrumentField_CreateDate_get, _ctp.CThostFtdcInstrumentField_CreateDate_set
+        _ctp.CThostFtdcInstrumentField_CreateDate_get,
+        _ctp.CThostFtdcInstrumentField_CreateDate_set,
     )
     OpenDate = property(
-        _ctp.CThostFtdcInstrumentField_OpenDate_get, _ctp.CThostFtdcInstrumentField_OpenDate_set
+        _ctp.CThostFtdcInstrumentField_OpenDate_get,
+        _ctp.CThostFtdcInstrumentField_OpenDate_set,
     )
     ExpireDate = property(
-        _ctp.CThostFtdcInstrumentField_ExpireDate_get, _ctp.CThostFtdcInstrumentField_ExpireDate_set
+        _ctp.CThostFtdcInstrumentField_ExpireDate_get,
+        _ctp.CThostFtdcInstrumentField_ExpireDate_set,
     )
     StartDelivDate = property(
         _ctp.CThostFtdcInstrumentField_StartDelivDate_get,
@@ -225,7 +246,8 @@ class CThostFtdcInstrumentField:
         _ctp.CThostFtdcInstrumentField_InstLifePhase_set,
     )
     IsTrading = property(
-        _ctp.CThostFtdcInstrumentField_IsTrading_get, _ctp.CThostFtdcInstrumentField_IsTrading_set
+        _ctp.CThostFtdcInstrumentField_IsTrading_get,
+        _ctp.CThostFtdcInstrumentField_IsTrading_set,
     )
     PositionType = property(
         _ctp.CThostFtdcInstrumentField_PositionType_get,
@@ -248,7 +270,8 @@ class CThostFtdcInstrumentField:
         _ctp.CThostFtdcInstrumentField_MaxMarginSideAlgorithm_set,
     )
     reserve4 = property(
-        _ctp.CThostFtdcInstrumentField_reserve4_get, _ctp.CThostFtdcInstrumentField_reserve4_set
+        _ctp.CThostFtdcInstrumentField_reserve4_get,
+        _ctp.CThostFtdcInstrumentField_reserve4_set,
     )
     StrikePrice = property(
         _ctp.CThostFtdcInstrumentField_StrikePrice_get,
@@ -275,7 +298,8 @@ class CThostFtdcInstrumentField:
         _ctp.CThostFtdcInstrumentField_ExchangeInstID_set,
     )
     ProductID = property(
-        _ctp.CThostFtdcInstrumentField_ProductID_get, _ctp.CThostFtdcInstrumentField_ProductID_set
+        _ctp.CThostFtdcInstrumentField_ProductID_get,
+        _ctp.CThostFtdcInstrumentField_ProductID_set,
     )
     UnderlyingInstrID = property(
         _ctp.CThostFtdcInstrumentField_UnderlyingInstrID_get,
@@ -283,7 +307,9 @@ class CThostFtdcInstrumentField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcInstrumentField_swiginit(self, _ctp.new_CThostFtdcInstrumentField())
+        _ctp.CThostFtdcInstrumentField_swiginit(
+            self, _ctp.new_CThostFtdcInstrumentField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInstrumentField
 
@@ -294,7 +320,7 @@ _ctp.CThostFtdcInstrumentField_swigregister(CThostFtdcInstrumentField)
 
 class CThostFtdcDepthMarketDataField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -504,11 +530,12 @@ _ctp.CThostFtdcDepthMarketDataField_swigregister(CThostFtdcDepthMarketDataField)
 
 class CThostFtdcExchangeRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcExchangeRateField_BrokerID_get, _ctp.CThostFtdcExchangeRateField_BrokerID_set
+        _ctp.CThostFtdcExchangeRateField_BrokerID_get,
+        _ctp.CThostFtdcExchangeRateField_BrokerID_set,
     )
     FromCurrencyID = property(
         _ctp.CThostFtdcExchangeRateField_FromCurrencyID_get,
@@ -528,7 +555,9 @@ class CThostFtdcExchangeRateField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcExchangeRateField_swiginit(self, _ctp.new_CThostFtdcExchangeRateField())
+        _ctp.CThostFtdcExchangeRateField_swiginit(
+            self, _ctp.new_CThostFtdcExchangeRateField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeRateField
 
@@ -539,7 +568,7 @@ _ctp.CThostFtdcExchangeRateField_swigregister(CThostFtdcExchangeRateField)
 
 class CThostFtdcExchangeTradeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -547,7 +576,8 @@ class CThostFtdcExchangeTradeField:
         _ctp.CThostFtdcExchangeTradeField_ExchangeID_set,
     )
     TradeID = property(
-        _ctp.CThostFtdcExchangeTradeField_TradeID_get, _ctp.CThostFtdcExchangeTradeField_TradeID_set
+        _ctp.CThostFtdcExchangeTradeField_TradeID_get,
+        _ctp.CThostFtdcExchangeTradeField_TradeID_set,
     )
     Direction = property(
         _ctp.CThostFtdcExchangeTradeField_Direction_get,
@@ -582,10 +612,12 @@ class CThostFtdcExchangeTradeField:
         _ctp.CThostFtdcExchangeTradeField_HedgeFlag_set,
     )
     Price = property(
-        _ctp.CThostFtdcExchangeTradeField_Price_get, _ctp.CThostFtdcExchangeTradeField_Price_set
+        _ctp.CThostFtdcExchangeTradeField_Price_get,
+        _ctp.CThostFtdcExchangeTradeField_Price_set,
     )
     Volume = property(
-        _ctp.CThostFtdcExchangeTradeField_Volume_get, _ctp.CThostFtdcExchangeTradeField_Volume_set
+        _ctp.CThostFtdcExchangeTradeField_Volume_get,
+        _ctp.CThostFtdcExchangeTradeField_Volume_set,
     )
     TradeDate = property(
         _ctp.CThostFtdcExchangeTradeField_TradeDate_get,
@@ -633,7 +665,9 @@ class CThostFtdcExchangeTradeField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcExchangeTradeField_swiginit(self, _ctp.new_CThostFtdcExchangeTradeField())
+        _ctp.CThostFtdcExchangeTradeField_swiginit(
+            self, _ctp.new_CThostFtdcExchangeTradeField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeTradeField
 
@@ -644,7 +678,7 @@ _ctp.CThostFtdcExchangeTradeField_swigregister(CThostFtdcExchangeTradeField)
 
 class CThostFtdcCombInstrumentGuardField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -682,7 +716,7 @@ _ctp.CThostFtdcCombInstrumentGuardField_swigregister(CThostFtdcCombInstrumentGua
 
 class CThostFtdcProductExchRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -720,23 +754,28 @@ _ctp.CThostFtdcProductExchRateField_swigregister(CThostFtdcProductExchRateField)
 
 class CThostFtdcMarketDataField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
-        _ctp.CThostFtdcMarketDataField_TradingDay_get, _ctp.CThostFtdcMarketDataField_TradingDay_set
+        _ctp.CThostFtdcMarketDataField_TradingDay_get,
+        _ctp.CThostFtdcMarketDataField_TradingDay_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcMarketDataField_reserve1_get, _ctp.CThostFtdcMarketDataField_reserve1_set
+        _ctp.CThostFtdcMarketDataField_reserve1_get,
+        _ctp.CThostFtdcMarketDataField_reserve1_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcMarketDataField_ExchangeID_get, _ctp.CThostFtdcMarketDataField_ExchangeID_set
+        _ctp.CThostFtdcMarketDataField_ExchangeID_get,
+        _ctp.CThostFtdcMarketDataField_ExchangeID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcMarketDataField_reserve2_get, _ctp.CThostFtdcMarketDataField_reserve2_set
+        _ctp.CThostFtdcMarketDataField_reserve2_get,
+        _ctp.CThostFtdcMarketDataField_reserve2_set,
     )
     LastPrice = property(
-        _ctp.CThostFtdcMarketDataField_LastPrice_get, _ctp.CThostFtdcMarketDataField_LastPrice_set
+        _ctp.CThostFtdcMarketDataField_LastPrice_get,
+        _ctp.CThostFtdcMarketDataField_LastPrice_set,
     )
     PreSettlementPrice = property(
         _ctp.CThostFtdcMarketDataField_PreSettlementPrice_get,
@@ -751,7 +790,8 @@ class CThostFtdcMarketDataField:
         _ctp.CThostFtdcMarketDataField_PreOpenInterest_set,
     )
     OpenPrice = property(
-        _ctp.CThostFtdcMarketDataField_OpenPrice_get, _ctp.CThostFtdcMarketDataField_OpenPrice_set
+        _ctp.CThostFtdcMarketDataField_OpenPrice_get,
+        _ctp.CThostFtdcMarketDataField_OpenPrice_set,
     )
     HighestPrice = property(
         _ctp.CThostFtdcMarketDataField_HighestPrice_get,
@@ -762,17 +802,20 @@ class CThostFtdcMarketDataField:
         _ctp.CThostFtdcMarketDataField_LowestPrice_set,
     )
     Volume = property(
-        _ctp.CThostFtdcMarketDataField_Volume_get, _ctp.CThostFtdcMarketDataField_Volume_set
+        _ctp.CThostFtdcMarketDataField_Volume_get,
+        _ctp.CThostFtdcMarketDataField_Volume_set,
     )
     Turnover = property(
-        _ctp.CThostFtdcMarketDataField_Turnover_get, _ctp.CThostFtdcMarketDataField_Turnover_set
+        _ctp.CThostFtdcMarketDataField_Turnover_get,
+        _ctp.CThostFtdcMarketDataField_Turnover_set,
     )
     OpenInterest = property(
         _ctp.CThostFtdcMarketDataField_OpenInterest_get,
         _ctp.CThostFtdcMarketDataField_OpenInterest_set,
     )
     ClosePrice = property(
-        _ctp.CThostFtdcMarketDataField_ClosePrice_get, _ctp.CThostFtdcMarketDataField_ClosePrice_set
+        _ctp.CThostFtdcMarketDataField_ClosePrice_get,
+        _ctp.CThostFtdcMarketDataField_ClosePrice_set,
     )
     SettlementPrice = property(
         _ctp.CThostFtdcMarketDataField_SettlementPrice_get,
@@ -787,20 +830,24 @@ class CThostFtdcMarketDataField:
         _ctp.CThostFtdcMarketDataField_LowerLimitPrice_set,
     )
     PreDelta = property(
-        _ctp.CThostFtdcMarketDataField_PreDelta_get, _ctp.CThostFtdcMarketDataField_PreDelta_set
+        _ctp.CThostFtdcMarketDataField_PreDelta_get,
+        _ctp.CThostFtdcMarketDataField_PreDelta_set,
     )
     CurrDelta = property(
-        _ctp.CThostFtdcMarketDataField_CurrDelta_get, _ctp.CThostFtdcMarketDataField_CurrDelta_set
+        _ctp.CThostFtdcMarketDataField_CurrDelta_get,
+        _ctp.CThostFtdcMarketDataField_CurrDelta_set,
     )
     UpdateTime = property(
-        _ctp.CThostFtdcMarketDataField_UpdateTime_get, _ctp.CThostFtdcMarketDataField_UpdateTime_set
+        _ctp.CThostFtdcMarketDataField_UpdateTime_get,
+        _ctp.CThostFtdcMarketDataField_UpdateTime_set,
     )
     UpdateMillisec = property(
         _ctp.CThostFtdcMarketDataField_UpdateMillisec_get,
         _ctp.CThostFtdcMarketDataField_UpdateMillisec_set,
     )
     ActionDay = property(
-        _ctp.CThostFtdcMarketDataField_ActionDay_get, _ctp.CThostFtdcMarketDataField_ActionDay_set
+        _ctp.CThostFtdcMarketDataField_ActionDay_get,
+        _ctp.CThostFtdcMarketDataField_ActionDay_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcMarketDataField_InstrumentID_get,
@@ -812,7 +859,9 @@ class CThostFtdcMarketDataField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcMarketDataField_swiginit(self, _ctp.new_CThostFtdcMarketDataField())
+        _ctp.CThostFtdcMarketDataField_swiginit(
+            self, _ctp.new_CThostFtdcMarketDataField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMarketDataField
 
@@ -823,7 +872,7 @@ _ctp.CThostFtdcMarketDataField_swigregister(CThostFtdcMarketDataField)
 
 class CThostFtdcMarketDataBaseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -848,7 +897,9 @@ class CThostFtdcMarketDataBaseField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcMarketDataBaseField_swiginit(self, _ctp.new_CThostFtdcMarketDataBaseField())
+        _ctp.CThostFtdcMarketDataBaseField_swiginit(
+            self, _ctp.new_CThostFtdcMarketDataBaseField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMarketDataBaseField
 
@@ -859,7 +910,7 @@ _ctp.CThostFtdcMarketDataBaseField_swigregister(CThostFtdcMarketDataBaseField)
 
 class CThostFtdcMarketDataStaticField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     OpenPrice = property(
@@ -909,7 +960,7 @@ _ctp.CThostFtdcMarketDataStaticField_swigregister(CThostFtdcMarketDataStaticFiel
 
 class CThostFtdcMarketDataLastMatchField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     LastPrice = property(
@@ -943,7 +994,7 @@ _ctp.CThostFtdcMarketDataLastMatchField_swigregister(CThostFtdcMarketDataLastMat
 
 class CThostFtdcMarketDataBestPriceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BidPrice1 = property(
@@ -977,7 +1028,7 @@ _ctp.CThostFtdcMarketDataBestPriceField_swigregister(CThostFtdcMarketDataBestPri
 
 class CThostFtdcMarketDataBid23Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BidPrice2 = property(
@@ -1011,7 +1062,7 @@ _ctp.CThostFtdcMarketDataBid23Field_swigregister(CThostFtdcMarketDataBid23Field)
 
 class CThostFtdcMarketDataAsk23Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     AskPrice2 = property(
@@ -1045,7 +1096,7 @@ _ctp.CThostFtdcMarketDataAsk23Field_swigregister(CThostFtdcMarketDataAsk23Field)
 
 class CThostFtdcMarketDataBid45Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BidPrice4 = property(
@@ -1079,7 +1130,7 @@ _ctp.CThostFtdcMarketDataBid45Field_swigregister(CThostFtdcMarketDataBid45Field)
 
 class CThostFtdcMarketDataAsk45Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     AskPrice4 = property(
@@ -1113,7 +1164,7 @@ _ctp.CThostFtdcMarketDataAsk45Field_swigregister(CThostFtdcMarketDataAsk45Field)
 
 class CThostFtdcMarketDataUpdateTimeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1146,12 +1197,14 @@ class CThostFtdcMarketDataUpdateTimeField:
 
 
 # Register CThostFtdcMarketDataUpdateTimeField in _ctp:
-_ctp.CThostFtdcMarketDataUpdateTimeField_swigregister(CThostFtdcMarketDataUpdateTimeField)
+_ctp.CThostFtdcMarketDataUpdateTimeField_swigregister(
+    CThostFtdcMarketDataUpdateTimeField
+)
 
 
 class CThostFtdcMarketDataBandingPriceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BandingUpperPrice = property(
@@ -1172,12 +1225,14 @@ class CThostFtdcMarketDataBandingPriceField:
 
 
 # Register CThostFtdcMarketDataBandingPriceField in _ctp:
-_ctp.CThostFtdcMarketDataBandingPriceField_swigregister(CThostFtdcMarketDataBandingPriceField)
+_ctp.CThostFtdcMarketDataBandingPriceField_swigregister(
+    CThostFtdcMarketDataBandingPriceField
+)
 
 
 class CThostFtdcMarketDataExchangeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1199,7 +1254,7 @@ _ctp.CThostFtdcMarketDataExchangeField_swigregister(CThostFtdcMarketDataExchange
 
 class CThostFtdcSpecificInstrumentField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1225,7 +1280,7 @@ _ctp.CThostFtdcSpecificInstrumentField_swigregister(CThostFtdcSpecificInstrument
 
 class CThostFtdcInstrumentStatusField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1283,7 +1338,7 @@ _ctp.CThostFtdcInstrumentStatusField_swigregister(CThostFtdcInstrumentStatusFiel
 
 class CThostFtdcMarketDataAveragePriceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     AveragePrice = property(
@@ -1300,12 +1355,14 @@ class CThostFtdcMarketDataAveragePriceField:
 
 
 # Register CThostFtdcMarketDataAveragePriceField in _ctp:
-_ctp.CThostFtdcMarketDataAveragePriceField_swigregister(CThostFtdcMarketDataAveragePriceField)
+_ctp.CThostFtdcMarketDataAveragePriceField_swigregister(
+    CThostFtdcMarketDataAveragePriceField
+)
 
 
 class CThostFtdcExchangeSequenceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1335,18 +1392,20 @@ _ctp.CThostFtdcExchangeSequenceField_swigregister(CThostFtdcExchangeSequenceFiel
 
 class CThostFtdcProductGroupField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
-        _ctp.CThostFtdcProductGroupField_reserve1_get, _ctp.CThostFtdcProductGroupField_reserve1_set
+        _ctp.CThostFtdcProductGroupField_reserve1_get,
+        _ctp.CThostFtdcProductGroupField_reserve1_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcProductGroupField_ExchangeID_get,
         _ctp.CThostFtdcProductGroupField_ExchangeID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcProductGroupField_reserve2_get, _ctp.CThostFtdcProductGroupField_reserve2_set
+        _ctp.CThostFtdcProductGroupField_reserve2_get,
+        _ctp.CThostFtdcProductGroupField_reserve2_set,
     )
     ProductID = property(
         _ctp.CThostFtdcProductGroupField_ProductID_get,
@@ -1358,7 +1417,9 @@ class CThostFtdcProductGroupField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcProductGroupField_swiginit(self, _ctp.new_CThostFtdcProductGroupField())
+        _ctp.CThostFtdcProductGroupField_swiginit(
+            self, _ctp.new_CThostFtdcProductGroupField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcProductGroupField
 
@@ -1369,7 +1430,7 @@ _ctp.CThostFtdcProductGroupField_swigregister(CThostFtdcProductGroupField)
 
 class CThostFtdcMulticastInstrumentField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TopicID = property(
@@ -1415,21 +1476,26 @@ _ctp.CThostFtdcMulticastInstrumentField_swigregister(CThostFtdcMulticastInstrume
 
 class CThostFtdcFrontInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontAddr = property(
-        _ctp.CThostFtdcFrontInfoField_FrontAddr_get, _ctp.CThostFtdcFrontInfoField_FrontAddr_set
+        _ctp.CThostFtdcFrontInfoField_FrontAddr_get,
+        _ctp.CThostFtdcFrontInfoField_FrontAddr_set,
     )
     QryFreq = property(
-        _ctp.CThostFtdcFrontInfoField_QryFreq_get, _ctp.CThostFtdcFrontInfoField_QryFreq_set
+        _ctp.CThostFtdcFrontInfoField_QryFreq_get,
+        _ctp.CThostFtdcFrontInfoField_QryFreq_set,
     )
     FTDPkgFreq = property(
-        _ctp.CThostFtdcFrontInfoField_FTDPkgFreq_get, _ctp.CThostFtdcFrontInfoField_FTDPkgFreq_set
+        _ctp.CThostFtdcFrontInfoField_FTDPkgFreq_get,
+        _ctp.CThostFtdcFrontInfoField_FTDPkgFreq_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcFrontInfoField_swiginit(self, _ctp.new_CThostFtdcFrontInfoField())
+        _ctp.CThostFtdcFrontInfoField_swiginit(
+            self, _ctp.new_CThostFtdcFrontInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcFrontInfoField
 
@@ -1438,32 +1504,32 @@ class CThostFtdcFrontInfoField:
 _ctp.CThostFtdcFrontInfoField_swigregister(CThostFtdcFrontInfoField)
 
 __all__ = [
-    "CThostFtdcDisseminationField",
-    "CThostFtdcExchangeField",
-    "CThostFtdcProductField",
-    "CThostFtdcInstrumentField",
-    "CThostFtdcDepthMarketDataField",
-    "CThostFtdcExchangeRateField",
-    "CThostFtdcExchangeTradeField",
-    "CThostFtdcCombInstrumentGuardField",
-    "CThostFtdcProductExchRateField",
-    "CThostFtdcMarketDataField",
-    "CThostFtdcMarketDataBaseField",
-    "CThostFtdcMarketDataStaticField",
-    "CThostFtdcMarketDataLastMatchField",
-    "CThostFtdcMarketDataBestPriceField",
-    "CThostFtdcMarketDataBid23Field",
-    "CThostFtdcMarketDataAsk23Field",
-    "CThostFtdcMarketDataBid45Field",
-    "CThostFtdcMarketDataAsk45Field",
-    "CThostFtdcMarketDataUpdateTimeField",
-    "CThostFtdcMarketDataBandingPriceField",
-    "CThostFtdcMarketDataExchangeField",
-    "CThostFtdcSpecificInstrumentField",
-    "CThostFtdcInstrumentStatusField",
-    "CThostFtdcMarketDataAveragePriceField",
-    "CThostFtdcExchangeSequenceField",
-    "CThostFtdcProductGroupField",
-    "CThostFtdcMulticastInstrumentField",
-    "CThostFtdcFrontInfoField",
+    'CThostFtdcDisseminationField',
+    'CThostFtdcExchangeField',
+    'CThostFtdcProductField',
+    'CThostFtdcInstrumentField',
+    'CThostFtdcDepthMarketDataField',
+    'CThostFtdcExchangeRateField',
+    'CThostFtdcExchangeTradeField',
+    'CThostFtdcCombInstrumentGuardField',
+    'CThostFtdcProductExchRateField',
+    'CThostFtdcMarketDataField',
+    'CThostFtdcMarketDataBaseField',
+    'CThostFtdcMarketDataStaticField',
+    'CThostFtdcMarketDataLastMatchField',
+    'CThostFtdcMarketDataBestPriceField',
+    'CThostFtdcMarketDataBid23Field',
+    'CThostFtdcMarketDataAsk23Field',
+    'CThostFtdcMarketDataBid45Field',
+    'CThostFtdcMarketDataAsk45Field',
+    'CThostFtdcMarketDataUpdateTimeField',
+    'CThostFtdcMarketDataBandingPriceField',
+    'CThostFtdcMarketDataExchangeField',
+    'CThostFtdcSpecificInstrumentField',
+    'CThostFtdcInstrumentStatusField',
+    'CThostFtdcMarketDataAveragePriceField',
+    'CThostFtdcExchangeSequenceField',
+    'CThostFtdcProductGroupField',
+    'CThostFtdcMulticastInstrumentField',
+    'CThostFtdcFrontInfoField',
 ]

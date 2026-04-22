@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcInvestorPositionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -226,7 +226,7 @@ _ctp.CThostFtdcInvestorPositionField_swigregister(CThostFtdcInvestorPositionFiel
 
 class CThostFtdcPositionProfitAlgorithmField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -259,12 +259,14 @@ class CThostFtdcPositionProfitAlgorithmField:
 
 
 # Register CThostFtdcPositionProfitAlgorithmField in _ctp:
-_ctp.CThostFtdcPositionProfitAlgorithmField_swigregister(CThostFtdcPositionProfitAlgorithmField)
+_ctp.CThostFtdcPositionProfitAlgorithmField_swigregister(
+    CThostFtdcPositionProfitAlgorithmField
+)
 
 
 class CThostFtdcInvestorPositionDetailField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -401,12 +403,14 @@ class CThostFtdcInvestorPositionDetailField:
 
 
 # Register CThostFtdcInvestorPositionDetailField in _ctp:
-_ctp.CThostFtdcInvestorPositionDetailField_swigregister(CThostFtdcInvestorPositionDetailField)
+_ctp.CThostFtdcInvestorPositionDetailField_swigregister(
+    CThostFtdcInvestorPositionDetailField
+)
 
 
 class CThostFtdcInvestorPositionCombineDetailField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -516,8 +520,8 @@ _ctp.CThostFtdcInvestorPositionCombineDetailField_swigregister(
 )
 
 __all__ = [
-    "CThostFtdcInvestorPositionField",
-    "CThostFtdcPositionProfitAlgorithmField",
-    "CThostFtdcInvestorPositionDetailField",
-    "CThostFtdcInvestorPositionCombineDetailField",
+    'CThostFtdcInvestorPositionField',
+    'CThostFtdcPositionProfitAlgorithmField',
+    'CThostFtdcInvestorPositionDetailField',
+    'CThostFtdcInvestorPositionCombineDetailField',
 ]

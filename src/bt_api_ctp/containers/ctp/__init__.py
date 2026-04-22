@@ -8,13 +8,13 @@ from .ctp_ticker import CtpTickerData
 from .ctp_trade import CtpTradeData
 
 __all__ = [
-    "CTP_DIRECTION_MAP",
-    "CTP_ORDER_STATUS_MAP",
-    "CTP_POS_DIRECTION_MAP",
-    "CtpAccountData",
-    "CtpBarData",
-    "CtpOrderData",
-    "CtpPositionData",
-    "CtpTickerData",
-    "CtpTradeData",
+    'CTP_DIRECTION_MAP',
+    'CTP_ORDER_STATUS_MAP',
+    'CTP_POS_DIRECTION_MAP',
+    'CtpAccountData',
+    'CtpBarData',
+    'CtpOrderData',
+    'CtpPositionData',
+    'CtpTickerData',
+    'CtpTradeData',
 ]

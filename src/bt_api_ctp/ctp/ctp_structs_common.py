@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcReqUserLoginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -16,13 +16,16 @@ class CThostFtdcReqUserLoginField:
         _ctp.CThostFtdcReqUserLoginField_TradingDay_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcReqUserLoginField_BrokerID_get, _ctp.CThostFtdcReqUserLoginField_BrokerID_set
+        _ctp.CThostFtdcReqUserLoginField_BrokerID_get,
+        _ctp.CThostFtdcReqUserLoginField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqUserLoginField_UserID_get, _ctp.CThostFtdcReqUserLoginField_UserID_set
+        _ctp.CThostFtdcReqUserLoginField_UserID_get,
+        _ctp.CThostFtdcReqUserLoginField_UserID_set,
     )
     Password = property(
-        _ctp.CThostFtdcReqUserLoginField_Password_get, _ctp.CThostFtdcReqUserLoginField_Password_set
+        _ctp.CThostFtdcReqUserLoginField_Password_get,
+        _ctp.CThostFtdcReqUserLoginField_Password_set,
     )
     UserProductInfo = property(
         _ctp.CThostFtdcReqUserLoginField_UserProductInfo_get,
@@ -45,7 +48,8 @@ class CThostFtdcReqUserLoginField:
         _ctp.CThostFtdcReqUserLoginField_OneTimePassword_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcReqUserLoginField_reserve1_get, _ctp.CThostFtdcReqUserLoginField_reserve1_set
+        _ctp.CThostFtdcReqUserLoginField_reserve1_get,
+        _ctp.CThostFtdcReqUserLoginField_reserve1_set,
     )
     LoginRemark = property(
         _ctp.CThostFtdcReqUserLoginField_LoginRemark_get,
@@ -61,7 +65,9 @@ class CThostFtdcReqUserLoginField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqUserLoginField_swiginit(self, _ctp.new_CThostFtdcReqUserLoginField())
+        _ctp.CThostFtdcReqUserLoginField_swiginit(
+            self, _ctp.new_CThostFtdcReqUserLoginField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqUserLoginField
 
@@ -72,7 +78,7 @@ _ctp.CThostFtdcReqUserLoginField_swigregister(CThostFtdcReqUserLoginField)
 
 class CThostFtdcRspUserLoginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -84,17 +90,20 @@ class CThostFtdcRspUserLoginField:
         _ctp.CThostFtdcRspUserLoginField_LoginTime_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcRspUserLoginField_BrokerID_get, _ctp.CThostFtdcRspUserLoginField_BrokerID_set
+        _ctp.CThostFtdcRspUserLoginField_BrokerID_get,
+        _ctp.CThostFtdcRspUserLoginField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcRspUserLoginField_UserID_get, _ctp.CThostFtdcRspUserLoginField_UserID_set
+        _ctp.CThostFtdcRspUserLoginField_UserID_get,
+        _ctp.CThostFtdcRspUserLoginField_UserID_set,
     )
     SystemName = property(
         _ctp.CThostFtdcRspUserLoginField_SystemName_get,
         _ctp.CThostFtdcRspUserLoginField_SystemName_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcRspUserLoginField_FrontID_get, _ctp.CThostFtdcRspUserLoginField_FrontID_set
+        _ctp.CThostFtdcRspUserLoginField_FrontID_get,
+        _ctp.CThostFtdcRspUserLoginField_FrontID_set,
     )
     SessionID = property(
         _ctp.CThostFtdcRspUserLoginField_SessionID_get,
@@ -105,30 +114,38 @@ class CThostFtdcRspUserLoginField:
         _ctp.CThostFtdcRspUserLoginField_MaxOrderRef_set,
     )
     SHFETime = property(
-        _ctp.CThostFtdcRspUserLoginField_SHFETime_get, _ctp.CThostFtdcRspUserLoginField_SHFETime_set
+        _ctp.CThostFtdcRspUserLoginField_SHFETime_get,
+        _ctp.CThostFtdcRspUserLoginField_SHFETime_set,
     )
     DCETime = property(
-        _ctp.CThostFtdcRspUserLoginField_DCETime_get, _ctp.CThostFtdcRspUserLoginField_DCETime_set
+        _ctp.CThostFtdcRspUserLoginField_DCETime_get,
+        _ctp.CThostFtdcRspUserLoginField_DCETime_set,
     )
     CZCETime = property(
-        _ctp.CThostFtdcRspUserLoginField_CZCETime_get, _ctp.CThostFtdcRspUserLoginField_CZCETime_set
+        _ctp.CThostFtdcRspUserLoginField_CZCETime_get,
+        _ctp.CThostFtdcRspUserLoginField_CZCETime_set,
     )
     FFEXTime = property(
-        _ctp.CThostFtdcRspUserLoginField_FFEXTime_get, _ctp.CThostFtdcRspUserLoginField_FFEXTime_set
+        _ctp.CThostFtdcRspUserLoginField_FFEXTime_get,
+        _ctp.CThostFtdcRspUserLoginField_FFEXTime_set,
     )
     INETime = property(
-        _ctp.CThostFtdcRspUserLoginField_INETime_get, _ctp.CThostFtdcRspUserLoginField_INETime_set
+        _ctp.CThostFtdcRspUserLoginField_INETime_get,
+        _ctp.CThostFtdcRspUserLoginField_INETime_set,
     )
     SysVersion = property(
         _ctp.CThostFtdcRspUserLoginField_SysVersion_get,
         _ctp.CThostFtdcRspUserLoginField_SysVersion_set,
     )
     GFEXTime = property(
-        _ctp.CThostFtdcRspUserLoginField_GFEXTime_get, _ctp.CThostFtdcRspUserLoginField_GFEXTime_set
+        _ctp.CThostFtdcRspUserLoginField_GFEXTime_get,
+        _ctp.CThostFtdcRspUserLoginField_GFEXTime_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspUserLoginField_swiginit(self, _ctp.new_CThostFtdcRspUserLoginField())
+        _ctp.CThostFtdcRspUserLoginField_swiginit(
+            self, _ctp.new_CThostFtdcRspUserLoginField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspUserLoginField
 
@@ -139,18 +156,22 @@ _ctp.CThostFtdcRspUserLoginField_swigregister(CThostFtdcRspUserLoginField)
 
 class CThostFtdcUserLogoutField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcUserLogoutField_BrokerID_get, _ctp.CThostFtdcUserLogoutField_BrokerID_set
+        _ctp.CThostFtdcUserLogoutField_BrokerID_get,
+        _ctp.CThostFtdcUserLogoutField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcUserLogoutField_UserID_get, _ctp.CThostFtdcUserLogoutField_UserID_set
+        _ctp.CThostFtdcUserLogoutField_UserID_get,
+        _ctp.CThostFtdcUserLogoutField_UserID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcUserLogoutField_swiginit(self, _ctp.new_CThostFtdcUserLogoutField())
+        _ctp.CThostFtdcUserLogoutField_swiginit(
+            self, _ctp.new_CThostFtdcUserLogoutField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcUserLogoutField
 
@@ -161,7 +182,7 @@ _ctp.CThostFtdcUserLogoutField_swigregister(CThostFtdcUserLogoutField)
 
 class CThostFtdcForceUserLogoutField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -187,7 +208,7 @@ _ctp.CThostFtdcForceUserLogoutField_swigregister(CThostFtdcForceUserLogoutField)
 
 class CThostFtdcReqAuthenticateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -207,7 +228,8 @@ class CThostFtdcReqAuthenticateField:
         _ctp.CThostFtdcReqAuthenticateField_AuthCode_set,
     )
     AppID = property(
-        _ctp.CThostFtdcReqAuthenticateField_AppID_get, _ctp.CThostFtdcReqAuthenticateField_AppID_set
+        _ctp.CThostFtdcReqAuthenticateField_AppID_get,
+        _ctp.CThostFtdcReqAuthenticateField_AppID_set,
     )
 
     def __init__(self):
@@ -224,7 +246,7 @@ _ctp.CThostFtdcReqAuthenticateField_swigregister(CThostFtdcReqAuthenticateField)
 
 class CThostFtdcRspAuthenticateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -240,7 +262,8 @@ class CThostFtdcRspAuthenticateField:
         _ctp.CThostFtdcRspAuthenticateField_UserProductInfo_set,
     )
     AppID = property(
-        _ctp.CThostFtdcRspAuthenticateField_AppID_get, _ctp.CThostFtdcRspAuthenticateField_AppID_set
+        _ctp.CThostFtdcRspAuthenticateField_AppID_get,
+        _ctp.CThostFtdcRspAuthenticateField_AppID_set,
     )
     AppType = property(
         _ctp.CThostFtdcRspAuthenticateField_AppType_get,
@@ -261,7 +284,7 @@ _ctp.CThostFtdcRspAuthenticateField_swigregister(CThostFtdcRspAuthenticateField)
 
 class CThostFtdcAuthenticationInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -315,7 +338,7 @@ _ctp.CThostFtdcAuthenticationInfoField_swigregister(CThostFtdcAuthenticationInfo
 
 class CThostFtdcRspUserLogin2Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -331,14 +354,16 @@ class CThostFtdcRspUserLogin2Field:
         _ctp.CThostFtdcRspUserLogin2Field_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcRspUserLogin2Field_UserID_get, _ctp.CThostFtdcRspUserLogin2Field_UserID_set
+        _ctp.CThostFtdcRspUserLogin2Field_UserID_get,
+        _ctp.CThostFtdcRspUserLogin2Field_UserID_set,
     )
     SystemName = property(
         _ctp.CThostFtdcRspUserLogin2Field_SystemName_get,
         _ctp.CThostFtdcRspUserLogin2Field_SystemName_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcRspUserLogin2Field_FrontID_get, _ctp.CThostFtdcRspUserLogin2Field_FrontID_set
+        _ctp.CThostFtdcRspUserLogin2Field_FrontID_get,
+        _ctp.CThostFtdcRspUserLogin2Field_FrontID_set,
     )
     SessionID = property(
         _ctp.CThostFtdcRspUserLogin2Field_SessionID_get,
@@ -353,7 +378,8 @@ class CThostFtdcRspUserLogin2Field:
         _ctp.CThostFtdcRspUserLogin2Field_SHFETime_set,
     )
     DCETime = property(
-        _ctp.CThostFtdcRspUserLogin2Field_DCETime_get, _ctp.CThostFtdcRspUserLogin2Field_DCETime_set
+        _ctp.CThostFtdcRspUserLogin2Field_DCETime_get,
+        _ctp.CThostFtdcRspUserLogin2Field_DCETime_set,
     )
     CZCETime = property(
         _ctp.CThostFtdcRspUserLogin2Field_CZCETime_get,
@@ -364,7 +390,8 @@ class CThostFtdcRspUserLogin2Field:
         _ctp.CThostFtdcRspUserLogin2Field_FFEXTime_set,
     )
     INETime = property(
-        _ctp.CThostFtdcRspUserLogin2Field_INETime_get, _ctp.CThostFtdcRspUserLogin2Field_INETime_set
+        _ctp.CThostFtdcRspUserLogin2Field_INETime_get,
+        _ctp.CThostFtdcRspUserLogin2Field_INETime_set,
     )
     RandomString = property(
         _ctp.CThostFtdcRspUserLogin2Field_RandomString_get,
@@ -372,7 +399,9 @@ class CThostFtdcRspUserLogin2Field:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspUserLogin2Field_swiginit(self, _ctp.new_CThostFtdcRspUserLogin2Field())
+        _ctp.CThostFtdcRspUserLogin2Field_swiginit(
+            self, _ctp.new_CThostFtdcRspUserLogin2Field()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspUserLogin2Field
 
@@ -383,14 +412,15 @@ _ctp.CThostFtdcRspUserLogin2Field_swigregister(CThostFtdcRspUserLogin2Field)
 
 class CThostFtdcRspInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ErrorID = property(
         _ctp.CThostFtdcRspInfoField_ErrorID_get, _ctp.CThostFtdcRspInfoField_ErrorID_set
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcRspInfoField_ErrorMsg_get, _ctp.CThostFtdcRspInfoField_ErrorMsg_set
+        _ctp.CThostFtdcRspInfoField_ErrorMsg_get,
+        _ctp.CThostFtdcRspInfoField_ErrorMsg_set,
     )
 
     def __init__(self):
@@ -405,17 +435,19 @@ _ctp.CThostFtdcRspInfoField_swigregister(CThostFtdcRspInfoField)
 
 class CThostFtdcBrokerField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
         _ctp.CThostFtdcBrokerField_BrokerID_get, _ctp.CThostFtdcBrokerField_BrokerID_set
     )
     BrokerAbbr = property(
-        _ctp.CThostFtdcBrokerField_BrokerAbbr_get, _ctp.CThostFtdcBrokerField_BrokerAbbr_set
+        _ctp.CThostFtdcBrokerField_BrokerAbbr_get,
+        _ctp.CThostFtdcBrokerField_BrokerAbbr_set,
     )
     BrokerName = property(
-        _ctp.CThostFtdcBrokerField_BrokerName_get, _ctp.CThostFtdcBrokerField_BrokerName_set
+        _ctp.CThostFtdcBrokerField_BrokerName_get,
+        _ctp.CThostFtdcBrokerField_BrokerName_set,
     )
     IsActive = property(
         _ctp.CThostFtdcBrokerField_IsActive_get, _ctp.CThostFtdcBrokerField_IsActive_set
@@ -433,36 +465,41 @@ _ctp.CThostFtdcBrokerField_swigregister(CThostFtdcBrokerField)
 
 class CThostFtdcTraderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
-        _ctp.CThostFtdcTraderField_ExchangeID_get, _ctp.CThostFtdcTraderField_ExchangeID_set
+        _ctp.CThostFtdcTraderField_ExchangeID_get,
+        _ctp.CThostFtdcTraderField_ExchangeID_set,
     )
     TraderID = property(
         _ctp.CThostFtdcTraderField_TraderID_get, _ctp.CThostFtdcTraderField_TraderID_set
     )
     ParticipantID = property(
-        _ctp.CThostFtdcTraderField_ParticipantID_get, _ctp.CThostFtdcTraderField_ParticipantID_set
+        _ctp.CThostFtdcTraderField_ParticipantID_get,
+        _ctp.CThostFtdcTraderField_ParticipantID_set,
     )
     Password = property(
         _ctp.CThostFtdcTraderField_Password_get, _ctp.CThostFtdcTraderField_Password_set
     )
     InstallCount = property(
-        _ctp.CThostFtdcTraderField_InstallCount_get, _ctp.CThostFtdcTraderField_InstallCount_set
+        _ctp.CThostFtdcTraderField_InstallCount_get,
+        _ctp.CThostFtdcTraderField_InstallCount_set,
     )
     BrokerID = property(
         _ctp.CThostFtdcTraderField_BrokerID_get, _ctp.CThostFtdcTraderField_BrokerID_set
     )
     OrderCancelAlg = property(
-        _ctp.CThostFtdcTraderField_OrderCancelAlg_get, _ctp.CThostFtdcTraderField_OrderCancelAlg_set
+        _ctp.CThostFtdcTraderField_OrderCancelAlg_get,
+        _ctp.CThostFtdcTraderField_OrderCancelAlg_set,
     )
     TradeInstallCount = property(
         _ctp.CThostFtdcTraderField_TradeInstallCount_get,
         _ctp.CThostFtdcTraderField_TradeInstallCount_set,
     )
     MDInstallCount = property(
-        _ctp.CThostFtdcTraderField_MDInstallCount_get, _ctp.CThostFtdcTraderField_MDInstallCount_set
+        _ctp.CThostFtdcTraderField_MDInstallCount_get,
+        _ctp.CThostFtdcTraderField_MDInstallCount_set,
     )
 
     def __init__(self):
@@ -477,21 +514,24 @@ _ctp.CThostFtdcTraderField_swigregister(CThostFtdcTraderField)
 
 class CThostFtdcInvestorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     InvestorID = property(
-        _ctp.CThostFtdcInvestorField_InvestorID_get, _ctp.CThostFtdcInvestorField_InvestorID_set
+        _ctp.CThostFtdcInvestorField_InvestorID_get,
+        _ctp.CThostFtdcInvestorField_InvestorID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcInvestorField_BrokerID_get, _ctp.CThostFtdcInvestorField_BrokerID_set
+        _ctp.CThostFtdcInvestorField_BrokerID_get,
+        _ctp.CThostFtdcInvestorField_BrokerID_set,
     )
     InvestorGroupID = property(
         _ctp.CThostFtdcInvestorField_InvestorGroupID_get,
         _ctp.CThostFtdcInvestorField_InvestorGroupID_set,
     )
     InvestorName = property(
-        _ctp.CThostFtdcInvestorField_InvestorName_get, _ctp.CThostFtdcInvestorField_InvestorName_set
+        _ctp.CThostFtdcInvestorField_InvestorName_get,
+        _ctp.CThostFtdcInvestorField_InvestorName_set,
     )
     IdentifiedCardType = property(
         _ctp.CThostFtdcInvestorField_IdentifiedCardType_get,
@@ -502,29 +542,35 @@ class CThostFtdcInvestorField:
         _ctp.CThostFtdcInvestorField_IdentifiedCardNo_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcInvestorField_IsActive_get, _ctp.CThostFtdcInvestorField_IsActive_set
+        _ctp.CThostFtdcInvestorField_IsActive_get,
+        _ctp.CThostFtdcInvestorField_IsActive_set,
     )
     Telephone = property(
-        _ctp.CThostFtdcInvestorField_Telephone_get, _ctp.CThostFtdcInvestorField_Telephone_set
+        _ctp.CThostFtdcInvestorField_Telephone_get,
+        _ctp.CThostFtdcInvestorField_Telephone_set,
     )
     Address = property(
-        _ctp.CThostFtdcInvestorField_Address_get, _ctp.CThostFtdcInvestorField_Address_set
+        _ctp.CThostFtdcInvestorField_Address_get,
+        _ctp.CThostFtdcInvestorField_Address_set,
     )
     OpenDate = property(
-        _ctp.CThostFtdcInvestorField_OpenDate_get, _ctp.CThostFtdcInvestorField_OpenDate_set
+        _ctp.CThostFtdcInvestorField_OpenDate_get,
+        _ctp.CThostFtdcInvestorField_OpenDate_set,
     )
     Mobile = property(
         _ctp.CThostFtdcInvestorField_Mobile_get, _ctp.CThostFtdcInvestorField_Mobile_set
     )
     CommModelID = property(
-        _ctp.CThostFtdcInvestorField_CommModelID_get, _ctp.CThostFtdcInvestorField_CommModelID_set
+        _ctp.CThostFtdcInvestorField_CommModelID_get,
+        _ctp.CThostFtdcInvestorField_CommModelID_set,
     )
     MarginModelID = property(
         _ctp.CThostFtdcInvestorField_MarginModelID_get,
         _ctp.CThostFtdcInvestorField_MarginModelID_set,
     )
     IsOrderFreq = property(
-        _ctp.CThostFtdcInvestorField_IsOrderFreq_get, _ctp.CThostFtdcInvestorField_IsOrderFreq_set
+        _ctp.CThostFtdcInvestorField_IsOrderFreq_get,
+        _ctp.CThostFtdcInvestorField_IsOrderFreq_set,
     )
     IsOpenVolLimit = property(
         _ctp.CThostFtdcInvestorField_IsOpenVolLimit_get,
@@ -543,7 +589,7 @@ _ctp.CThostFtdcInvestorField_swigregister(CThostFtdcInvestorField)
 
 class CThostFtdcTradingCodeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     InvestorID = property(
@@ -551,27 +597,32 @@ class CThostFtdcTradingCodeField:
         _ctp.CThostFtdcTradingCodeField_InvestorID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcTradingCodeField_BrokerID_get, _ctp.CThostFtdcTradingCodeField_BrokerID_set
+        _ctp.CThostFtdcTradingCodeField_BrokerID_get,
+        _ctp.CThostFtdcTradingCodeField_BrokerID_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcTradingCodeField_ExchangeID_get,
         _ctp.CThostFtdcTradingCodeField_ExchangeID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcTradingCodeField_ClientID_get, _ctp.CThostFtdcTradingCodeField_ClientID_set
+        _ctp.CThostFtdcTradingCodeField_ClientID_get,
+        _ctp.CThostFtdcTradingCodeField_ClientID_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcTradingCodeField_IsActive_get, _ctp.CThostFtdcTradingCodeField_IsActive_set
+        _ctp.CThostFtdcTradingCodeField_IsActive_get,
+        _ctp.CThostFtdcTradingCodeField_IsActive_set,
     )
     ClientIDType = property(
         _ctp.CThostFtdcTradingCodeField_ClientIDType_get,
         _ctp.CThostFtdcTradingCodeField_ClientIDType_set,
     )
     BranchID = property(
-        _ctp.CThostFtdcTradingCodeField_BranchID_get, _ctp.CThostFtdcTradingCodeField_BranchID_set
+        _ctp.CThostFtdcTradingCodeField_BranchID_get,
+        _ctp.CThostFtdcTradingCodeField_BranchID_set,
     )
     BizType = property(
-        _ctp.CThostFtdcTradingCodeField_BizType_get, _ctp.CThostFtdcTradingCodeField_BizType_set
+        _ctp.CThostFtdcTradingCodeField_BizType_get,
+        _ctp.CThostFtdcTradingCodeField_BizType_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcTradingCodeField_InvestUnitID_get,
@@ -579,7 +630,9 @@ class CThostFtdcTradingCodeField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTradingCodeField_swiginit(self, _ctp.new_CThostFtdcTradingCodeField())
+        _ctp.CThostFtdcTradingCodeField_swiginit(
+            self, _ctp.new_CThostFtdcTradingCodeField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTradingCodeField
 
@@ -590,25 +643,30 @@ _ctp.CThostFtdcTradingCodeField_swigregister(CThostFtdcTradingCodeField)
 
 class CThostFtdcPartBrokerField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcPartBrokerField_BrokerID_get, _ctp.CThostFtdcPartBrokerField_BrokerID_set
+        _ctp.CThostFtdcPartBrokerField_BrokerID_get,
+        _ctp.CThostFtdcPartBrokerField_BrokerID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcPartBrokerField_ExchangeID_get, _ctp.CThostFtdcPartBrokerField_ExchangeID_set
+        _ctp.CThostFtdcPartBrokerField_ExchangeID_get,
+        _ctp.CThostFtdcPartBrokerField_ExchangeID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcPartBrokerField_ParticipantID_get,
         _ctp.CThostFtdcPartBrokerField_ParticipantID_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcPartBrokerField_IsActive_get, _ctp.CThostFtdcPartBrokerField_IsActive_set
+        _ctp.CThostFtdcPartBrokerField_IsActive_get,
+        _ctp.CThostFtdcPartBrokerField_IsActive_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcPartBrokerField_swiginit(self, _ctp.new_CThostFtdcPartBrokerField())
+        _ctp.CThostFtdcPartBrokerField_swiginit(
+            self, _ctp.new_CThostFtdcPartBrokerField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcPartBrokerField
 
@@ -619,24 +677,30 @@ _ctp.CThostFtdcPartBrokerField_swigregister(CThostFtdcPartBrokerField)
 
 class CThostFtdcSuperUserField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     UserID = property(
-        _ctp.CThostFtdcSuperUserField_UserID_get, _ctp.CThostFtdcSuperUserField_UserID_set
+        _ctp.CThostFtdcSuperUserField_UserID_get,
+        _ctp.CThostFtdcSuperUserField_UserID_set,
     )
     UserName = property(
-        _ctp.CThostFtdcSuperUserField_UserName_get, _ctp.CThostFtdcSuperUserField_UserName_set
+        _ctp.CThostFtdcSuperUserField_UserName_get,
+        _ctp.CThostFtdcSuperUserField_UserName_set,
     )
     Password = property(
-        _ctp.CThostFtdcSuperUserField_Password_get, _ctp.CThostFtdcSuperUserField_Password_set
+        _ctp.CThostFtdcSuperUserField_Password_get,
+        _ctp.CThostFtdcSuperUserField_Password_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcSuperUserField_IsActive_get, _ctp.CThostFtdcSuperUserField_IsActive_set
+        _ctp.CThostFtdcSuperUserField_IsActive_get,
+        _ctp.CThostFtdcSuperUserField_IsActive_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSuperUserField_swiginit(self, _ctp.new_CThostFtdcSuperUserField())
+        _ctp.CThostFtdcSuperUserField_swiginit(
+            self, _ctp.new_CThostFtdcSuperUserField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSuperUserField
 
@@ -647,7 +711,7 @@ _ctp.CThostFtdcSuperUserField_swigregister(CThostFtdcSuperUserField)
 
 class CThostFtdcSuperUserFunctionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     UserID = property(
@@ -673,7 +737,7 @@ _ctp.CThostFtdcSuperUserFunctionField_swigregister(CThostFtdcSuperUserFunctionFi
 
 class CThostFtdcInvestorGroupField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -690,7 +754,9 @@ class CThostFtdcInvestorGroupField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcInvestorGroupField_swiginit(self, _ctp.new_CThostFtdcInvestorGroupField())
+        _ctp.CThostFtdcInvestorGroupField_swiginit(
+            self, _ctp.new_CThostFtdcInvestorGroupField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInvestorGroupField
 
@@ -701,26 +767,32 @@ _ctp.CThostFtdcInvestorGroupField_swigregister(CThostFtdcInvestorGroupField)
 
 class CThostFtdcBrokerUserField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcBrokerUserField_BrokerID_get, _ctp.CThostFtdcBrokerUserField_BrokerID_set
+        _ctp.CThostFtdcBrokerUserField_BrokerID_get,
+        _ctp.CThostFtdcBrokerUserField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcBrokerUserField_UserID_get, _ctp.CThostFtdcBrokerUserField_UserID_set
+        _ctp.CThostFtdcBrokerUserField_UserID_get,
+        _ctp.CThostFtdcBrokerUserField_UserID_set,
     )
     UserName = property(
-        _ctp.CThostFtdcBrokerUserField_UserName_get, _ctp.CThostFtdcBrokerUserField_UserName_set
+        _ctp.CThostFtdcBrokerUserField_UserName_get,
+        _ctp.CThostFtdcBrokerUserField_UserName_set,
     )
     UserType = property(
-        _ctp.CThostFtdcBrokerUserField_UserType_get, _ctp.CThostFtdcBrokerUserField_UserType_set
+        _ctp.CThostFtdcBrokerUserField_UserType_get,
+        _ctp.CThostFtdcBrokerUserField_UserType_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcBrokerUserField_IsActive_get, _ctp.CThostFtdcBrokerUserField_IsActive_set
+        _ctp.CThostFtdcBrokerUserField_IsActive_get,
+        _ctp.CThostFtdcBrokerUserField_IsActive_set,
     )
     IsUsingOTP = property(
-        _ctp.CThostFtdcBrokerUserField_IsUsingOTP_get, _ctp.CThostFtdcBrokerUserField_IsUsingOTP_set
+        _ctp.CThostFtdcBrokerUserField_IsUsingOTP_get,
+        _ctp.CThostFtdcBrokerUserField_IsUsingOTP_set,
     )
     IsAuthForce = property(
         _ctp.CThostFtdcBrokerUserField_IsAuthForce_get,
@@ -728,7 +800,9 @@ class CThostFtdcBrokerUserField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcBrokerUserField_swiginit(self, _ctp.new_CThostFtdcBrokerUserField())
+        _ctp.CThostFtdcBrokerUserField_swiginit(
+            self, _ctp.new_CThostFtdcBrokerUserField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcBrokerUserField
 
@@ -739,7 +813,7 @@ _ctp.CThostFtdcBrokerUserField_swigregister(CThostFtdcBrokerUserField)
 
 class CThostFtdcBrokerUserPasswordField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -785,7 +859,7 @@ _ctp.CThostFtdcBrokerUserPasswordField_swigregister(CThostFtdcBrokerUserPassword
 
 class CThostFtdcBrokerUserFunctionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -815,7 +889,7 @@ _ctp.CThostFtdcBrokerUserFunctionField_swigregister(CThostFtdcBrokerUserFunction
 
 class CThostFtdcTraderOfferField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -823,17 +897,20 @@ class CThostFtdcTraderOfferField:
         _ctp.CThostFtdcTraderOfferField_ExchangeID_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcTraderOfferField_TraderID_get, _ctp.CThostFtdcTraderOfferField_TraderID_set
+        _ctp.CThostFtdcTraderOfferField_TraderID_get,
+        _ctp.CThostFtdcTraderOfferField_TraderID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcTraderOfferField_ParticipantID_get,
         _ctp.CThostFtdcTraderOfferField_ParticipantID_set,
     )
     Password = property(
-        _ctp.CThostFtdcTraderOfferField_Password_get, _ctp.CThostFtdcTraderOfferField_Password_set
+        _ctp.CThostFtdcTraderOfferField_Password_get,
+        _ctp.CThostFtdcTraderOfferField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcTraderOfferField_InstallID_get, _ctp.CThostFtdcTraderOfferField_InstallID_set
+        _ctp.CThostFtdcTraderOfferField_InstallID_get,
+        _ctp.CThostFtdcTraderOfferField_InstallID_set,
     )
     OrderLocalID = property(
         _ctp.CThostFtdcTraderOfferField_OrderLocalID_get,
@@ -868,17 +945,20 @@ class CThostFtdcTraderOfferField:
         _ctp.CThostFtdcTraderOfferField_ConnectTime_set,
     )
     StartDate = property(
-        _ctp.CThostFtdcTraderOfferField_StartDate_get, _ctp.CThostFtdcTraderOfferField_StartDate_set
+        _ctp.CThostFtdcTraderOfferField_StartDate_get,
+        _ctp.CThostFtdcTraderOfferField_StartDate_set,
     )
     StartTime = property(
-        _ctp.CThostFtdcTraderOfferField_StartTime_get, _ctp.CThostFtdcTraderOfferField_StartTime_set
+        _ctp.CThostFtdcTraderOfferField_StartTime_get,
+        _ctp.CThostFtdcTraderOfferField_StartTime_set,
     )
     TradingDay = property(
         _ctp.CThostFtdcTraderOfferField_TradingDay_get,
         _ctp.CThostFtdcTraderOfferField_TradingDay_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcTraderOfferField_BrokerID_get, _ctp.CThostFtdcTraderOfferField_BrokerID_set
+        _ctp.CThostFtdcTraderOfferField_BrokerID_get,
+        _ctp.CThostFtdcTraderOfferField_BrokerID_set,
     )
     MaxTradeID = property(
         _ctp.CThostFtdcTraderOfferField_MaxTradeID_get,
@@ -894,7 +974,9 @@ class CThostFtdcTraderOfferField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTraderOfferField_swiginit(self, _ctp.new_CThostFtdcTraderOfferField())
+        _ctp.CThostFtdcTraderOfferField_swiginit(
+            self, _ctp.new_CThostFtdcTraderOfferField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTraderOfferField
 
@@ -905,7 +987,7 @@ _ctp.CThostFtdcTraderOfferField_swigregister(CThostFtdcTraderOfferField)
 
 class CThostFtdcSettlementInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -942,7 +1024,9 @@ class CThostFtdcSettlementInfoField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSettlementInfoField_swiginit(self, _ctp.new_CThostFtdcSettlementInfoField())
+        _ctp.CThostFtdcSettlementInfoField_swiginit(
+            self, _ctp.new_CThostFtdcSettlementInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSettlementInfoField
 
@@ -953,7 +1037,7 @@ _ctp.CThostFtdcSettlementInfoField_swigregister(CThostFtdcSettlementInfoField)
 
 class CThostFtdcSettlementRefField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -966,7 +1050,9 @@ class CThostFtdcSettlementRefField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSettlementRefField_swiginit(self, _ctp.new_CThostFtdcSettlementRefField())
+        _ctp.CThostFtdcSettlementRefField_swiginit(
+            self, _ctp.new_CThostFtdcSettlementRefField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSettlementRefField
 
@@ -977,25 +1063,30 @@ _ctp.CThostFtdcSettlementRefField_swigregister(CThostFtdcSettlementRefField)
 
 class CThostFtdcCurrentTimeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     CurrDate = property(
-        _ctp.CThostFtdcCurrentTimeField_CurrDate_get, _ctp.CThostFtdcCurrentTimeField_CurrDate_set
+        _ctp.CThostFtdcCurrentTimeField_CurrDate_get,
+        _ctp.CThostFtdcCurrentTimeField_CurrDate_set,
     )
     CurrTime = property(
-        _ctp.CThostFtdcCurrentTimeField_CurrTime_get, _ctp.CThostFtdcCurrentTimeField_CurrTime_set
+        _ctp.CThostFtdcCurrentTimeField_CurrTime_get,
+        _ctp.CThostFtdcCurrentTimeField_CurrTime_set,
     )
     CurrMillisec = property(
         _ctp.CThostFtdcCurrentTimeField_CurrMillisec_get,
         _ctp.CThostFtdcCurrentTimeField_CurrMillisec_set,
     )
     ActionDay = property(
-        _ctp.CThostFtdcCurrentTimeField_ActionDay_get, _ctp.CThostFtdcCurrentTimeField_ActionDay_set
+        _ctp.CThostFtdcCurrentTimeField_ActionDay_get,
+        _ctp.CThostFtdcCurrentTimeField_ActionDay_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCurrentTimeField_swiginit(self, _ctp.new_CThostFtdcCurrentTimeField())
+        _ctp.CThostFtdcCurrentTimeField_swiginit(
+            self, _ctp.new_CThostFtdcCurrentTimeField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCurrentTimeField
 
@@ -1006,21 +1097,26 @@ _ctp.CThostFtdcCurrentTimeField_swigregister(CThostFtdcCurrentTimeField)
 
 class CThostFtdcCommPhaseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
-        _ctp.CThostFtdcCommPhaseField_TradingDay_get, _ctp.CThostFtdcCommPhaseField_TradingDay_set
+        _ctp.CThostFtdcCommPhaseField_TradingDay_get,
+        _ctp.CThostFtdcCommPhaseField_TradingDay_set,
     )
     CommPhaseNo = property(
-        _ctp.CThostFtdcCommPhaseField_CommPhaseNo_get, _ctp.CThostFtdcCommPhaseField_CommPhaseNo_set
+        _ctp.CThostFtdcCommPhaseField_CommPhaseNo_get,
+        _ctp.CThostFtdcCommPhaseField_CommPhaseNo_set,
     )
     SystemID = property(
-        _ctp.CThostFtdcCommPhaseField_SystemID_get, _ctp.CThostFtdcCommPhaseField_SystemID_set
+        _ctp.CThostFtdcCommPhaseField_SystemID_get,
+        _ctp.CThostFtdcCommPhaseField_SystemID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCommPhaseField_swiginit(self, _ctp.new_CThostFtdcCommPhaseField())
+        _ctp.CThostFtdcCommPhaseField_swiginit(
+            self, _ctp.new_CThostFtdcCommPhaseField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCommPhaseField
 
@@ -1031,29 +1127,36 @@ _ctp.CThostFtdcCommPhaseField_swigregister(CThostFtdcCommPhaseField)
 
 class CThostFtdcLoginInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontID = property(
-        _ctp.CThostFtdcLoginInfoField_FrontID_get, _ctp.CThostFtdcLoginInfoField_FrontID_set
+        _ctp.CThostFtdcLoginInfoField_FrontID_get,
+        _ctp.CThostFtdcLoginInfoField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcLoginInfoField_SessionID_get, _ctp.CThostFtdcLoginInfoField_SessionID_set
+        _ctp.CThostFtdcLoginInfoField_SessionID_get,
+        _ctp.CThostFtdcLoginInfoField_SessionID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcLoginInfoField_BrokerID_get, _ctp.CThostFtdcLoginInfoField_BrokerID_set
+        _ctp.CThostFtdcLoginInfoField_BrokerID_get,
+        _ctp.CThostFtdcLoginInfoField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcLoginInfoField_UserID_get, _ctp.CThostFtdcLoginInfoField_UserID_set
+        _ctp.CThostFtdcLoginInfoField_UserID_get,
+        _ctp.CThostFtdcLoginInfoField_UserID_set,
     )
     LoginDate = property(
-        _ctp.CThostFtdcLoginInfoField_LoginDate_get, _ctp.CThostFtdcLoginInfoField_LoginDate_set
+        _ctp.CThostFtdcLoginInfoField_LoginDate_get,
+        _ctp.CThostFtdcLoginInfoField_LoginDate_set,
     )
     LoginTime = property(
-        _ctp.CThostFtdcLoginInfoField_LoginTime_get, _ctp.CThostFtdcLoginInfoField_LoginTime_set
+        _ctp.CThostFtdcLoginInfoField_LoginTime_get,
+        _ctp.CThostFtdcLoginInfoField_LoginTime_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcLoginInfoField_reserve1_get, _ctp.CThostFtdcLoginInfoField_reserve1_set
+        _ctp.CThostFtdcLoginInfoField_reserve1_get,
+        _ctp.CThostFtdcLoginInfoField_reserve1_set,
     )
     UserProductInfo = property(
         _ctp.CThostFtdcLoginInfoField_UserProductInfo_get,
@@ -1068,53 +1171,66 @@ class CThostFtdcLoginInfoField:
         _ctp.CThostFtdcLoginInfoField_ProtocolInfo_set,
     )
     SystemName = property(
-        _ctp.CThostFtdcLoginInfoField_SystemName_get, _ctp.CThostFtdcLoginInfoField_SystemName_set
+        _ctp.CThostFtdcLoginInfoField_SystemName_get,
+        _ctp.CThostFtdcLoginInfoField_SystemName_set,
     )
     PasswordDeprecated = property(
         _ctp.CThostFtdcLoginInfoField_PasswordDeprecated_get,
         _ctp.CThostFtdcLoginInfoField_PasswordDeprecated_set,
     )
     MaxOrderRef = property(
-        _ctp.CThostFtdcLoginInfoField_MaxOrderRef_get, _ctp.CThostFtdcLoginInfoField_MaxOrderRef_set
+        _ctp.CThostFtdcLoginInfoField_MaxOrderRef_get,
+        _ctp.CThostFtdcLoginInfoField_MaxOrderRef_set,
     )
     SHFETime = property(
-        _ctp.CThostFtdcLoginInfoField_SHFETime_get, _ctp.CThostFtdcLoginInfoField_SHFETime_set
+        _ctp.CThostFtdcLoginInfoField_SHFETime_get,
+        _ctp.CThostFtdcLoginInfoField_SHFETime_set,
     )
     DCETime = property(
-        _ctp.CThostFtdcLoginInfoField_DCETime_get, _ctp.CThostFtdcLoginInfoField_DCETime_set
+        _ctp.CThostFtdcLoginInfoField_DCETime_get,
+        _ctp.CThostFtdcLoginInfoField_DCETime_set,
     )
     CZCETime = property(
-        _ctp.CThostFtdcLoginInfoField_CZCETime_get, _ctp.CThostFtdcLoginInfoField_CZCETime_set
+        _ctp.CThostFtdcLoginInfoField_CZCETime_get,
+        _ctp.CThostFtdcLoginInfoField_CZCETime_set,
     )
     FFEXTime = property(
-        _ctp.CThostFtdcLoginInfoField_FFEXTime_get, _ctp.CThostFtdcLoginInfoField_FFEXTime_set
+        _ctp.CThostFtdcLoginInfoField_FFEXTime_get,
+        _ctp.CThostFtdcLoginInfoField_FFEXTime_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcLoginInfoField_MacAddress_get, _ctp.CThostFtdcLoginInfoField_MacAddress_set
+        _ctp.CThostFtdcLoginInfoField_MacAddress_get,
+        _ctp.CThostFtdcLoginInfoField_MacAddress_set,
     )
     OneTimePassword = property(
         _ctp.CThostFtdcLoginInfoField_OneTimePassword_get,
         _ctp.CThostFtdcLoginInfoField_OneTimePassword_set,
     )
     INETime = property(
-        _ctp.CThostFtdcLoginInfoField_INETime_get, _ctp.CThostFtdcLoginInfoField_INETime_set
+        _ctp.CThostFtdcLoginInfoField_INETime_get,
+        _ctp.CThostFtdcLoginInfoField_INETime_set,
     )
     IsQryControl = property(
         _ctp.CThostFtdcLoginInfoField_IsQryControl_get,
         _ctp.CThostFtdcLoginInfoField_IsQryControl_set,
     )
     LoginRemark = property(
-        _ctp.CThostFtdcLoginInfoField_LoginRemark_get, _ctp.CThostFtdcLoginInfoField_LoginRemark_set
+        _ctp.CThostFtdcLoginInfoField_LoginRemark_get,
+        _ctp.CThostFtdcLoginInfoField_LoginRemark_set,
     )
     Password = property(
-        _ctp.CThostFtdcLoginInfoField_Password_get, _ctp.CThostFtdcLoginInfoField_Password_set
+        _ctp.CThostFtdcLoginInfoField_Password_get,
+        _ctp.CThostFtdcLoginInfoField_Password_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcLoginInfoField_IPAddress_get, _ctp.CThostFtdcLoginInfoField_IPAddress_set
+        _ctp.CThostFtdcLoginInfoField_IPAddress_get,
+        _ctp.CThostFtdcLoginInfoField_IPAddress_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcLoginInfoField_swiginit(self, _ctp.new_CThostFtdcLoginInfoField())
+        _ctp.CThostFtdcLoginInfoField_swiginit(
+            self, _ctp.new_CThostFtdcLoginInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcLoginInfoField
 
@@ -1125,21 +1241,26 @@ _ctp.CThostFtdcLoginInfoField_swigregister(CThostFtdcLoginInfoField)
 
 class CThostFtdcLogoutAllField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontID = property(
-        _ctp.CThostFtdcLogoutAllField_FrontID_get, _ctp.CThostFtdcLogoutAllField_FrontID_set
+        _ctp.CThostFtdcLogoutAllField_FrontID_get,
+        _ctp.CThostFtdcLogoutAllField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcLogoutAllField_SessionID_get, _ctp.CThostFtdcLogoutAllField_SessionID_set
+        _ctp.CThostFtdcLogoutAllField_SessionID_get,
+        _ctp.CThostFtdcLogoutAllField_SessionID_set,
     )
     SystemName = property(
-        _ctp.CThostFtdcLogoutAllField_SystemName_get, _ctp.CThostFtdcLogoutAllField_SystemName_set
+        _ctp.CThostFtdcLogoutAllField_SystemName_get,
+        _ctp.CThostFtdcLogoutAllField_SystemName_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcLogoutAllField_swiginit(self, _ctp.new_CThostFtdcLogoutAllField())
+        _ctp.CThostFtdcLogoutAllField_swiginit(
+            self, _ctp.new_CThostFtdcLogoutAllField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcLogoutAllField
 
@@ -1150,11 +1271,12 @@ _ctp.CThostFtdcLogoutAllField_swigregister(CThostFtdcLogoutAllField)
 
 class CThostFtdcFrontStatusField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontID = property(
-        _ctp.CThostFtdcFrontStatusField_FrontID_get, _ctp.CThostFtdcFrontStatusField_FrontID_set
+        _ctp.CThostFtdcFrontStatusField_FrontID_get,
+        _ctp.CThostFtdcFrontStatusField_FrontID_set,
     )
     LastReportDate = property(
         _ctp.CThostFtdcFrontStatusField_LastReportDate_get,
@@ -1165,11 +1287,14 @@ class CThostFtdcFrontStatusField:
         _ctp.CThostFtdcFrontStatusField_LastReportTime_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcFrontStatusField_IsActive_get, _ctp.CThostFtdcFrontStatusField_IsActive_set
+        _ctp.CThostFtdcFrontStatusField_IsActive_get,
+        _ctp.CThostFtdcFrontStatusField_IsActive_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcFrontStatusField_swiginit(self, _ctp.new_CThostFtdcFrontStatusField())
+        _ctp.CThostFtdcFrontStatusField_swiginit(
+            self, _ctp.new_CThostFtdcFrontStatusField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcFrontStatusField
 
@@ -1180,7 +1305,7 @@ _ctp.CThostFtdcFrontStatusField_swigregister(CThostFtdcFrontStatusField)
 
 class CThostFtdcUserPasswordUpdateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1214,29 +1339,36 @@ _ctp.CThostFtdcUserPasswordUpdateField_swigregister(CThostFtdcUserPasswordUpdate
 
 class CThostFtdcUserSessionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontID = property(
-        _ctp.CThostFtdcUserSessionField_FrontID_get, _ctp.CThostFtdcUserSessionField_FrontID_set
+        _ctp.CThostFtdcUserSessionField_FrontID_get,
+        _ctp.CThostFtdcUserSessionField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcUserSessionField_SessionID_get, _ctp.CThostFtdcUserSessionField_SessionID_set
+        _ctp.CThostFtdcUserSessionField_SessionID_get,
+        _ctp.CThostFtdcUserSessionField_SessionID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcUserSessionField_BrokerID_get, _ctp.CThostFtdcUserSessionField_BrokerID_set
+        _ctp.CThostFtdcUserSessionField_BrokerID_get,
+        _ctp.CThostFtdcUserSessionField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcUserSessionField_UserID_get, _ctp.CThostFtdcUserSessionField_UserID_set
+        _ctp.CThostFtdcUserSessionField_UserID_get,
+        _ctp.CThostFtdcUserSessionField_UserID_set,
     )
     LoginDate = property(
-        _ctp.CThostFtdcUserSessionField_LoginDate_get, _ctp.CThostFtdcUserSessionField_LoginDate_set
+        _ctp.CThostFtdcUserSessionField_LoginDate_get,
+        _ctp.CThostFtdcUserSessionField_LoginDate_set,
     )
     LoginTime = property(
-        _ctp.CThostFtdcUserSessionField_LoginTime_get, _ctp.CThostFtdcUserSessionField_LoginTime_set
+        _ctp.CThostFtdcUserSessionField_LoginTime_get,
+        _ctp.CThostFtdcUserSessionField_LoginTime_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcUserSessionField_reserve1_get, _ctp.CThostFtdcUserSessionField_reserve1_set
+        _ctp.CThostFtdcUserSessionField_reserve1_get,
+        _ctp.CThostFtdcUserSessionField_reserve1_set,
     )
     UserProductInfo = property(
         _ctp.CThostFtdcUserSessionField_UserProductInfo_get,
@@ -1259,11 +1391,14 @@ class CThostFtdcUserSessionField:
         _ctp.CThostFtdcUserSessionField_LoginRemark_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcUserSessionField_IPAddress_get, _ctp.CThostFtdcUserSessionField_IPAddress_set
+        _ctp.CThostFtdcUserSessionField_IPAddress_get,
+        _ctp.CThostFtdcUserSessionField_IPAddress_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcUserSessionField_swiginit(self, _ctp.new_CThostFtdcUserSessionField())
+        _ctp.CThostFtdcUserSessionField_swiginit(
+            self, _ctp.new_CThostFtdcUserSessionField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcUserSessionField
 
@@ -1274,7 +1409,7 @@ _ctp.CThostFtdcUserSessionField_swigregister(CThostFtdcUserSessionField)
 
 class CThostFtdcSettlementInfoConfirmField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1315,20 +1450,25 @@ class CThostFtdcSettlementInfoConfirmField:
 
 
 # Register CThostFtdcSettlementInfoConfirmField in _ctp:
-_ctp.CThostFtdcSettlementInfoConfirmField_swigregister(CThostFtdcSettlementInfoConfirmField)
+_ctp.CThostFtdcSettlementInfoConfirmField_swigregister(
+    CThostFtdcSettlementInfoConfirmField
+)
 
 
 class CThostFtdcBrokerSyncField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcBrokerSyncField_BrokerID_get, _ctp.CThostFtdcBrokerSyncField_BrokerID_set
+        _ctp.CThostFtdcBrokerSyncField_BrokerID_get,
+        _ctp.CThostFtdcBrokerSyncField_BrokerID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcBrokerSyncField_swiginit(self, _ctp.new_CThostFtdcBrokerSyncField())
+        _ctp.CThostFtdcBrokerSyncField_swiginit(
+            self, _ctp.new_CThostFtdcBrokerSyncField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcBrokerSyncField
 
@@ -1339,17 +1479,20 @@ _ctp.CThostFtdcBrokerSyncField_swigregister(CThostFtdcBrokerSyncField)
 
 class CThostFtdcIndexPriceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcIndexPriceField_BrokerID_get, _ctp.CThostFtdcIndexPriceField_BrokerID_set
+        _ctp.CThostFtdcIndexPriceField_BrokerID_get,
+        _ctp.CThostFtdcIndexPriceField_BrokerID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcIndexPriceField_reserve1_get, _ctp.CThostFtdcIndexPriceField_reserve1_set
+        _ctp.CThostFtdcIndexPriceField_reserve1_get,
+        _ctp.CThostFtdcIndexPriceField_reserve1_set,
     )
     ClosePrice = property(
-        _ctp.CThostFtdcIndexPriceField_ClosePrice_get, _ctp.CThostFtdcIndexPriceField_ClosePrice_set
+        _ctp.CThostFtdcIndexPriceField_ClosePrice_get,
+        _ctp.CThostFtdcIndexPriceField_ClosePrice_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcIndexPriceField_InstrumentID_get,
@@ -1357,7 +1500,9 @@ class CThostFtdcIndexPriceField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcIndexPriceField_swiginit(self, _ctp.new_CThostFtdcIndexPriceField())
+        _ctp.CThostFtdcIndexPriceField_swiginit(
+            self, _ctp.new_CThostFtdcIndexPriceField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcIndexPriceField
 
@@ -1368,7 +1513,7 @@ _ctp.CThostFtdcIndexPriceField_swigregister(CThostFtdcIndexPriceField)
 
 class CThostFtdcInstrumentOrderCommRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1429,12 +1574,14 @@ class CThostFtdcInstrumentOrderCommRateField:
 
 
 # Register CThostFtdcInstrumentOrderCommRateField in _ctp:
-_ctp.CThostFtdcInstrumentOrderCommRateField_swigregister(CThostFtdcInstrumentOrderCommRateField)
+_ctp.CThostFtdcInstrumentOrderCommRateField_swigregister(
+    CThostFtdcInstrumentOrderCommRateField
+)
 
 
 class CThostFtdcFutureLimitPosiParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     InvestorRange = property(
@@ -1479,12 +1626,14 @@ class CThostFtdcFutureLimitPosiParamField:
 
 
 # Register CThostFtdcFutureLimitPosiParamField in _ctp:
-_ctp.CThostFtdcFutureLimitPosiParamField_swigregister(CThostFtdcFutureLimitPosiParamField)
+_ctp.CThostFtdcFutureLimitPosiParamField_swigregister(
+    CThostFtdcFutureLimitPosiParamField
+)
 
 
 class CThostFtdcLoginForbiddenIPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1510,7 +1659,7 @@ _ctp.CThostFtdcLoginForbiddenIPField_swigregister(CThostFtdcLoginForbiddenIPFiel
 
 class CThostFtdcIPListField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1520,7 +1669,8 @@ class CThostFtdcIPListField:
         _ctp.CThostFtdcIPListField_IsWhite_get, _ctp.CThostFtdcIPListField_IsWhite_set
     )
     IPAddress = property(
-        _ctp.CThostFtdcIPListField_IPAddress_get, _ctp.CThostFtdcIPListField_IPAddress_set
+        _ctp.CThostFtdcIPListField_IPAddress_get,
+        _ctp.CThostFtdcIPListField_IPAddress_set,
     )
 
     def __init__(self):
@@ -1535,14 +1685,16 @@ _ctp.CThostFtdcIPListField_swigregister(CThostFtdcIPListField)
 
 class CThostFtdcInvestUnitField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcInvestUnitField_BrokerID_get, _ctp.CThostFtdcInvestUnitField_BrokerID_set
+        _ctp.CThostFtdcInvestUnitField_BrokerID_get,
+        _ctp.CThostFtdcInvestUnitField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcInvestUnitField_InvestorID_get, _ctp.CThostFtdcInvestUnitField_InvestorID_set
+        _ctp.CThostFtdcInvestUnitField_InvestorID_get,
+        _ctp.CThostFtdcInvestUnitField_InvestorID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcInvestUnitField_InvestUnitID_get,
@@ -1565,14 +1717,18 @@ class CThostFtdcInvestUnitField:
         _ctp.CThostFtdcInvestUnitField_MarginModelID_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcInvestUnitField_AccountID_get, _ctp.CThostFtdcInvestUnitField_AccountID_set
+        _ctp.CThostFtdcInvestUnitField_AccountID_get,
+        _ctp.CThostFtdcInvestUnitField_AccountID_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcInvestUnitField_CurrencyID_get, _ctp.CThostFtdcInvestUnitField_CurrencyID_set
+        _ctp.CThostFtdcInvestUnitField_CurrencyID_get,
+        _ctp.CThostFtdcInvestUnitField_CurrencyID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcInvestUnitField_swiginit(self, _ctp.new_CThostFtdcInvestUnitField())
+        _ctp.CThostFtdcInvestUnitField_swiginit(
+            self, _ctp.new_CThostFtdcInvestUnitField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInvestUnitField
 
@@ -1583,7 +1739,7 @@ _ctp.CThostFtdcInvestUnitField_swigregister(CThostFtdcInvestUnitField)
 
 class CThostFtdcInvestorAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1617,21 +1773,24 @@ _ctp.CThostFtdcInvestorAccountField_swigregister(CThostFtdcInvestorAccountField)
 
 class CThostFtdcDiscountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcDiscountField_BrokerID_get, _ctp.CThostFtdcDiscountField_BrokerID_set
+        _ctp.CThostFtdcDiscountField_BrokerID_get,
+        _ctp.CThostFtdcDiscountField_BrokerID_set,
     )
     InvestorRange = property(
         _ctp.CThostFtdcDiscountField_InvestorRange_get,
         _ctp.CThostFtdcDiscountField_InvestorRange_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcDiscountField_InvestorID_get, _ctp.CThostFtdcDiscountField_InvestorID_set
+        _ctp.CThostFtdcDiscountField_InvestorID_get,
+        _ctp.CThostFtdcDiscountField_InvestorID_set,
     )
     Discount = property(
-        _ctp.CThostFtdcDiscountField_Discount_get, _ctp.CThostFtdcDiscountField_Discount_set
+        _ctp.CThostFtdcDiscountField_Discount_get,
+        _ctp.CThostFtdcDiscountField_Discount_set,
     )
 
     def __init__(self):
@@ -1646,7 +1805,7 @@ _ctp.CThostFtdcDiscountField_swigregister(CThostFtdcDiscountField)
 
 class CThostFtdcMDTraderOfferField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1731,7 +1890,9 @@ class CThostFtdcMDTraderOfferField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcMDTraderOfferField_swiginit(self, _ctp.new_CThostFtdcMDTraderOfferField())
+        _ctp.CThostFtdcMDTraderOfferField_swiginit(
+            self, _ctp.new_CThostFtdcMDTraderOfferField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMDTraderOfferField
 
@@ -1742,7 +1903,7 @@ _ctp.CThostFtdcMDTraderOfferField_swigregister(CThostFtdcMDTraderOfferField)
 
 class CThostFtdcNoticeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1752,7 +1913,8 @@ class CThostFtdcNoticeField:
         _ctp.CThostFtdcNoticeField_Content_get, _ctp.CThostFtdcNoticeField_Content_set
     )
     SequenceLabel = property(
-        _ctp.CThostFtdcNoticeField_SequenceLabel_get, _ctp.CThostFtdcNoticeField_SequenceLabel_set
+        _ctp.CThostFtdcNoticeField_SequenceLabel_get,
+        _ctp.CThostFtdcNoticeField_SequenceLabel_set,
     )
 
     def __init__(self):
@@ -1767,25 +1929,30 @@ _ctp.CThostFtdcNoticeField_swigregister(CThostFtdcNoticeField)
 
 class CThostFtdcUserRightField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcUserRightField_BrokerID_get, _ctp.CThostFtdcUserRightField_BrokerID_set
+        _ctp.CThostFtdcUserRightField_BrokerID_get,
+        _ctp.CThostFtdcUserRightField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcUserRightField_UserID_get, _ctp.CThostFtdcUserRightField_UserID_set
+        _ctp.CThostFtdcUserRightField_UserID_get,
+        _ctp.CThostFtdcUserRightField_UserID_set,
     )
     UserRightType = property(
         _ctp.CThostFtdcUserRightField_UserRightType_get,
         _ctp.CThostFtdcUserRightField_UserRightType_set,
     )
     IsForbidden = property(
-        _ctp.CThostFtdcUserRightField_IsForbidden_get, _ctp.CThostFtdcUserRightField_IsForbidden_set
+        _ctp.CThostFtdcUserRightField_IsForbidden_get,
+        _ctp.CThostFtdcUserRightField_IsForbidden_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcUserRightField_swiginit(self, _ctp.new_CThostFtdcUserRightField())
+        _ctp.CThostFtdcUserRightField_swiginit(
+            self, _ctp.new_CThostFtdcUserRightField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcUserRightField
 
@@ -1796,7 +1963,7 @@ _ctp.CThostFtdcUserRightField_swigregister(CThostFtdcUserRightField)
 
 class CThostFtdcLoadSettlementInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1818,7 +1985,7 @@ _ctp.CThostFtdcLoadSettlementInfoField_swigregister(CThostFtdcLoadSettlementInfo
 
 class CThostFtdcBrokerWithdrawAlgorithmField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1871,12 +2038,14 @@ class CThostFtdcBrokerWithdrawAlgorithmField:
 
 
 # Register CThostFtdcBrokerWithdrawAlgorithmField in _ctp:
-_ctp.CThostFtdcBrokerWithdrawAlgorithmField_swigregister(CThostFtdcBrokerWithdrawAlgorithmField)
+_ctp.CThostFtdcBrokerWithdrawAlgorithmField_swigregister(
+    CThostFtdcBrokerWithdrawAlgorithmField
+)
 
 
 class CThostFtdcCombinationLegField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1884,7 +2053,8 @@ class CThostFtdcCombinationLegField:
         _ctp.CThostFtdcCombinationLegField_reserve1_set,
     )
     LegID = property(
-        _ctp.CThostFtdcCombinationLegField_LegID_get, _ctp.CThostFtdcCombinationLegField_LegID_set
+        _ctp.CThostFtdcCombinationLegField_LegID_get,
+        _ctp.CThostFtdcCombinationLegField_LegID_set,
     )
     reserve2 = property(
         _ctp.CThostFtdcCombinationLegField_reserve2_get,
@@ -1912,7 +2082,9 @@ class CThostFtdcCombinationLegField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCombinationLegField_swiginit(self, _ctp.new_CThostFtdcCombinationLegField())
+        _ctp.CThostFtdcCombinationLegField_swiginit(
+            self, _ctp.new_CThostFtdcCombinationLegField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCombinationLegField
 
@@ -1923,11 +2095,12 @@ _ctp.CThostFtdcCombinationLegField_swigregister(CThostFtdcCombinationLegField)
 
 class CThostFtdcSyncStatusField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
-        _ctp.CThostFtdcSyncStatusField_TradingDay_get, _ctp.CThostFtdcSyncStatusField_TradingDay_set
+        _ctp.CThostFtdcSyncStatusField_TradingDay_get,
+        _ctp.CThostFtdcSyncStatusField_TradingDay_set,
     )
     DataSyncStatus = property(
         _ctp.CThostFtdcSyncStatusField_DataSyncStatus_get,
@@ -1935,7 +2108,9 @@ class CThostFtdcSyncStatusField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSyncStatusField_swiginit(self, _ctp.new_CThostFtdcSyncStatusField())
+        _ctp.CThostFtdcSyncStatusField_swiginit(
+            self, _ctp.new_CThostFtdcSyncStatusField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncStatusField
 
@@ -1946,17 +2121,20 @@ _ctp.CThostFtdcSyncStatusField_swigregister(CThostFtdcSyncStatusField)
 
 class CThostFtdcLinkManField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcLinkManField_BrokerID_get, _ctp.CThostFtdcLinkManField_BrokerID_set
+        _ctp.CThostFtdcLinkManField_BrokerID_get,
+        _ctp.CThostFtdcLinkManField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcLinkManField_InvestorID_get, _ctp.CThostFtdcLinkManField_InvestorID_set
+        _ctp.CThostFtdcLinkManField_InvestorID_get,
+        _ctp.CThostFtdcLinkManField_InvestorID_set,
     )
     PersonType = property(
-        _ctp.CThostFtdcLinkManField_PersonType_get, _ctp.CThostFtdcLinkManField_PersonType_set
+        _ctp.CThostFtdcLinkManField_PersonType_get,
+        _ctp.CThostFtdcLinkManField_PersonType_set,
     )
     IdentifiedCardType = property(
         _ctp.CThostFtdcLinkManField_IdentifiedCardType_get,
@@ -1967,10 +2145,12 @@ class CThostFtdcLinkManField:
         _ctp.CThostFtdcLinkManField_IdentifiedCardNo_set,
     )
     PersonName = property(
-        _ctp.CThostFtdcLinkManField_PersonName_get, _ctp.CThostFtdcLinkManField_PersonName_set
+        _ctp.CThostFtdcLinkManField_PersonName_get,
+        _ctp.CThostFtdcLinkManField_PersonName_set,
     )
     Telephone = property(
-        _ctp.CThostFtdcLinkManField_Telephone_get, _ctp.CThostFtdcLinkManField_Telephone_set
+        _ctp.CThostFtdcLinkManField_Telephone_get,
+        _ctp.CThostFtdcLinkManField_Telephone_set,
     )
     Address = property(
         _ctp.CThostFtdcLinkManField_Address_get, _ctp.CThostFtdcLinkManField_Address_set
@@ -1979,10 +2159,12 @@ class CThostFtdcLinkManField:
         _ctp.CThostFtdcLinkManField_ZipCode_get, _ctp.CThostFtdcLinkManField_ZipCode_set
     )
     Priority = property(
-        _ctp.CThostFtdcLinkManField_Priority_get, _ctp.CThostFtdcLinkManField_Priority_set
+        _ctp.CThostFtdcLinkManField_Priority_get,
+        _ctp.CThostFtdcLinkManField_Priority_set,
     )
     UOAZipCode = property(
-        _ctp.CThostFtdcLinkManField_UOAZipCode_get, _ctp.CThostFtdcLinkManField_UOAZipCode_set
+        _ctp.CThostFtdcLinkManField_UOAZipCode_get,
+        _ctp.CThostFtdcLinkManField_UOAZipCode_set,
     )
     PersonFullName = property(
         _ctp.CThostFtdcLinkManField_PersonFullName_get,
@@ -2001,7 +2183,7 @@ _ctp.CThostFtdcLinkManField_swigregister(CThostFtdcLinkManField)
 
 class CThostFtdcBrokerUserEventField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2067,25 +2249,30 @@ _ctp.CThostFtdcBrokerUserEventField_swigregister(CThostFtdcBrokerUserEventField)
 
 class CThostFtdcContractBankField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcContractBankField_BrokerID_get, _ctp.CThostFtdcContractBankField_BrokerID_set
+        _ctp.CThostFtdcContractBankField_BrokerID_get,
+        _ctp.CThostFtdcContractBankField_BrokerID_set,
     )
     BankID = property(
-        _ctp.CThostFtdcContractBankField_BankID_get, _ctp.CThostFtdcContractBankField_BankID_set
+        _ctp.CThostFtdcContractBankField_BankID_get,
+        _ctp.CThostFtdcContractBankField_BankID_set,
     )
     BankBrchID = property(
         _ctp.CThostFtdcContractBankField_BankBrchID_get,
         _ctp.CThostFtdcContractBankField_BankBrchID_set,
     )
     BankName = property(
-        _ctp.CThostFtdcContractBankField_BankName_get, _ctp.CThostFtdcContractBankField_BankName_set
+        _ctp.CThostFtdcContractBankField_BankName_get,
+        _ctp.CThostFtdcContractBankField_BankName_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcContractBankField_swiginit(self, _ctp.new_CThostFtdcContractBankField())
+        _ctp.CThostFtdcContractBankField_swiginit(
+            self, _ctp.new_CThostFtdcContractBankField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcContractBankField
 
@@ -2096,7 +2283,7 @@ _ctp.CThostFtdcContractBankField_swigregister(CThostFtdcContractBankField)
 
 class CThostFtdcInvestorWithdrawAlgorithmField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2133,18 +2320,22 @@ class CThostFtdcInvestorWithdrawAlgorithmField:
 
 
 # Register CThostFtdcInvestorWithdrawAlgorithmField in _ctp:
-_ctp.CThostFtdcInvestorWithdrawAlgorithmField_swigregister(CThostFtdcInvestorWithdrawAlgorithmField)
+_ctp.CThostFtdcInvestorWithdrawAlgorithmField_swigregister(
+    CThostFtdcInvestorWithdrawAlgorithmField
+)
 
 
 class CThostFtdcUserIPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
         _ctp.CThostFtdcUserIPField_BrokerID_get, _ctp.CThostFtdcUserIPField_BrokerID_set
     )
-    UserID = property(_ctp.CThostFtdcUserIPField_UserID_get, _ctp.CThostFtdcUserIPField_UserID_set)
+    UserID = property(
+        _ctp.CThostFtdcUserIPField_UserID_get, _ctp.CThostFtdcUserIPField_UserID_set
+    )
     reserve1 = property(
         _ctp.CThostFtdcUserIPField_reserve1_get, _ctp.CThostFtdcUserIPField_reserve1_set
     )
@@ -2152,12 +2343,16 @@ class CThostFtdcUserIPField:
         _ctp.CThostFtdcUserIPField_reserve2_get, _ctp.CThostFtdcUserIPField_reserve2_set
     )
     MacAddress = property(
-        _ctp.CThostFtdcUserIPField_MacAddress_get, _ctp.CThostFtdcUserIPField_MacAddress_set
+        _ctp.CThostFtdcUserIPField_MacAddress_get,
+        _ctp.CThostFtdcUserIPField_MacAddress_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcUserIPField_IPAddress_get, _ctp.CThostFtdcUserIPField_IPAddress_set
+        _ctp.CThostFtdcUserIPField_IPAddress_get,
+        _ctp.CThostFtdcUserIPField_IPAddress_set,
     )
-    IPMask = property(_ctp.CThostFtdcUserIPField_IPMask_get, _ctp.CThostFtdcUserIPField_IPMask_set)
+    IPMask = property(
+        _ctp.CThostFtdcUserIPField_IPMask_get, _ctp.CThostFtdcUserIPField_IPMask_set
+    )
 
     def __init__(self):
         _ctp.CThostFtdcUserIPField_swiginit(self, _ctp.new_CThostFtdcUserIPField())
@@ -2171,7 +2366,7 @@ _ctp.CThostFtdcUserIPField_swigregister(CThostFtdcUserIPField)
 
 class CThostFtdcTradingNoticeInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2217,7 +2412,7 @@ _ctp.CThostFtdcTradingNoticeInfoField_swigregister(CThostFtdcTradingNoticeInfoFi
 
 class CThostFtdcTradingNoticeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2237,7 +2432,8 @@ class CThostFtdcTradingNoticeField:
         _ctp.CThostFtdcTradingNoticeField_SequenceSeries_set,
     )
     UserID = property(
-        _ctp.CThostFtdcTradingNoticeField_UserID_get, _ctp.CThostFtdcTradingNoticeField_UserID_set
+        _ctp.CThostFtdcTradingNoticeField_UserID_get,
+        _ctp.CThostFtdcTradingNoticeField_UserID_set,
     )
     SendTime = property(
         _ctp.CThostFtdcTradingNoticeField_SendTime_get,
@@ -2257,7 +2453,9 @@ class CThostFtdcTradingNoticeField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTradingNoticeField_swiginit(self, _ctp.new_CThostFtdcTradingNoticeField())
+        _ctp.CThostFtdcTradingNoticeField_swiginit(
+            self, _ctp.new_CThostFtdcTradingNoticeField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTradingNoticeField
 
@@ -2268,7 +2466,7 @@ _ctp.CThostFtdcTradingNoticeField_swigregister(CThostFtdcTradingNoticeField)
 
 class CThostFtdcBrokerTradingParamsField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2318,7 +2516,7 @@ _ctp.CThostFtdcBrokerTradingParamsField_swigregister(CThostFtdcBrokerTradingPara
 
 class CThostFtdcBrokerTradingAlgosField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2364,7 +2562,7 @@ _ctp.CThostFtdcBrokerTradingAlgosField_swigregister(CThostFtdcBrokerTradingAlgos
 
 class CThostFtdcBrokerDepositField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -2396,10 +2594,12 @@ class CThostFtdcBrokerDepositField:
         _ctp.CThostFtdcBrokerDepositField_CloseProfit_set,
     )
     Balance = property(
-        _ctp.CThostFtdcBrokerDepositField_Balance_get, _ctp.CThostFtdcBrokerDepositField_Balance_set
+        _ctp.CThostFtdcBrokerDepositField_Balance_get,
+        _ctp.CThostFtdcBrokerDepositField_Balance_set,
     )
     Deposit = property(
-        _ctp.CThostFtdcBrokerDepositField_Deposit_get, _ctp.CThostFtdcBrokerDepositField_Deposit_set
+        _ctp.CThostFtdcBrokerDepositField_Deposit_get,
+        _ctp.CThostFtdcBrokerDepositField_Deposit_set,
     )
     Withdraw = property(
         _ctp.CThostFtdcBrokerDepositField_Withdraw_get,
@@ -2410,7 +2610,8 @@ class CThostFtdcBrokerDepositField:
         _ctp.CThostFtdcBrokerDepositField_Available_set,
     )
     Reserve = property(
-        _ctp.CThostFtdcBrokerDepositField_Reserve_get, _ctp.CThostFtdcBrokerDepositField_Reserve_set
+        _ctp.CThostFtdcBrokerDepositField_Reserve_get,
+        _ctp.CThostFtdcBrokerDepositField_Reserve_set,
     )
     FrozenMargin = property(
         _ctp.CThostFtdcBrokerDepositField_FrozenMargin_get,
@@ -2418,7 +2619,9 @@ class CThostFtdcBrokerDepositField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcBrokerDepositField_swiginit(self, _ctp.new_CThostFtdcBrokerDepositField())
+        _ctp.CThostFtdcBrokerDepositField_swiginit(
+            self, _ctp.new_CThostFtdcBrokerDepositField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcBrokerDepositField
 
@@ -2429,7 +2632,7 @@ _ctp.CThostFtdcBrokerDepositField_swigregister(CThostFtdcBrokerDepositField)
 
 class CThostFtdcCFMMCBrokerKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2449,7 +2652,8 @@ class CThostFtdcCFMMCBrokerKeyField:
         _ctp.CThostFtdcCFMMCBrokerKeyField_CreateTime_set,
     )
     KeyID = property(
-        _ctp.CThostFtdcCFMMCBrokerKeyField_KeyID_get, _ctp.CThostFtdcCFMMCBrokerKeyField_KeyID_set
+        _ctp.CThostFtdcCFMMCBrokerKeyField_KeyID_get,
+        _ctp.CThostFtdcCFMMCBrokerKeyField_KeyID_set,
     )
     CurrentKey = property(
         _ctp.CThostFtdcCFMMCBrokerKeyField_CurrentKey_get,
@@ -2461,7 +2665,9 @@ class CThostFtdcCFMMCBrokerKeyField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCFMMCBrokerKeyField_swiginit(self, _ctp.new_CThostFtdcCFMMCBrokerKeyField())
+        _ctp.CThostFtdcCFMMCBrokerKeyField_swiginit(
+            self, _ctp.new_CThostFtdcCFMMCBrokerKeyField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCFMMCBrokerKeyField
 
@@ -2472,7 +2678,7 @@ _ctp.CThostFtdcCFMMCBrokerKeyField_swigregister(CThostFtdcCFMMCBrokerKeyField)
 
 class CThostFtdcBrokerUserOTPParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2522,7 +2728,7 @@ _ctp.CThostFtdcBrokerUserOTPParamField_swigregister(CThostFtdcBrokerUserOTPParam
 
 class CThostFtdcManualSyncBrokerUserOTPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2555,12 +2761,14 @@ class CThostFtdcManualSyncBrokerUserOTPField:
 
 
 # Register CThostFtdcManualSyncBrokerUserOTPField in _ctp:
-_ctp.CThostFtdcManualSyncBrokerUserOTPField_swigregister(CThostFtdcManualSyncBrokerUserOTPField)
+_ctp.CThostFtdcManualSyncBrokerUserOTPField_swigregister(
+    CThostFtdcManualSyncBrokerUserOTPField
+)
 
 
 class CThostFtdcCommRateModelField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2577,7 +2785,9 @@ class CThostFtdcCommRateModelField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCommRateModelField_swiginit(self, _ctp.new_CThostFtdcCommRateModelField())
+        _ctp.CThostFtdcCommRateModelField_swiginit(
+            self, _ctp.new_CThostFtdcCommRateModelField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCommRateModelField
 
@@ -2588,44 +2798,56 @@ _ctp.CThostFtdcCommRateModelField_swigregister(CThostFtdcCommRateModelField)
 
 class CThostFtdcBulletinField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
-        _ctp.CThostFtdcBulletinField_ExchangeID_get, _ctp.CThostFtdcBulletinField_ExchangeID_set
+        _ctp.CThostFtdcBulletinField_ExchangeID_get,
+        _ctp.CThostFtdcBulletinField_ExchangeID_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcBulletinField_TradingDay_get, _ctp.CThostFtdcBulletinField_TradingDay_set
+        _ctp.CThostFtdcBulletinField_TradingDay_get,
+        _ctp.CThostFtdcBulletinField_TradingDay_set,
     )
     BulletinID = property(
-        _ctp.CThostFtdcBulletinField_BulletinID_get, _ctp.CThostFtdcBulletinField_BulletinID_set
+        _ctp.CThostFtdcBulletinField_BulletinID_get,
+        _ctp.CThostFtdcBulletinField_BulletinID_set,
     )
     SequenceNo = property(
-        _ctp.CThostFtdcBulletinField_SequenceNo_get, _ctp.CThostFtdcBulletinField_SequenceNo_set
+        _ctp.CThostFtdcBulletinField_SequenceNo_get,
+        _ctp.CThostFtdcBulletinField_SequenceNo_set,
     )
     NewsType = property(
-        _ctp.CThostFtdcBulletinField_NewsType_get, _ctp.CThostFtdcBulletinField_NewsType_set
+        _ctp.CThostFtdcBulletinField_NewsType_get,
+        _ctp.CThostFtdcBulletinField_NewsType_set,
     )
     NewsUrgency = property(
-        _ctp.CThostFtdcBulletinField_NewsUrgency_get, _ctp.CThostFtdcBulletinField_NewsUrgency_set
+        _ctp.CThostFtdcBulletinField_NewsUrgency_get,
+        _ctp.CThostFtdcBulletinField_NewsUrgency_set,
     )
     SendTime = property(
-        _ctp.CThostFtdcBulletinField_SendTime_get, _ctp.CThostFtdcBulletinField_SendTime_set
+        _ctp.CThostFtdcBulletinField_SendTime_get,
+        _ctp.CThostFtdcBulletinField_SendTime_set,
     )
     Abstract = property(
-        _ctp.CThostFtdcBulletinField_Abstract_get, _ctp.CThostFtdcBulletinField_Abstract_set
+        _ctp.CThostFtdcBulletinField_Abstract_get,
+        _ctp.CThostFtdcBulletinField_Abstract_set,
     )
     ComeFrom = property(
-        _ctp.CThostFtdcBulletinField_ComeFrom_get, _ctp.CThostFtdcBulletinField_ComeFrom_set
+        _ctp.CThostFtdcBulletinField_ComeFrom_get,
+        _ctp.CThostFtdcBulletinField_ComeFrom_set,
     )
     Content = property(
-        _ctp.CThostFtdcBulletinField_Content_get, _ctp.CThostFtdcBulletinField_Content_set
+        _ctp.CThostFtdcBulletinField_Content_get,
+        _ctp.CThostFtdcBulletinField_Content_set,
     )
     URLLink = property(
-        _ctp.CThostFtdcBulletinField_URLLink_get, _ctp.CThostFtdcBulletinField_URLLink_set
+        _ctp.CThostFtdcBulletinField_URLLink_get,
+        _ctp.CThostFtdcBulletinField_URLLink_set,
     )
     MarketID = property(
-        _ctp.CThostFtdcBulletinField_MarketID_get, _ctp.CThostFtdcBulletinField_MarketID_set
+        _ctp.CThostFtdcBulletinField_MarketID_get,
+        _ctp.CThostFtdcBulletinField_MarketID_set,
     )
 
     def __init__(self):
@@ -2640,7 +2862,7 @@ _ctp.CThostFtdcBulletinField_swigregister(CThostFtdcBulletinField)
 
 class CThostFtdcAppIDAuthAssignField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2648,7 +2870,8 @@ class CThostFtdcAppIDAuthAssignField:
         _ctp.CThostFtdcAppIDAuthAssignField_BrokerID_set,
     )
     AppID = property(
-        _ctp.CThostFtdcAppIDAuthAssignField_AppID_get, _ctp.CThostFtdcAppIDAuthAssignField_AppID_set
+        _ctp.CThostFtdcAppIDAuthAssignField_AppID_get,
+        _ctp.CThostFtdcAppIDAuthAssignField_AppID_set,
     )
     DRIdentityID = property(
         _ctp.CThostFtdcAppIDAuthAssignField_DRIdentityID_get,
@@ -2669,31 +2892,36 @@ _ctp.CThostFtdcAppIDAuthAssignField_swigregister(CThostFtdcAppIDAuthAssignField)
 
 class CThostFtdcReqTransferField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
-        _ctp.CThostFtdcReqTransferField_TradeCode_get, _ctp.CThostFtdcReqTransferField_TradeCode_set
+        _ctp.CThostFtdcReqTransferField_TradeCode_get,
+        _ctp.CThostFtdcReqTransferField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcReqTransferField_BankID_get, _ctp.CThostFtdcReqTransferField_BankID_set
+        _ctp.CThostFtdcReqTransferField_BankID_get,
+        _ctp.CThostFtdcReqTransferField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcReqTransferField_BankBranchID_get,
         _ctp.CThostFtdcReqTransferField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcReqTransferField_BrokerID_get, _ctp.CThostFtdcReqTransferField_BrokerID_set
+        _ctp.CThostFtdcReqTransferField_BrokerID_get,
+        _ctp.CThostFtdcReqTransferField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcReqTransferField_BrokerBranchID_get,
         _ctp.CThostFtdcReqTransferField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcReqTransferField_TradeDate_get, _ctp.CThostFtdcReqTransferField_TradeDate_set
+        _ctp.CThostFtdcReqTransferField_TradeDate_get,
+        _ctp.CThostFtdcReqTransferField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcReqTransferField_TradeTime_get, _ctp.CThostFtdcReqTransferField_TradeTime_set
+        _ctp.CThostFtdcReqTransferField_TradeTime_get,
+        _ctp.CThostFtdcReqTransferField_TradeTime_set,
     )
     BankSerial = property(
         _ctp.CThostFtdcReqTransferField_BankSerial_get,
@@ -2712,7 +2940,8 @@ class CThostFtdcReqTransferField:
         _ctp.CThostFtdcReqTransferField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcReqTransferField_SessionID_get, _ctp.CThostFtdcReqTransferField_SessionID_set
+        _ctp.CThostFtdcReqTransferField_SessionID_get,
+        _ctp.CThostFtdcReqTransferField_SessionID_set,
     )
     CustomerName = property(
         _ctp.CThostFtdcReqTransferField_CustomerName_get,
@@ -2727,7 +2956,8 @@ class CThostFtdcReqTransferField:
         _ctp.CThostFtdcReqTransferField_IdentifiedCardNo_set,
     )
     CustType = property(
-        _ctp.CThostFtdcReqTransferField_CustType_get, _ctp.CThostFtdcReqTransferField_CustType_set
+        _ctp.CThostFtdcReqTransferField_CustType_get,
+        _ctp.CThostFtdcReqTransferField_CustType_set,
     )
     BankAccount = property(
         _ctp.CThostFtdcReqTransferField_BankAccount_get,
@@ -2738,20 +2968,24 @@ class CThostFtdcReqTransferField:
         _ctp.CThostFtdcReqTransferField_BankPassWord_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcReqTransferField_AccountID_get, _ctp.CThostFtdcReqTransferField_AccountID_set
+        _ctp.CThostFtdcReqTransferField_AccountID_get,
+        _ctp.CThostFtdcReqTransferField_AccountID_set,
     )
     Password = property(
-        _ctp.CThostFtdcReqTransferField_Password_get, _ctp.CThostFtdcReqTransferField_Password_set
+        _ctp.CThostFtdcReqTransferField_Password_get,
+        _ctp.CThostFtdcReqTransferField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcReqTransferField_InstallID_get, _ctp.CThostFtdcReqTransferField_InstallID_set
+        _ctp.CThostFtdcReqTransferField_InstallID_get,
+        _ctp.CThostFtdcReqTransferField_InstallID_set,
     )
     FutureSerial = property(
         _ctp.CThostFtdcReqTransferField_FutureSerial_get,
         _ctp.CThostFtdcReqTransferField_FutureSerial_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqTransferField_UserID_get, _ctp.CThostFtdcReqTransferField_UserID_set
+        _ctp.CThostFtdcReqTransferField_UserID_get,
+        _ctp.CThostFtdcReqTransferField_UserID_set,
     )
     VerifyCertNoFlag = property(
         _ctp.CThostFtdcReqTransferField_VerifyCertNoFlag_get,
@@ -2774,23 +3008,28 @@ class CThostFtdcReqTransferField:
         _ctp.CThostFtdcReqTransferField_FeePayFlag_set,
     )
     CustFee = property(
-        _ctp.CThostFtdcReqTransferField_CustFee_get, _ctp.CThostFtdcReqTransferField_CustFee_set
+        _ctp.CThostFtdcReqTransferField_CustFee_get,
+        _ctp.CThostFtdcReqTransferField_CustFee_set,
     )
     BrokerFee = property(
-        _ctp.CThostFtdcReqTransferField_BrokerFee_get, _ctp.CThostFtdcReqTransferField_BrokerFee_set
+        _ctp.CThostFtdcReqTransferField_BrokerFee_get,
+        _ctp.CThostFtdcReqTransferField_BrokerFee_set,
     )
     Message = property(
-        _ctp.CThostFtdcReqTransferField_Message_get, _ctp.CThostFtdcReqTransferField_Message_set
+        _ctp.CThostFtdcReqTransferField_Message_get,
+        _ctp.CThostFtdcReqTransferField_Message_set,
     )
     Digest = property(
-        _ctp.CThostFtdcReqTransferField_Digest_get, _ctp.CThostFtdcReqTransferField_Digest_set
+        _ctp.CThostFtdcReqTransferField_Digest_get,
+        _ctp.CThostFtdcReqTransferField_Digest_set,
     )
     BankAccType = property(
         _ctp.CThostFtdcReqTransferField_BankAccType_get,
         _ctp.CThostFtdcReqTransferField_BankAccType_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcReqTransferField_DeviceID_get, _ctp.CThostFtdcReqTransferField_DeviceID_set
+        _ctp.CThostFtdcReqTransferField_DeviceID_get,
+        _ctp.CThostFtdcReqTransferField_DeviceID_set,
     )
     BankSecuAccType = property(
         _ctp.CThostFtdcReqTransferField_BankSecuAccType_get,
@@ -2813,12 +3052,16 @@ class CThostFtdcReqTransferField:
         _ctp.CThostFtdcReqTransferField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcReqTransferField_OperNo_get, _ctp.CThostFtdcReqTransferField_OperNo_set
+        _ctp.CThostFtdcReqTransferField_OperNo_get,
+        _ctp.CThostFtdcReqTransferField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcReqTransferField_RequestID_get, _ctp.CThostFtdcReqTransferField_RequestID_set
+        _ctp.CThostFtdcReqTransferField_RequestID_get,
+        _ctp.CThostFtdcReqTransferField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcReqTransferField_TID_get, _ctp.CThostFtdcReqTransferField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcReqTransferField_TID_get, _ctp.CThostFtdcReqTransferField_TID_set
+    )
     TransferStatus = property(
         _ctp.CThostFtdcReqTransferField_TransferStatus_get,
         _ctp.CThostFtdcReqTransferField_TransferStatus_set,
@@ -2829,7 +3072,9 @@ class CThostFtdcReqTransferField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqTransferField_swiginit(self, _ctp.new_CThostFtdcReqTransferField())
+        _ctp.CThostFtdcReqTransferField_swiginit(
+            self, _ctp.new_CThostFtdcReqTransferField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqTransferField
 
@@ -2840,31 +3085,36 @@ _ctp.CThostFtdcReqTransferField_swigregister(CThostFtdcReqTransferField)
 
 class CThostFtdcRspTransferField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
-        _ctp.CThostFtdcRspTransferField_TradeCode_get, _ctp.CThostFtdcRspTransferField_TradeCode_set
+        _ctp.CThostFtdcRspTransferField_TradeCode_get,
+        _ctp.CThostFtdcRspTransferField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcRspTransferField_BankID_get, _ctp.CThostFtdcRspTransferField_BankID_set
+        _ctp.CThostFtdcRspTransferField_BankID_get,
+        _ctp.CThostFtdcRspTransferField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcRspTransferField_BankBranchID_get,
         _ctp.CThostFtdcRspTransferField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcRspTransferField_BrokerID_get, _ctp.CThostFtdcRspTransferField_BrokerID_set
+        _ctp.CThostFtdcRspTransferField_BrokerID_get,
+        _ctp.CThostFtdcRspTransferField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcRspTransferField_BrokerBranchID_get,
         _ctp.CThostFtdcRspTransferField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcRspTransferField_TradeDate_get, _ctp.CThostFtdcRspTransferField_TradeDate_set
+        _ctp.CThostFtdcRspTransferField_TradeDate_get,
+        _ctp.CThostFtdcRspTransferField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcRspTransferField_TradeTime_get, _ctp.CThostFtdcRspTransferField_TradeTime_set
+        _ctp.CThostFtdcRspTransferField_TradeTime_get,
+        _ctp.CThostFtdcRspTransferField_TradeTime_set,
     )
     BankSerial = property(
         _ctp.CThostFtdcRspTransferField_BankSerial_get,
@@ -2883,7 +3133,8 @@ class CThostFtdcRspTransferField:
         _ctp.CThostFtdcRspTransferField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcRspTransferField_SessionID_get, _ctp.CThostFtdcRspTransferField_SessionID_set
+        _ctp.CThostFtdcRspTransferField_SessionID_get,
+        _ctp.CThostFtdcRspTransferField_SessionID_set,
     )
     CustomerName = property(
         _ctp.CThostFtdcRspTransferField_CustomerName_get,
@@ -2898,7 +3149,8 @@ class CThostFtdcRspTransferField:
         _ctp.CThostFtdcRspTransferField_IdentifiedCardNo_set,
     )
     CustType = property(
-        _ctp.CThostFtdcRspTransferField_CustType_get, _ctp.CThostFtdcRspTransferField_CustType_set
+        _ctp.CThostFtdcRspTransferField_CustType_get,
+        _ctp.CThostFtdcRspTransferField_CustType_set,
     )
     BankAccount = property(
         _ctp.CThostFtdcRspTransferField_BankAccount_get,
@@ -2909,20 +3161,24 @@ class CThostFtdcRspTransferField:
         _ctp.CThostFtdcRspTransferField_BankPassWord_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcRspTransferField_AccountID_get, _ctp.CThostFtdcRspTransferField_AccountID_set
+        _ctp.CThostFtdcRspTransferField_AccountID_get,
+        _ctp.CThostFtdcRspTransferField_AccountID_set,
     )
     Password = property(
-        _ctp.CThostFtdcRspTransferField_Password_get, _ctp.CThostFtdcRspTransferField_Password_set
+        _ctp.CThostFtdcRspTransferField_Password_get,
+        _ctp.CThostFtdcRspTransferField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcRspTransferField_InstallID_get, _ctp.CThostFtdcRspTransferField_InstallID_set
+        _ctp.CThostFtdcRspTransferField_InstallID_get,
+        _ctp.CThostFtdcRspTransferField_InstallID_set,
     )
     FutureSerial = property(
         _ctp.CThostFtdcRspTransferField_FutureSerial_get,
         _ctp.CThostFtdcRspTransferField_FutureSerial_set,
     )
     UserID = property(
-        _ctp.CThostFtdcRspTransferField_UserID_get, _ctp.CThostFtdcRspTransferField_UserID_set
+        _ctp.CThostFtdcRspTransferField_UserID_get,
+        _ctp.CThostFtdcRspTransferField_UserID_set,
     )
     VerifyCertNoFlag = property(
         _ctp.CThostFtdcRspTransferField_VerifyCertNoFlag_get,
@@ -2945,23 +3201,28 @@ class CThostFtdcRspTransferField:
         _ctp.CThostFtdcRspTransferField_FeePayFlag_set,
     )
     CustFee = property(
-        _ctp.CThostFtdcRspTransferField_CustFee_get, _ctp.CThostFtdcRspTransferField_CustFee_set
+        _ctp.CThostFtdcRspTransferField_CustFee_get,
+        _ctp.CThostFtdcRspTransferField_CustFee_set,
     )
     BrokerFee = property(
-        _ctp.CThostFtdcRspTransferField_BrokerFee_get, _ctp.CThostFtdcRspTransferField_BrokerFee_set
+        _ctp.CThostFtdcRspTransferField_BrokerFee_get,
+        _ctp.CThostFtdcRspTransferField_BrokerFee_set,
     )
     Message = property(
-        _ctp.CThostFtdcRspTransferField_Message_get, _ctp.CThostFtdcRspTransferField_Message_set
+        _ctp.CThostFtdcRspTransferField_Message_get,
+        _ctp.CThostFtdcRspTransferField_Message_set,
     )
     Digest = property(
-        _ctp.CThostFtdcRspTransferField_Digest_get, _ctp.CThostFtdcRspTransferField_Digest_set
+        _ctp.CThostFtdcRspTransferField_Digest_get,
+        _ctp.CThostFtdcRspTransferField_Digest_set,
     )
     BankAccType = property(
         _ctp.CThostFtdcRspTransferField_BankAccType_get,
         _ctp.CThostFtdcRspTransferField_BankAccType_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcRspTransferField_DeviceID_get, _ctp.CThostFtdcRspTransferField_DeviceID_set
+        _ctp.CThostFtdcRspTransferField_DeviceID_get,
+        _ctp.CThostFtdcRspTransferField_DeviceID_set,
     )
     BankSecuAccType = property(
         _ctp.CThostFtdcRspTransferField_BankSecuAccType_get,
@@ -2984,21 +3245,27 @@ class CThostFtdcRspTransferField:
         _ctp.CThostFtdcRspTransferField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcRspTransferField_OperNo_get, _ctp.CThostFtdcRspTransferField_OperNo_set
+        _ctp.CThostFtdcRspTransferField_OperNo_get,
+        _ctp.CThostFtdcRspTransferField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcRspTransferField_RequestID_get, _ctp.CThostFtdcRspTransferField_RequestID_set
+        _ctp.CThostFtdcRspTransferField_RequestID_get,
+        _ctp.CThostFtdcRspTransferField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcRspTransferField_TID_get, _ctp.CThostFtdcRspTransferField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcRspTransferField_TID_get, _ctp.CThostFtdcRspTransferField_TID_set
+    )
     TransferStatus = property(
         _ctp.CThostFtdcRspTransferField_TransferStatus_get,
         _ctp.CThostFtdcRspTransferField_TransferStatus_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcRspTransferField_ErrorID_get, _ctp.CThostFtdcRspTransferField_ErrorID_set
+        _ctp.CThostFtdcRspTransferField_ErrorID_get,
+        _ctp.CThostFtdcRspTransferField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcRspTransferField_ErrorMsg_get, _ctp.CThostFtdcRspTransferField_ErrorMsg_set
+        _ctp.CThostFtdcRspTransferField_ErrorMsg_get,
+        _ctp.CThostFtdcRspTransferField_ErrorMsg_set,
     )
     LongCustomerName = property(
         _ctp.CThostFtdcRspTransferField_LongCustomerName_get,
@@ -3006,7 +3273,9 @@ class CThostFtdcRspTransferField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspTransferField_swiginit(self, _ctp.new_CThostFtdcRspTransferField())
+        _ctp.CThostFtdcRspTransferField_swiginit(
+            self, _ctp.new_CThostFtdcRspTransferField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspTransferField
 
@@ -3017,7 +3286,7 @@ _ctp.CThostFtdcRspTransferField_swigregister(CThostFtdcRspTransferField)
 
 class CThostFtdcFutureSignIOField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3025,14 +3294,16 @@ class CThostFtdcFutureSignIOField:
         _ctp.CThostFtdcFutureSignIOField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcFutureSignIOField_BankID_get, _ctp.CThostFtdcFutureSignIOField_BankID_set
+        _ctp.CThostFtdcFutureSignIOField_BankID_get,
+        _ctp.CThostFtdcFutureSignIOField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcFutureSignIOField_BankBranchID_get,
         _ctp.CThostFtdcFutureSignIOField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcFutureSignIOField_BrokerID_get, _ctp.CThostFtdcFutureSignIOField_BrokerID_set
+        _ctp.CThostFtdcFutureSignIOField_BrokerID_get,
+        _ctp.CThostFtdcFutureSignIOField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcFutureSignIOField_BrokerBranchID_get,
@@ -3071,35 +3342,42 @@ class CThostFtdcFutureSignIOField:
         _ctp.CThostFtdcFutureSignIOField_InstallID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcFutureSignIOField_UserID_get, _ctp.CThostFtdcFutureSignIOField_UserID_set
+        _ctp.CThostFtdcFutureSignIOField_UserID_get,
+        _ctp.CThostFtdcFutureSignIOField_UserID_set,
     )
     Digest = property(
-        _ctp.CThostFtdcFutureSignIOField_Digest_get, _ctp.CThostFtdcFutureSignIOField_Digest_set
+        _ctp.CThostFtdcFutureSignIOField_Digest_get,
+        _ctp.CThostFtdcFutureSignIOField_Digest_set,
     )
     CurrencyID = property(
         _ctp.CThostFtdcFutureSignIOField_CurrencyID_get,
         _ctp.CThostFtdcFutureSignIOField_CurrencyID_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcFutureSignIOField_DeviceID_get, _ctp.CThostFtdcFutureSignIOField_DeviceID_set
+        _ctp.CThostFtdcFutureSignIOField_DeviceID_get,
+        _ctp.CThostFtdcFutureSignIOField_DeviceID_set,
     )
     BrokerIDByBank = property(
         _ctp.CThostFtdcFutureSignIOField_BrokerIDByBank_get,
         _ctp.CThostFtdcFutureSignIOField_BrokerIDByBank_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcFutureSignIOField_OperNo_get, _ctp.CThostFtdcFutureSignIOField_OperNo_set
+        _ctp.CThostFtdcFutureSignIOField_OperNo_get,
+        _ctp.CThostFtdcFutureSignIOField_OperNo_set,
     )
     RequestID = property(
         _ctp.CThostFtdcFutureSignIOField_RequestID_get,
         _ctp.CThostFtdcFutureSignIOField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcFutureSignIOField_TID_get, _ctp.CThostFtdcFutureSignIOField_TID_set
+        _ctp.CThostFtdcFutureSignIOField_TID_get,
+        _ctp.CThostFtdcFutureSignIOField_TID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcFutureSignIOField_swiginit(self, _ctp.new_CThostFtdcFutureSignIOField())
+        _ctp.CThostFtdcFutureSignIOField_swiginit(
+            self, _ctp.new_CThostFtdcFutureSignIOField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcFutureSignIOField
 
@@ -3110,7 +3388,7 @@ _ctp.CThostFtdcFutureSignIOField_swigregister(CThostFtdcFutureSignIOField)
 
 class CThostFtdcDepositResultInformField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     DepositSeqNo = property(
@@ -3156,31 +3434,36 @@ _ctp.CThostFtdcDepositResultInformField_swigregister(CThostFtdcDepositResultInfo
 
 class CThostFtdcOpenAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
-        _ctp.CThostFtdcOpenAccountField_TradeCode_get, _ctp.CThostFtdcOpenAccountField_TradeCode_set
+        _ctp.CThostFtdcOpenAccountField_TradeCode_get,
+        _ctp.CThostFtdcOpenAccountField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcOpenAccountField_BankID_get, _ctp.CThostFtdcOpenAccountField_BankID_set
+        _ctp.CThostFtdcOpenAccountField_BankID_get,
+        _ctp.CThostFtdcOpenAccountField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcOpenAccountField_BankBranchID_get,
         _ctp.CThostFtdcOpenAccountField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcOpenAccountField_BrokerID_get, _ctp.CThostFtdcOpenAccountField_BrokerID_set
+        _ctp.CThostFtdcOpenAccountField_BrokerID_get,
+        _ctp.CThostFtdcOpenAccountField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcOpenAccountField_BrokerBranchID_get,
         _ctp.CThostFtdcOpenAccountField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcOpenAccountField_TradeDate_get, _ctp.CThostFtdcOpenAccountField_TradeDate_set
+        _ctp.CThostFtdcOpenAccountField_TradeDate_get,
+        _ctp.CThostFtdcOpenAccountField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcOpenAccountField_TradeTime_get, _ctp.CThostFtdcOpenAccountField_TradeTime_set
+        _ctp.CThostFtdcOpenAccountField_TradeTime_get,
+        _ctp.CThostFtdcOpenAccountField_TradeTime_set,
     )
     BankSerial = property(
         _ctp.CThostFtdcOpenAccountField_BankSerial_get,
@@ -3199,7 +3482,8 @@ class CThostFtdcOpenAccountField:
         _ctp.CThostFtdcOpenAccountField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcOpenAccountField_SessionID_get, _ctp.CThostFtdcOpenAccountField_SessionID_set
+        _ctp.CThostFtdcOpenAccountField_SessionID_get,
+        _ctp.CThostFtdcOpenAccountField_SessionID_set,
     )
     CustomerName = property(
         _ctp.CThostFtdcOpenAccountField_CustomerName_get,
@@ -3214,31 +3498,39 @@ class CThostFtdcOpenAccountField:
         _ctp.CThostFtdcOpenAccountField_IdentifiedCardNo_set,
     )
     Gender = property(
-        _ctp.CThostFtdcOpenAccountField_Gender_get, _ctp.CThostFtdcOpenAccountField_Gender_set
+        _ctp.CThostFtdcOpenAccountField_Gender_get,
+        _ctp.CThostFtdcOpenAccountField_Gender_set,
     )
     CountryCode = property(
         _ctp.CThostFtdcOpenAccountField_CountryCode_get,
         _ctp.CThostFtdcOpenAccountField_CountryCode_set,
     )
     CustType = property(
-        _ctp.CThostFtdcOpenAccountField_CustType_get, _ctp.CThostFtdcOpenAccountField_CustType_set
+        _ctp.CThostFtdcOpenAccountField_CustType_get,
+        _ctp.CThostFtdcOpenAccountField_CustType_set,
     )
     Address = property(
-        _ctp.CThostFtdcOpenAccountField_Address_get, _ctp.CThostFtdcOpenAccountField_Address_set
+        _ctp.CThostFtdcOpenAccountField_Address_get,
+        _ctp.CThostFtdcOpenAccountField_Address_set,
     )
     ZipCode = property(
-        _ctp.CThostFtdcOpenAccountField_ZipCode_get, _ctp.CThostFtdcOpenAccountField_ZipCode_set
+        _ctp.CThostFtdcOpenAccountField_ZipCode_get,
+        _ctp.CThostFtdcOpenAccountField_ZipCode_set,
     )
     Telephone = property(
-        _ctp.CThostFtdcOpenAccountField_Telephone_get, _ctp.CThostFtdcOpenAccountField_Telephone_set
+        _ctp.CThostFtdcOpenAccountField_Telephone_get,
+        _ctp.CThostFtdcOpenAccountField_Telephone_set,
     )
     MobilePhone = property(
         _ctp.CThostFtdcOpenAccountField_MobilePhone_get,
         _ctp.CThostFtdcOpenAccountField_MobilePhone_set,
     )
-    Fax = property(_ctp.CThostFtdcOpenAccountField_Fax_get, _ctp.CThostFtdcOpenAccountField_Fax_set)
+    Fax = property(
+        _ctp.CThostFtdcOpenAccountField_Fax_get, _ctp.CThostFtdcOpenAccountField_Fax_set
+    )
     EMail = property(
-        _ctp.CThostFtdcOpenAccountField_EMail_get, _ctp.CThostFtdcOpenAccountField_EMail_set
+        _ctp.CThostFtdcOpenAccountField_EMail_get,
+        _ctp.CThostFtdcOpenAccountField_EMail_set,
     )
     MoneyAccountStatus = property(
         _ctp.CThostFtdcOpenAccountField_MoneyAccountStatus_get,
@@ -3253,13 +3545,16 @@ class CThostFtdcOpenAccountField:
         _ctp.CThostFtdcOpenAccountField_BankPassWord_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcOpenAccountField_AccountID_get, _ctp.CThostFtdcOpenAccountField_AccountID_set
+        _ctp.CThostFtdcOpenAccountField_AccountID_get,
+        _ctp.CThostFtdcOpenAccountField_AccountID_set,
     )
     Password = property(
-        _ctp.CThostFtdcOpenAccountField_Password_get, _ctp.CThostFtdcOpenAccountField_Password_set
+        _ctp.CThostFtdcOpenAccountField_Password_get,
+        _ctp.CThostFtdcOpenAccountField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcOpenAccountField_InstallID_get, _ctp.CThostFtdcOpenAccountField_InstallID_set
+        _ctp.CThostFtdcOpenAccountField_InstallID_get,
+        _ctp.CThostFtdcOpenAccountField_InstallID_set,
     )
     VerifyCertNoFlag = property(
         _ctp.CThostFtdcOpenAccountField_VerifyCertNoFlag_get,
@@ -3274,14 +3569,16 @@ class CThostFtdcOpenAccountField:
         _ctp.CThostFtdcOpenAccountField_CashExchangeCode_set,
     )
     Digest = property(
-        _ctp.CThostFtdcOpenAccountField_Digest_get, _ctp.CThostFtdcOpenAccountField_Digest_set
+        _ctp.CThostFtdcOpenAccountField_Digest_get,
+        _ctp.CThostFtdcOpenAccountField_Digest_set,
     )
     BankAccType = property(
         _ctp.CThostFtdcOpenAccountField_BankAccType_get,
         _ctp.CThostFtdcOpenAccountField_BankAccType_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcOpenAccountField_DeviceID_get, _ctp.CThostFtdcOpenAccountField_DeviceID_set
+        _ctp.CThostFtdcOpenAccountField_DeviceID_get,
+        _ctp.CThostFtdcOpenAccountField_DeviceID_set,
     )
     BankSecuAccType = property(
         _ctp.CThostFtdcOpenAccountField_BankSecuAccType_get,
@@ -3304,17 +3601,23 @@ class CThostFtdcOpenAccountField:
         _ctp.CThostFtdcOpenAccountField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcOpenAccountField_OperNo_get, _ctp.CThostFtdcOpenAccountField_OperNo_set
+        _ctp.CThostFtdcOpenAccountField_OperNo_get,
+        _ctp.CThostFtdcOpenAccountField_OperNo_set,
     )
-    TID = property(_ctp.CThostFtdcOpenAccountField_TID_get, _ctp.CThostFtdcOpenAccountField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcOpenAccountField_TID_get, _ctp.CThostFtdcOpenAccountField_TID_set
+    )
     UserID = property(
-        _ctp.CThostFtdcOpenAccountField_UserID_get, _ctp.CThostFtdcOpenAccountField_UserID_set
+        _ctp.CThostFtdcOpenAccountField_UserID_get,
+        _ctp.CThostFtdcOpenAccountField_UserID_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcOpenAccountField_ErrorID_get, _ctp.CThostFtdcOpenAccountField_ErrorID_set
+        _ctp.CThostFtdcOpenAccountField_ErrorID_get,
+        _ctp.CThostFtdcOpenAccountField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcOpenAccountField_ErrorMsg_get, _ctp.CThostFtdcOpenAccountField_ErrorMsg_set
+        _ctp.CThostFtdcOpenAccountField_ErrorMsg_get,
+        _ctp.CThostFtdcOpenAccountField_ErrorMsg_set,
     )
     LongCustomerName = property(
         _ctp.CThostFtdcOpenAccountField_LongCustomerName_get,
@@ -3322,7 +3625,9 @@ class CThostFtdcOpenAccountField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcOpenAccountField_swiginit(self, _ctp.new_CThostFtdcOpenAccountField())
+        _ctp.CThostFtdcOpenAccountField_swiginit(
+            self, _ctp.new_CThostFtdcOpenAccountField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcOpenAccountField
 
@@ -3333,7 +3638,7 @@ _ctp.CThostFtdcOpenAccountField_swigregister(CThostFtdcOpenAccountField)
 
 class CThostFtdcCancelAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3341,7 +3646,8 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcCancelAccountField_BankID_get, _ctp.CThostFtdcCancelAccountField_BankID_set
+        _ctp.CThostFtdcCancelAccountField_BankID_get,
+        _ctp.CThostFtdcCancelAccountField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcCancelAccountField_BankBranchID_get,
@@ -3396,7 +3702,8 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_IdentifiedCardNo_set,
     )
     Gender = property(
-        _ctp.CThostFtdcCancelAccountField_Gender_get, _ctp.CThostFtdcCancelAccountField_Gender_set
+        _ctp.CThostFtdcCancelAccountField_Gender_get,
+        _ctp.CThostFtdcCancelAccountField_Gender_set,
     )
     CountryCode = property(
         _ctp.CThostFtdcCancelAccountField_CountryCode_get,
@@ -3407,10 +3714,12 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_CustType_set,
     )
     Address = property(
-        _ctp.CThostFtdcCancelAccountField_Address_get, _ctp.CThostFtdcCancelAccountField_Address_set
+        _ctp.CThostFtdcCancelAccountField_Address_get,
+        _ctp.CThostFtdcCancelAccountField_Address_set,
     )
     ZipCode = property(
-        _ctp.CThostFtdcCancelAccountField_ZipCode_get, _ctp.CThostFtdcCancelAccountField_ZipCode_set
+        _ctp.CThostFtdcCancelAccountField_ZipCode_get,
+        _ctp.CThostFtdcCancelAccountField_ZipCode_set,
     )
     Telephone = property(
         _ctp.CThostFtdcCancelAccountField_Telephone_get,
@@ -3421,10 +3730,12 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_MobilePhone_set,
     )
     Fax = property(
-        _ctp.CThostFtdcCancelAccountField_Fax_get, _ctp.CThostFtdcCancelAccountField_Fax_set
+        _ctp.CThostFtdcCancelAccountField_Fax_get,
+        _ctp.CThostFtdcCancelAccountField_Fax_set,
     )
     EMail = property(
-        _ctp.CThostFtdcCancelAccountField_EMail_get, _ctp.CThostFtdcCancelAccountField_EMail_set
+        _ctp.CThostFtdcCancelAccountField_EMail_get,
+        _ctp.CThostFtdcCancelAccountField_EMail_set,
     )
     MoneyAccountStatus = property(
         _ctp.CThostFtdcCancelAccountField_MoneyAccountStatus_get,
@@ -3463,7 +3774,8 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_CashExchangeCode_set,
     )
     Digest = property(
-        _ctp.CThostFtdcCancelAccountField_Digest_get, _ctp.CThostFtdcCancelAccountField_Digest_set
+        _ctp.CThostFtdcCancelAccountField_Digest_get,
+        _ctp.CThostFtdcCancelAccountField_Digest_set,
     )
     BankAccType = property(
         _ctp.CThostFtdcCancelAccountField_BankAccType_get,
@@ -3494,16 +3806,20 @@ class CThostFtdcCancelAccountField:
         _ctp.CThostFtdcCancelAccountField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcCancelAccountField_OperNo_get, _ctp.CThostFtdcCancelAccountField_OperNo_set
+        _ctp.CThostFtdcCancelAccountField_OperNo_get,
+        _ctp.CThostFtdcCancelAccountField_OperNo_set,
     )
     TID = property(
-        _ctp.CThostFtdcCancelAccountField_TID_get, _ctp.CThostFtdcCancelAccountField_TID_set
+        _ctp.CThostFtdcCancelAccountField_TID_get,
+        _ctp.CThostFtdcCancelAccountField_TID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcCancelAccountField_UserID_get, _ctp.CThostFtdcCancelAccountField_UserID_set
+        _ctp.CThostFtdcCancelAccountField_UserID_get,
+        _ctp.CThostFtdcCancelAccountField_UserID_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcCancelAccountField_ErrorID_get, _ctp.CThostFtdcCancelAccountField_ErrorID_set
+        _ctp.CThostFtdcCancelAccountField_ErrorID_get,
+        _ctp.CThostFtdcCancelAccountField_ErrorID_set,
     )
     ErrorMsg = property(
         _ctp.CThostFtdcCancelAccountField_ErrorMsg_get,
@@ -3515,7 +3831,9 @@ class CThostFtdcCancelAccountField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCancelAccountField_swiginit(self, _ctp.new_CThostFtdcCancelAccountField())
+        _ctp.CThostFtdcCancelAccountField_swiginit(
+            self, _ctp.new_CThostFtdcCancelAccountField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCancelAccountField
 
@@ -3526,7 +3844,7 @@ _ctp.CThostFtdcCancelAccountField_swigregister(CThostFtdcCancelAccountField)
 
 class CThostFtdcChangeAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3534,7 +3852,8 @@ class CThostFtdcChangeAccountField:
         _ctp.CThostFtdcChangeAccountField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcChangeAccountField_BankID_get, _ctp.CThostFtdcChangeAccountField_BankID_set
+        _ctp.CThostFtdcChangeAccountField_BankID_get,
+        _ctp.CThostFtdcChangeAccountField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcChangeAccountField_BankBranchID_get,
@@ -3589,7 +3908,8 @@ class CThostFtdcChangeAccountField:
         _ctp.CThostFtdcChangeAccountField_IdentifiedCardNo_set,
     )
     Gender = property(
-        _ctp.CThostFtdcChangeAccountField_Gender_get, _ctp.CThostFtdcChangeAccountField_Gender_set
+        _ctp.CThostFtdcChangeAccountField_Gender_get,
+        _ctp.CThostFtdcChangeAccountField_Gender_set,
     )
     CountryCode = property(
         _ctp.CThostFtdcChangeAccountField_CountryCode_get,
@@ -3600,10 +3920,12 @@ class CThostFtdcChangeAccountField:
         _ctp.CThostFtdcChangeAccountField_CustType_set,
     )
     Address = property(
-        _ctp.CThostFtdcChangeAccountField_Address_get, _ctp.CThostFtdcChangeAccountField_Address_set
+        _ctp.CThostFtdcChangeAccountField_Address_get,
+        _ctp.CThostFtdcChangeAccountField_Address_set,
     )
     ZipCode = property(
-        _ctp.CThostFtdcChangeAccountField_ZipCode_get, _ctp.CThostFtdcChangeAccountField_ZipCode_set
+        _ctp.CThostFtdcChangeAccountField_ZipCode_get,
+        _ctp.CThostFtdcChangeAccountField_ZipCode_set,
     )
     Telephone = property(
         _ctp.CThostFtdcChangeAccountField_Telephone_get,
@@ -3614,10 +3936,12 @@ class CThostFtdcChangeAccountField:
         _ctp.CThostFtdcChangeAccountField_MobilePhone_set,
     )
     Fax = property(
-        _ctp.CThostFtdcChangeAccountField_Fax_get, _ctp.CThostFtdcChangeAccountField_Fax_set
+        _ctp.CThostFtdcChangeAccountField_Fax_get,
+        _ctp.CThostFtdcChangeAccountField_Fax_set,
     )
     EMail = property(
-        _ctp.CThostFtdcChangeAccountField_EMail_get, _ctp.CThostFtdcChangeAccountField_EMail_set
+        _ctp.CThostFtdcChangeAccountField_EMail_get,
+        _ctp.CThostFtdcChangeAccountField_EMail_set,
     )
     MoneyAccountStatus = property(
         _ctp.CThostFtdcChangeAccountField_MoneyAccountStatus_get,
@@ -3676,13 +4000,16 @@ class CThostFtdcChangeAccountField:
         _ctp.CThostFtdcChangeAccountField_SecuPwdFlag_set,
     )
     TID = property(
-        _ctp.CThostFtdcChangeAccountField_TID_get, _ctp.CThostFtdcChangeAccountField_TID_set
+        _ctp.CThostFtdcChangeAccountField_TID_get,
+        _ctp.CThostFtdcChangeAccountField_TID_set,
     )
     Digest = property(
-        _ctp.CThostFtdcChangeAccountField_Digest_get, _ctp.CThostFtdcChangeAccountField_Digest_set
+        _ctp.CThostFtdcChangeAccountField_Digest_get,
+        _ctp.CThostFtdcChangeAccountField_Digest_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcChangeAccountField_ErrorID_get, _ctp.CThostFtdcChangeAccountField_ErrorID_set
+        _ctp.CThostFtdcChangeAccountField_ErrorID_get,
+        _ctp.CThostFtdcChangeAccountField_ErrorID_set,
     )
     ErrorMsg = property(
         _ctp.CThostFtdcChangeAccountField_ErrorMsg_get,
@@ -3694,7 +4021,9 @@ class CThostFtdcChangeAccountField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcChangeAccountField_swiginit(self, _ctp.new_CThostFtdcChangeAccountField())
+        _ctp.CThostFtdcChangeAccountField_swiginit(
+            self, _ctp.new_CThostFtdcChangeAccountField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcChangeAccountField
 
@@ -3705,7 +4034,7 @@ _ctp.CThostFtdcChangeAccountField_swigregister(CThostFtdcChangeAccountField)
 
 class CThostFtdcUserRightsAssignField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3735,7 +4064,7 @@ _ctp.CThostFtdcUserRightsAssignField_swigregister(CThostFtdcUserRightsAssignFiel
 
 class CThostFtdcBrokerUserRightAssignField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3760,12 +4089,14 @@ class CThostFtdcBrokerUserRightAssignField:
 
 
 # Register CThostFtdcBrokerUserRightAssignField in _ctp:
-_ctp.CThostFtdcBrokerUserRightAssignField_swigregister(CThostFtdcBrokerUserRightAssignField)
+_ctp.CThostFtdcBrokerUserRightAssignField_swigregister(
+    CThostFtdcBrokerUserRightAssignField
+)
 
 
 class CThostFtdcDRTransferField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     OrigDRIdentityID = property(
@@ -3786,7 +4117,9 @@ class CThostFtdcDRTransferField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcDRTransferField_swiginit(self, _ctp.new_CThostFtdcDRTransferField())
+        _ctp.CThostFtdcDRTransferField_swiginit(
+            self, _ctp.new_CThostFtdcDRTransferField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcDRTransferField
 
@@ -3797,14 +4130,16 @@ _ctp.CThostFtdcDRTransferField_swigregister(CThostFtdcDRTransferField)
 
 class CThostFtdcFensUserInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcFensUserInfoField_BrokerID_get, _ctp.CThostFtdcFensUserInfoField_BrokerID_set
+        _ctp.CThostFtdcFensUserInfoField_BrokerID_get,
+        _ctp.CThostFtdcFensUserInfoField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcFensUserInfoField_UserID_get, _ctp.CThostFtdcFensUserInfoField_UserID_set
+        _ctp.CThostFtdcFensUserInfoField_UserID_get,
+        _ctp.CThostFtdcFensUserInfoField_UserID_set,
     )
     LoginMode = property(
         _ctp.CThostFtdcFensUserInfoField_LoginMode_get,
@@ -3812,7 +4147,9 @@ class CThostFtdcFensUserInfoField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcFensUserInfoField_swiginit(self, _ctp.new_CThostFtdcFensUserInfoField())
+        _ctp.CThostFtdcFensUserInfoField_swiginit(
+            self, _ctp.new_CThostFtdcFensUserInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcFensUserInfoField
 
@@ -3823,7 +4160,7 @@ _ctp.CThostFtdcFensUserInfoField_swigregister(CThostFtdcFensUserInfoField)
 
 class CThostFtdcCurrTransferIdentityField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     IdentityID = property(
@@ -3840,12 +4177,14 @@ class CThostFtdcCurrTransferIdentityField:
 
 
 # Register CThostFtdcCurrTransferIdentityField in _ctp:
-_ctp.CThostFtdcCurrTransferIdentityField_swigregister(CThostFtdcCurrTransferIdentityField)
+_ctp.CThostFtdcCurrTransferIdentityField_swigregister(
+    CThostFtdcCurrTransferIdentityField
+)
 
 
 class CThostFtdcLoginForbiddenUserField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3879,7 +4218,7 @@ _ctp.CThostFtdcLoginForbiddenUserField_swigregister(CThostFtdcLoginForbiddenUser
 
 class CThostFtdcAccountPropertyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3953,7 +4292,7 @@ _ctp.CThostFtdcAccountPropertyField_swigregister(CThostFtdcAccountPropertyField)
 
 class CThostFtdcCurrDRIdentityField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     DRIdentityID = property(
@@ -3962,7 +4301,9 @@ class CThostFtdcCurrDRIdentityField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcCurrDRIdentityField_swiginit(self, _ctp.new_CThostFtdcCurrDRIdentityField())
+        _ctp.CThostFtdcCurrDRIdentityField_swiginit(
+            self, _ctp.new_CThostFtdcCurrDRIdentityField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCurrDRIdentityField
 
@@ -3973,7 +4314,7 @@ _ctp.CThostFtdcCurrDRIdentityField_swigregister(CThostFtdcCurrDRIdentityField)
 
 class CThostFtdcReqUserAuthMethodField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4003,7 +4344,7 @@ _ctp.CThostFtdcReqUserAuthMethodField_swigregister(CThostFtdcReqUserAuthMethodFi
 
 class CThostFtdcRspUserAuthMethodField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     UsableAuthMethod = property(
@@ -4025,7 +4366,7 @@ _ctp.CThostFtdcRspUserAuthMethodField_swigregister(CThostFtdcRspUserAuthMethodFi
 
 class CThostFtdcReqGenUserCaptchaField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4055,7 +4396,7 @@ _ctp.CThostFtdcReqGenUserCaptchaField_swigregister(CThostFtdcReqGenUserCaptchaFi
 
 class CThostFtdcRspGenUserCaptchaField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4089,7 +4430,7 @@ _ctp.CThostFtdcRspGenUserCaptchaField_swigregister(CThostFtdcRspGenUserCaptchaFi
 
 class CThostFtdcReqGenUserTextField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4101,11 +4442,14 @@ class CThostFtdcReqGenUserTextField:
         _ctp.CThostFtdcReqGenUserTextField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqGenUserTextField_UserID_get, _ctp.CThostFtdcReqGenUserTextField_UserID_set
+        _ctp.CThostFtdcReqGenUserTextField_UserID_get,
+        _ctp.CThostFtdcReqGenUserTextField_UserID_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqGenUserTextField_swiginit(self, _ctp.new_CThostFtdcReqGenUserTextField())
+        _ctp.CThostFtdcReqGenUserTextField_swiginit(
+            self, _ctp.new_CThostFtdcReqGenUserTextField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqGenUserTextField
 
@@ -4116,7 +4460,7 @@ _ctp.CThostFtdcReqGenUserTextField_swigregister(CThostFtdcReqGenUserTextField)
 
 class CThostFtdcRspGenUserTextField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     UserTextSeq = property(
@@ -4125,7 +4469,9 @@ class CThostFtdcRspGenUserTextField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspGenUserTextField_swiginit(self, _ctp.new_CThostFtdcRspGenUserTextField())
+        _ctp.CThostFtdcRspGenUserTextField_swiginit(
+            self, _ctp.new_CThostFtdcRspGenUserTextField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspGenUserTextField
 
@@ -4136,7 +4482,7 @@ _ctp.CThostFtdcRspGenUserTextField_swigregister(CThostFtdcRspGenUserTextField)
 
 class CThostFtdcReqUserLoginWithCaptchaField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4201,12 +4547,14 @@ class CThostFtdcReqUserLoginWithCaptchaField:
 
 
 # Register CThostFtdcReqUserLoginWithCaptchaField in _ctp:
-_ctp.CThostFtdcReqUserLoginWithCaptchaField_swigregister(CThostFtdcReqUserLoginWithCaptchaField)
+_ctp.CThostFtdcReqUserLoginWithCaptchaField_swigregister(
+    CThostFtdcReqUserLoginWithCaptchaField
+)
 
 
 class CThostFtdcReqUserLoginWithTextField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4271,12 +4619,14 @@ class CThostFtdcReqUserLoginWithTextField:
 
 
 # Register CThostFtdcReqUserLoginWithTextField in _ctp:
-_ctp.CThostFtdcReqUserLoginWithTextField_swigregister(CThostFtdcReqUserLoginWithTextField)
+_ctp.CThostFtdcReqUserLoginWithTextField_swigregister(
+    CThostFtdcReqUserLoginWithTextField
+)
 
 
 class CThostFtdcReqUserLoginWithOTPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4346,7 +4696,7 @@ _ctp.CThostFtdcReqUserLoginWithOTPField_swigregister(CThostFtdcReqUserLoginWithO
 
 class CThostFtdcDepartmentUserField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4354,7 +4704,8 @@ class CThostFtdcDepartmentUserField:
         _ctp.CThostFtdcDepartmentUserField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcDepartmentUserField_UserID_get, _ctp.CThostFtdcDepartmentUserField_UserID_set
+        _ctp.CThostFtdcDepartmentUserField_UserID_get,
+        _ctp.CThostFtdcDepartmentUserField_UserID_set,
     )
     InvestorRange = property(
         _ctp.CThostFtdcDepartmentUserField_InvestorRange_get,
@@ -4366,7 +4717,9 @@ class CThostFtdcDepartmentUserField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcDepartmentUserField_swiginit(self, _ctp.new_CThostFtdcDepartmentUserField())
+        _ctp.CThostFtdcDepartmentUserField_swiginit(
+            self, _ctp.new_CThostFtdcDepartmentUserField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcDepartmentUserField
 
@@ -4377,7 +4730,7 @@ _ctp.CThostFtdcDepartmentUserField_swigregister(CThostFtdcDepartmentUserField)
 
 class CThostFtdcAuthForbiddenIPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     IPAddress = property(
@@ -4399,7 +4752,7 @@ _ctp.CThostFtdcAuthForbiddenIPField_swigregister(CThostFtdcAuthForbiddenIPField)
 
 class CThostFtdcUserSystemInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4407,7 +4760,8 @@ class CThostFtdcUserSystemInfoField:
         _ctp.CThostFtdcUserSystemInfoField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcUserSystemInfoField_UserID_get, _ctp.CThostFtdcUserSystemInfoField_UserID_set
+        _ctp.CThostFtdcUserSystemInfoField_UserID_get,
+        _ctp.CThostFtdcUserSystemInfoField_UserID_set,
     )
     ClientSystemInfoLen = property(
         _ctp.CThostFtdcUserSystemInfoField_ClientSystemInfoLen_get,
@@ -4443,7 +4797,9 @@ class CThostFtdcUserSystemInfoField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcUserSystemInfoField_swiginit(self, _ctp.new_CThostFtdcUserSystemInfoField())
+        _ctp.CThostFtdcUserSystemInfoField_swiginit(
+            self, _ctp.new_CThostFtdcUserSystemInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcUserSystemInfoField
 
@@ -4454,24 +4810,30 @@ _ctp.CThostFtdcUserSystemInfoField_swigregister(CThostFtdcUserSystemInfoField)
 
 class CThostFtdcAuthUserIDField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcAuthUserIDField_BrokerID_get, _ctp.CThostFtdcAuthUserIDField_BrokerID_set
+        _ctp.CThostFtdcAuthUserIDField_BrokerID_get,
+        _ctp.CThostFtdcAuthUserIDField_BrokerID_set,
     )
     AppID = property(
-        _ctp.CThostFtdcAuthUserIDField_AppID_get, _ctp.CThostFtdcAuthUserIDField_AppID_set
+        _ctp.CThostFtdcAuthUserIDField_AppID_get,
+        _ctp.CThostFtdcAuthUserIDField_AppID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcAuthUserIDField_UserID_get, _ctp.CThostFtdcAuthUserIDField_UserID_set
+        _ctp.CThostFtdcAuthUserIDField_UserID_get,
+        _ctp.CThostFtdcAuthUserIDField_UserID_set,
     )
     AuthType = property(
-        _ctp.CThostFtdcAuthUserIDField_AuthType_get, _ctp.CThostFtdcAuthUserIDField_AuthType_set
+        _ctp.CThostFtdcAuthUserIDField_AuthType_get,
+        _ctp.CThostFtdcAuthUserIDField_AuthType_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcAuthUserIDField_swiginit(self, _ctp.new_CThostFtdcAuthUserIDField())
+        _ctp.CThostFtdcAuthUserIDField_swiginit(
+            self, _ctp.new_CThostFtdcAuthUserIDField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcAuthUserIDField
 
@@ -4482,15 +4844,18 @@ _ctp.CThostFtdcAuthUserIDField_swigregister(CThostFtdcAuthUserIDField)
 
 class CThostFtdcAuthIPField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
         _ctp.CThostFtdcAuthIPField_BrokerID_get, _ctp.CThostFtdcAuthIPField_BrokerID_set
     )
-    AppID = property(_ctp.CThostFtdcAuthIPField_AppID_get, _ctp.CThostFtdcAuthIPField_AppID_set)
+    AppID = property(
+        _ctp.CThostFtdcAuthIPField_AppID_get, _ctp.CThostFtdcAuthIPField_AppID_set
+    )
     IPAddress = property(
-        _ctp.CThostFtdcAuthIPField_IPAddress_get, _ctp.CThostFtdcAuthIPField_IPAddress_set
+        _ctp.CThostFtdcAuthIPField_IPAddress_get,
+        _ctp.CThostFtdcAuthIPField_IPAddress_set,
     )
 
     def __init__(self):
@@ -4505,7 +4870,7 @@ _ctp.CThostFtdcAuthIPField_swigregister(CThostFtdcAuthIPField)
 
 class CThostFtdcCombPromotionParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4539,7 +4904,7 @@ _ctp.CThostFtdcCombPromotionParamField_swigregister(CThostFtdcCombPromotionParam
 
 class CThostFtdcReqUserLoginSMField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4551,7 +4916,8 @@ class CThostFtdcReqUserLoginSMField:
         _ctp.CThostFtdcReqUserLoginSMField_BrokerID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqUserLoginSMField_UserID_get, _ctp.CThostFtdcReqUserLoginSMField_UserID_set
+        _ctp.CThostFtdcReqUserLoginSMField_UserID_get,
+        _ctp.CThostFtdcReqUserLoginSMField_UserID_set,
     )
     Password = property(
         _ctp.CThostFtdcReqUserLoginSMField_Password_get,
@@ -4602,14 +4968,18 @@ class CThostFtdcReqUserLoginSMField:
         _ctp.CThostFtdcReqUserLoginSMField_AuthCode_set,
     )
     AppID = property(
-        _ctp.CThostFtdcReqUserLoginSMField_AppID_get, _ctp.CThostFtdcReqUserLoginSMField_AppID_set
+        _ctp.CThostFtdcReqUserLoginSMField_AppID_get,
+        _ctp.CThostFtdcReqUserLoginSMField_AppID_set,
     )
     PIN = property(
-        _ctp.CThostFtdcReqUserLoginSMField_PIN_get, _ctp.CThostFtdcReqUserLoginSMField_PIN_set
+        _ctp.CThostFtdcReqUserLoginSMField_PIN_get,
+        _ctp.CThostFtdcReqUserLoginSMField_PIN_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqUserLoginSMField_swiginit(self, _ctp.new_CThostFtdcReqUserLoginSMField())
+        _ctp.CThostFtdcReqUserLoginSMField_swiginit(
+            self, _ctp.new_CThostFtdcReqUserLoginSMField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqUserLoginSMField
 
@@ -4620,7 +4990,7 @@ _ctp.CThostFtdcReqUserLoginSMField_swigregister(CThostFtdcReqUserLoginSMField)
 
 class CThostFtdcInvestorProdSPBMDetailField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4717,12 +5087,14 @@ class CThostFtdcInvestorProdSPBMDetailField:
 
 
 # Register CThostFtdcInvestorProdSPBMDetailField in _ctp:
-_ctp.CThostFtdcInvestorProdSPBMDetailField_swigregister(CThostFtdcInvestorProdSPBMDetailField)
+_ctp.CThostFtdcInvestorProdSPBMDetailField_swigregister(
+    CThostFtdcInvestorProdSPBMDetailField
+)
 
 
 class CThostFtdcPortfTradeParamSettingField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4759,12 +5131,14 @@ class CThostFtdcPortfTradeParamSettingField:
 
 
 # Register CThostFtdcPortfTradeParamSettingField in _ctp:
-_ctp.CThostFtdcPortfTradeParamSettingField_swigregister(CThostFtdcPortfTradeParamSettingField)
+_ctp.CThostFtdcPortfTradeParamSettingField_swigregister(
+    CThostFtdcPortfTradeParamSettingField
+)
 
 
 class CThostFtdcMortgageParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4785,7 +5159,9 @@ class CThostFtdcMortgageParamField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcMortgageParamField_swiginit(self, _ctp.new_CThostFtdcMortgageParamField())
+        _ctp.CThostFtdcMortgageParamField_swiginit(
+            self, _ctp.new_CThostFtdcMortgageParamField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMortgageParamField
 
@@ -4796,7 +5172,7 @@ _ctp.CThostFtdcMortgageParamField_swigregister(CThostFtdcMortgageParamField)
 
 class CThostFtdcThostUserFunctionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4826,18 +5202,20 @@ _ctp.CThostFtdcThostUserFunctionField_swigregister(CThostFtdcThostUserFunctionFi
 
 class CThostFtdcTraderAssignField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcTraderAssignField_BrokerID_get, _ctp.CThostFtdcTraderAssignField_BrokerID_set
+        _ctp.CThostFtdcTraderAssignField_BrokerID_get,
+        _ctp.CThostFtdcTraderAssignField_BrokerID_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcTraderAssignField_ExchangeID_get,
         _ctp.CThostFtdcTraderAssignField_ExchangeID_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcTraderAssignField_TraderID_get, _ctp.CThostFtdcTraderAssignField_TraderID_set
+        _ctp.CThostFtdcTraderAssignField_TraderID_get,
+        _ctp.CThostFtdcTraderAssignField_TraderID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcTraderAssignField_ParticipantID_get,
@@ -4849,7 +5227,9 @@ class CThostFtdcTraderAssignField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTraderAssignField_swiginit(self, _ctp.new_CThostFtdcTraderAssignField())
+        _ctp.CThostFtdcTraderAssignField_swiginit(
+            self, _ctp.new_CThostFtdcTraderAssignField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTraderAssignField
 
@@ -4860,7 +5240,7 @@ _ctp.CThostFtdcTraderAssignField_swigregister(CThostFtdcTraderAssignField)
 
 class CThostFtdcInvestorInfoCntSettingField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4901,12 +5281,14 @@ class CThostFtdcInvestorInfoCntSettingField:
 
 
 # Register CThostFtdcInvestorInfoCntSettingField in _ctp:
-_ctp.CThostFtdcInvestorInfoCntSettingField_swigregister(CThostFtdcInvestorInfoCntSettingField)
+_ctp.CThostFtdcInvestorInfoCntSettingField_swigregister(
+    CThostFtdcInvestorInfoCntSettingField
+)
 
 
 class CThostFtdcExitEmergencyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4915,7 +5297,9 @@ class CThostFtdcExitEmergencyField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcExitEmergencyField_swiginit(self, _ctp.new_CThostFtdcExitEmergencyField())
+        _ctp.CThostFtdcExitEmergencyField_swiginit(
+            self, _ctp.new_CThostFtdcExitEmergencyField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExitEmergencyField
 
@@ -4926,7 +5310,7 @@ _ctp.CThostFtdcExitEmergencyField_swigregister(CThostFtdcExitEmergencyField)
 
 class CThostFtdcInvestorPortfSettingField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4959,109 +5343,111 @@ class CThostFtdcInvestorPortfSettingField:
 
 
 # Register CThostFtdcInvestorPortfSettingField in _ctp:
-_ctp.CThostFtdcInvestorPortfSettingField_swigregister(CThostFtdcInvestorPortfSettingField)
+_ctp.CThostFtdcInvestorPortfSettingField_swigregister(
+    CThostFtdcInvestorPortfSettingField
+)
 
 __all__ = [
-    "CThostFtdcReqUserLoginField",
-    "CThostFtdcRspUserLoginField",
-    "CThostFtdcUserLogoutField",
-    "CThostFtdcForceUserLogoutField",
-    "CThostFtdcReqAuthenticateField",
-    "CThostFtdcRspAuthenticateField",
-    "CThostFtdcAuthenticationInfoField",
-    "CThostFtdcRspUserLogin2Field",
-    "CThostFtdcRspInfoField",
-    "CThostFtdcBrokerField",
-    "CThostFtdcTraderField",
-    "CThostFtdcInvestorField",
-    "CThostFtdcTradingCodeField",
-    "CThostFtdcPartBrokerField",
-    "CThostFtdcSuperUserField",
-    "CThostFtdcSuperUserFunctionField",
-    "CThostFtdcInvestorGroupField",
-    "CThostFtdcBrokerUserField",
-    "CThostFtdcBrokerUserPasswordField",
-    "CThostFtdcBrokerUserFunctionField",
-    "CThostFtdcTraderOfferField",
-    "CThostFtdcSettlementInfoField",
-    "CThostFtdcSettlementRefField",
-    "CThostFtdcCurrentTimeField",
-    "CThostFtdcCommPhaseField",
-    "CThostFtdcLoginInfoField",
-    "CThostFtdcLogoutAllField",
-    "CThostFtdcFrontStatusField",
-    "CThostFtdcUserPasswordUpdateField",
-    "CThostFtdcUserSessionField",
-    "CThostFtdcSettlementInfoConfirmField",
-    "CThostFtdcBrokerSyncField",
-    "CThostFtdcIndexPriceField",
-    "CThostFtdcInstrumentOrderCommRateField",
-    "CThostFtdcFutureLimitPosiParamField",
-    "CThostFtdcLoginForbiddenIPField",
-    "CThostFtdcIPListField",
-    "CThostFtdcInvestUnitField",
-    "CThostFtdcInvestorAccountField",
-    "CThostFtdcDiscountField",
-    "CThostFtdcMDTraderOfferField",
-    "CThostFtdcNoticeField",
-    "CThostFtdcUserRightField",
-    "CThostFtdcLoadSettlementInfoField",
-    "CThostFtdcBrokerWithdrawAlgorithmField",
-    "CThostFtdcCombinationLegField",
-    "CThostFtdcSyncStatusField",
-    "CThostFtdcLinkManField",
-    "CThostFtdcBrokerUserEventField",
-    "CThostFtdcContractBankField",
-    "CThostFtdcInvestorWithdrawAlgorithmField",
-    "CThostFtdcUserIPField",
-    "CThostFtdcTradingNoticeInfoField",
-    "CThostFtdcTradingNoticeField",
-    "CThostFtdcBrokerTradingParamsField",
-    "CThostFtdcBrokerTradingAlgosField",
-    "CThostFtdcBrokerDepositField",
-    "CThostFtdcCFMMCBrokerKeyField",
-    "CThostFtdcBrokerUserOTPParamField",
-    "CThostFtdcManualSyncBrokerUserOTPField",
-    "CThostFtdcCommRateModelField",
-    "CThostFtdcBulletinField",
-    "CThostFtdcAppIDAuthAssignField",
-    "CThostFtdcReqTransferField",
-    "CThostFtdcRspTransferField",
-    "CThostFtdcFutureSignIOField",
-    "CThostFtdcDepositResultInformField",
-    "CThostFtdcOpenAccountField",
-    "CThostFtdcCancelAccountField",
-    "CThostFtdcChangeAccountField",
-    "CThostFtdcUserRightsAssignField",
-    "CThostFtdcBrokerUserRightAssignField",
-    "CThostFtdcDRTransferField",
-    "CThostFtdcFensUserInfoField",
-    "CThostFtdcCurrTransferIdentityField",
-    "CThostFtdcLoginForbiddenUserField",
-    "CThostFtdcAccountPropertyField",
-    "CThostFtdcCurrDRIdentityField",
-    "CThostFtdcReqUserAuthMethodField",
-    "CThostFtdcRspUserAuthMethodField",
-    "CThostFtdcReqGenUserCaptchaField",
-    "CThostFtdcRspGenUserCaptchaField",
-    "CThostFtdcReqGenUserTextField",
-    "CThostFtdcRspGenUserTextField",
-    "CThostFtdcReqUserLoginWithCaptchaField",
-    "CThostFtdcReqUserLoginWithTextField",
-    "CThostFtdcReqUserLoginWithOTPField",
-    "CThostFtdcDepartmentUserField",
-    "CThostFtdcAuthForbiddenIPField",
-    "CThostFtdcUserSystemInfoField",
-    "CThostFtdcAuthUserIDField",
-    "CThostFtdcAuthIPField",
-    "CThostFtdcCombPromotionParamField",
-    "CThostFtdcReqUserLoginSMField",
-    "CThostFtdcInvestorProdSPBMDetailField",
-    "CThostFtdcPortfTradeParamSettingField",
-    "CThostFtdcMortgageParamField",
-    "CThostFtdcThostUserFunctionField",
-    "CThostFtdcTraderAssignField",
-    "CThostFtdcInvestorInfoCntSettingField",
-    "CThostFtdcExitEmergencyField",
-    "CThostFtdcInvestorPortfSettingField",
+    'CThostFtdcReqUserLoginField',
+    'CThostFtdcRspUserLoginField',
+    'CThostFtdcUserLogoutField',
+    'CThostFtdcForceUserLogoutField',
+    'CThostFtdcReqAuthenticateField',
+    'CThostFtdcRspAuthenticateField',
+    'CThostFtdcAuthenticationInfoField',
+    'CThostFtdcRspUserLogin2Field',
+    'CThostFtdcRspInfoField',
+    'CThostFtdcBrokerField',
+    'CThostFtdcTraderField',
+    'CThostFtdcInvestorField',
+    'CThostFtdcTradingCodeField',
+    'CThostFtdcPartBrokerField',
+    'CThostFtdcSuperUserField',
+    'CThostFtdcSuperUserFunctionField',
+    'CThostFtdcInvestorGroupField',
+    'CThostFtdcBrokerUserField',
+    'CThostFtdcBrokerUserPasswordField',
+    'CThostFtdcBrokerUserFunctionField',
+    'CThostFtdcTraderOfferField',
+    'CThostFtdcSettlementInfoField',
+    'CThostFtdcSettlementRefField',
+    'CThostFtdcCurrentTimeField',
+    'CThostFtdcCommPhaseField',
+    'CThostFtdcLoginInfoField',
+    'CThostFtdcLogoutAllField',
+    'CThostFtdcFrontStatusField',
+    'CThostFtdcUserPasswordUpdateField',
+    'CThostFtdcUserSessionField',
+    'CThostFtdcSettlementInfoConfirmField',
+    'CThostFtdcBrokerSyncField',
+    'CThostFtdcIndexPriceField',
+    'CThostFtdcInstrumentOrderCommRateField',
+    'CThostFtdcFutureLimitPosiParamField',
+    'CThostFtdcLoginForbiddenIPField',
+    'CThostFtdcIPListField',
+    'CThostFtdcInvestUnitField',
+    'CThostFtdcInvestorAccountField',
+    'CThostFtdcDiscountField',
+    'CThostFtdcMDTraderOfferField',
+    'CThostFtdcNoticeField',
+    'CThostFtdcUserRightField',
+    'CThostFtdcLoadSettlementInfoField',
+    'CThostFtdcBrokerWithdrawAlgorithmField',
+    'CThostFtdcCombinationLegField',
+    'CThostFtdcSyncStatusField',
+    'CThostFtdcLinkManField',
+    'CThostFtdcBrokerUserEventField',
+    'CThostFtdcContractBankField',
+    'CThostFtdcInvestorWithdrawAlgorithmField',
+    'CThostFtdcUserIPField',
+    'CThostFtdcTradingNoticeInfoField',
+    'CThostFtdcTradingNoticeField',
+    'CThostFtdcBrokerTradingParamsField',
+    'CThostFtdcBrokerTradingAlgosField',
+    'CThostFtdcBrokerDepositField',
+    'CThostFtdcCFMMCBrokerKeyField',
+    'CThostFtdcBrokerUserOTPParamField',
+    'CThostFtdcManualSyncBrokerUserOTPField',
+    'CThostFtdcCommRateModelField',
+    'CThostFtdcBulletinField',
+    'CThostFtdcAppIDAuthAssignField',
+    'CThostFtdcReqTransferField',
+    'CThostFtdcRspTransferField',
+    'CThostFtdcFutureSignIOField',
+    'CThostFtdcDepositResultInformField',
+    'CThostFtdcOpenAccountField',
+    'CThostFtdcCancelAccountField',
+    'CThostFtdcChangeAccountField',
+    'CThostFtdcUserRightsAssignField',
+    'CThostFtdcBrokerUserRightAssignField',
+    'CThostFtdcDRTransferField',
+    'CThostFtdcFensUserInfoField',
+    'CThostFtdcCurrTransferIdentityField',
+    'CThostFtdcLoginForbiddenUserField',
+    'CThostFtdcAccountPropertyField',
+    'CThostFtdcCurrDRIdentityField',
+    'CThostFtdcReqUserAuthMethodField',
+    'CThostFtdcRspUserAuthMethodField',
+    'CThostFtdcReqGenUserCaptchaField',
+    'CThostFtdcRspGenUserCaptchaField',
+    'CThostFtdcReqGenUserTextField',
+    'CThostFtdcRspGenUserTextField',
+    'CThostFtdcReqUserLoginWithCaptchaField',
+    'CThostFtdcReqUserLoginWithTextField',
+    'CThostFtdcReqUserLoginWithOTPField',
+    'CThostFtdcDepartmentUserField',
+    'CThostFtdcAuthForbiddenIPField',
+    'CThostFtdcUserSystemInfoField',
+    'CThostFtdcAuthUserIDField',
+    'CThostFtdcAuthIPField',
+    'CThostFtdcCombPromotionParamField',
+    'CThostFtdcReqUserLoginSMField',
+    'CThostFtdcInvestorProdSPBMDetailField',
+    'CThostFtdcPortfTradeParamSettingField',
+    'CThostFtdcMortgageParamField',
+    'CThostFtdcThostUserFunctionField',
+    'CThostFtdcTraderAssignField',
+    'CThostFtdcInvestorInfoCntSettingField',
+    'CThostFtdcExitEmergencyField',
+    'CThostFtdcInvestorPortfSettingField',
 ]

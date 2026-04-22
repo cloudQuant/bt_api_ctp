@@ -15,35 +15,39 @@ from bt_api_base.gateway.protocol import CHANNEL_EVENT, CHANNEL_MARKET
 from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
-from bt_api_ctp.feeds.live_ctp_feed import CtpMarketStream, CtpRequestDataFuture, CtpTradeStream
+from bt_api_ctp.feeds.live_ctp_feed import (
+    CtpMarketStream,
+    CtpRequestDataFuture,
+    CtpTradeStream,
+)
 
-_CTP_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"})
+_CTP_EXCHANGES = frozenset({'SHFE', 'DCE', 'CZCE', 'CFFEX', 'INE', 'GFEX'})
 _CZCE_PRODUCT_PREFIXES = frozenset(
     {
-        "AP",
-        "CF",
-        "CJ",
-        "CY",
-        "FG",
-        "JR",
-        "LR",
-        "MA",
-        "OI",
-        "PF",
-        "PK",
-        "PM",
-        "PX",
-        "RI",
-        "RM",
-        "RS",
-        "SA",
-        "SF",
-        "SM",
-        "SR",
-        "TA",
-        "UR",
-        "WH",
-        "ZC",
+        'AP',
+        'CF',
+        'CJ',
+        'CY',
+        'FG',
+        'JR',
+        'LR',
+        'MA',
+        'OI',
+        'PF',
+        'PK',
+        'PM',
+        'PX',
+        'RI',
+        'RM',
+        'RS',
+        'SA',
+        'SF',
+        'SM',
+        'SR',
+        'TA',
+        'UR',
+        'WH',
+        'ZC',
     }
 )
 
@@ -51,9 +55,15 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
 class CtpGatewayAdapter(BaseGatewayAdapter):
     def __init__(self, **kwargs: Any) -> None:
         normalized = dict(kwargs)
-        normalized["md_front"] = normalized.get("md_front") or normalized.get("md_address") or ""
-        normalized["td_front"] = normalized.get("td_front") or normalized.get("td_address") or ""
-        normalized["user_id"] = normalized.get("user_id") or normalized.get("investor_id") or ""
+        normalized['md_front'] = (
+            normalized.get('md_front') or normalized.get('md_address') or ''
+        )
+        normalized['td_front'] = (
+            normalized.get('td_front') or normalized.get('td_address') or ''
+        )
+        normalized['user_id'] = (
+            normalized.get('user_id') or normalized.get('investor_id') or ''
+        )
         super().__init__(**normalized)
         self.q: queue.Queue[Any] = queue.Queue()
         self.market = CtpMarketStream(self.q, **normalized)
@@ -65,7 +75,9 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self._price_ticks: dict[str, float] = {}
         self.running = False
         self.thread: threading.Thread | None = None
-        self.timeout = float(normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0)
+        self.timeout = float(
+            normalized.get('gateway_startup_timeout_sec', 10.0) or 10.0
+        )
 
     def connect(self) -> None:
         if self.running:
@@ -73,9 +85,9 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.market.start()
         self.trade.start()
         if not self.market.wait_connected(timeout=self.timeout):
-            raise RuntimeError("ctp market not ready")
+            raise RuntimeError('ctp market not ready')
         if not self.trade.wait_connected(timeout=self.timeout):
-            raise RuntimeError("ctp trade not ready")
+            raise RuntimeError('ctp trade not ready')
         self.feed._trader = self.trade.trader_client
         self.feed._connected = True
         self.running = True
@@ -95,25 +107,25 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         topics = []
         done = []
         for raw in symbols:
-            alias = str(raw or "").strip()
+            alias = str(raw or '').strip()
             instrument, _ = _split(alias)
             if not instrument:
                 continue
             self.aliases[instrument].update({alias, instrument})
-            topics.append({"topic": "tick", "symbol": instrument})
+            topics.append({'topic': 'tick', 'symbol': instrument})
             done.append(alias)
         if topics:
             self.market.subscribe_topics(topics)
-        return {"symbols": done}
+        return {'symbols': done}
 
     def get_balance(self) -> dict[str, Any]:
         rows = self.feed.get_account().get_data()
         if not rows:
-            return {"cash": 0.0, "value": 0.0}
+            return {'cash': 0.0, 'value': 0.0}
         row = rows[0].init_data()
         return {
-            "cash": float(row.get_available_margin() or 0.0),
-            "value": float(row.get_margin() or 0.0),
+            'cash': float(row.get_available_margin() or 0.0),
+            'value': float(row.get_margin() or 0.0),
         }
 
     def get_positions(self) -> list[dict[str, Any]]:
@@ -122,11 +134,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             row = raw.init_data()
             out.append(
                 {
-                    "instrument": row.get_symbol_name(),
-                    "direction": row.get_position_direction(),
-                    "volume": row.get_position_volume(),
-                    "price": row.get_avg_price(),
-                    "exchange_id": row.exchange_id,
+                    'instrument': row.get_symbol_name(),
+                    'direction': row.get_position_direction(),
+                    'volume': row.get_position_volume(),
+                    'price': row.get_avg_price(),
+                    'exchange_id': row.exchange_id,
                 }
             )
         return out
@@ -136,12 +148,12 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         if cached is not None:
             return cached
         trader = self.feed.trader_client
-        if trader and hasattr(trader, "query_instrument"):
+        if trader and hasattr(trader, 'query_instrument'):
             try:
                 info = trader.query_instrument(instrument, timeout=2)
             except Exception:
                 info = None
-            if info and hasattr(info, "PriceTick"):
+            if info and hasattr(info, 'PriceTick'):
                 tick = float(info.PriceTick or 0)
                 if tick > 0:
                     self._price_ticks[instrument] = tick
@@ -149,69 +161,77 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         return 1.0
 
     def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
-        name = str(payload.get("data_name") or payload.get("symbol") or "").strip()
+        name = str(payload.get('data_name') or payload.get('symbol') or '').strip()
         instrument, exchange_id = _split(name)
-        side = str(payload.get("side") or "buy").lower()
-        price = payload.get("price")
+        side = str(payload.get('side') or 'buy').lower()
+        price = payload.get('price')
         if price is None or float(price) <= 0:
             last_price = self.last_price.get(instrument or name)
             if not last_price or last_price <= 0:
                 raise RuntimeError(
-                    f"CTP order for {instrument or name} rejected: no recent tick price available"
+                    f'CTP order for {instrument or name} rejected: no recent tick price available'
                 )
             price_tick = self._get_price_tick(instrument or name)
             slippage = price_tick * 5
             price = (
-                (last_price + slippage) if side == "buy" else max(last_price - slippage, price_tick)
+                (last_price + slippage)
+                if side == 'buy'
+                else max(last_price - slippage, price_tick)
             )
             price = round(price, 4)
         response = self.feed.make_order(
             instrument or name,
-            volume=payload.get("size") or 0,
+            volume=payload.get('size') or 0,
             price=price,
-            order_type=f"{side}-limit",
-            offset=str(payload.get("offset") or "open"),
-            client_order_id=payload.get("client_order_id") or payload.get("bt_order_ref"),
-            exchange_id=exchange_id or payload.get("exchange_id") or "",
+            order_type=f'{side}-limit',
+            offset=str(payload.get('offset') or 'open'),
+            client_order_id=payload.get('client_order_id')
+            or payload.get('bt_order_ref'),
+            exchange_id=exchange_id or payload.get('exchange_id') or '',
         )
         if not response.get_status():
-            raise RuntimeError("ctp order failed")
+            raise RuntimeError('ctp order failed')
         row = response.get_data()[0].init_data()
         order_id = row.get_order_id() or row.get_client_order_id()
         return {
-            "id": order_id,
-            "order_id": order_id,
-            "external_order_id": order_id,
-            "order_ref": row.get_client_order_id(),
-            "front_id": row.front_id,
-            "session_id": row.session_id,
-            "exchange_id": row.get_order_exchange_id(),
-            "details": {"bt_order_ref": payload.get("bt_order_ref")},
+            'id': order_id,
+            'order_id': order_id,
+            'external_order_id': order_id,
+            'order_ref': row.get_client_order_id(),
+            'front_id': row.front_id,
+            'session_id': row.session_id,
+            'exchange_id': row.get_order_exchange_id(),
+            'details': {'bt_order_ref': payload.get('bt_order_ref')},
         }
 
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = str(
-            payload.get("data_name") or payload.get("symbol") or payload.get("instrument") or ""
+            payload.get('data_name')
+            or payload.get('symbol')
+            or payload.get('instrument')
+            or ''
         ).strip()
         instrument, exchange_id = _split(name)
         response = self.feed.cancel_order(
             instrument or name,
-            order_id=payload.get("order_id") or payload.get("external_order_id"),
-            exchange_id=exchange_id or payload.get("exchange_id") or "",
-            front_id=payload.get("front_id"),
-            session_id=payload.get("session_id"),
-            order_ref=payload.get("order_ref"),
+            order_id=payload.get('order_id') or payload.get('external_order_id'),
+            exchange_id=exchange_id or payload.get('exchange_id') or '',
+            front_id=payload.get('front_id'),
+            session_id=payload.get('session_id'),
+            order_ref=payload.get('order_ref'),
         )
         if not response.get_status():
-            raise RuntimeError("ctp cancel failed")
+            raise RuntimeError('ctp cancel failed')
         data = dict((response.get_data() or [{}])[0])
         return {
-            "id": data.get("OrderSysID") or payload.get("order_id") or payload.get("order_ref"),
-            "order_ref": data.get("OrderRef") or payload.get("order_ref"),
-            "order_sys_id": data.get("OrderSysID") or payload.get("order_id"),
-            "front_id": data.get("FrontID") or payload.get("front_id"),
-            "session_id": data.get("SessionID") or payload.get("session_id"),
-            "exchange_id": data.get("ExchangeID") or exchange_id,
+            'id': data.get('OrderSysID')
+            or payload.get('order_id')
+            or payload.get('order_ref'),
+            'order_ref': data.get('OrderRef') or payload.get('order_ref'),
+            'order_sys_id': data.get('OrderSysID') or payload.get('order_id'),
+            'front_id': data.get('FrontID') or payload.get('front_id'),
+            'session_id': data.get('SessionID') or payload.get('session_id'),
+            'exchange_id': data.get('ExchangeID') or exchange_id,
         }
 
     def _run(self) -> None:
@@ -228,7 +248,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 self.emit(CHANNEL_EVENT, _trade(item.init_data(), self.aliases))
 
     def _tick(self, row: CtpTickerData) -> None:
-        instrument = row.get_symbol_name() or ""
+        instrument = row.get_symbol_name() or ''
         price = float(row.get_last_price() or 0.0)
         if not instrument or price <= 0:
             return
@@ -237,13 +257,13 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         prev = self.last_volume.get(instrument)
         self.last_volume[instrument] = total
         volume = max(total - prev, 0.0) if prev is not None else 0.0
-        day = str(row.trading_day or "")
+        day = str(row.trading_day or '')
         stamp = time.time()
         dt = datetime.fromtimestamp(stamp)
         if len(day) == 8 and day.isdigit() and row.update_time_val:
-            dt = datetime.strptime(f"{day} {row.update_time_val}", "%Y%m%d %H:%M:%S").replace(
-                microsecond=int(row.update_millisec or 0) * 1000
-            )
+            dt = datetime.strptime(
+                f'{day} {row.update_time_val}', '%Y%m%d %H:%M:%S'
+            ).replace(microsecond=int(row.update_millisec or 0) * 1000)
             stamp = dt.timestamp()
         for alias in self.aliases.get(instrument) or {instrument}:
             self.emit(
@@ -251,16 +271,16 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 GatewayTick(
                     timestamp=stamp,
                     symbol=alias,
-                    exchange=row.exchange_id or "",
-                    asset_type="futures",
+                    exchange=row.exchange_id or '',
+                    asset_type='futures',
                     local_time=time.time(),
                     price=price,
                     volume=volume,
                     datetime=dt,
                     instrument_id=instrument,
-                    exchange_id=row.exchange_id or "",
-                    trading_day=row.trading_day or "",
-                    update_time=row.update_time_val or "",
+                    exchange_id=row.exchange_id or '',
+                    trading_day=row.trading_day or '',
+                    update_time=row.update_time_val or '',
                     update_millisec=int(row.update_millisec or 0),
                     bid_price=row.get_bid_price(),
                     ask_price=row.get_ask_price(),
@@ -268,36 +288,38 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                     ask_volume=float(row.get_ask_volume() or 0.0),
                     openinterest=float(row.get_open_interest() or 0.0),
                     turnover=float(row.turnover or 0.0),
-                    trade_id=f"{instrument}-{int(total)}",
+                    trade_id=f'{instrument}-{int(total)}',
                 ),
             )
 
 
 def _split(value: str) -> tuple[str, str]:
-    text = str(value or "").strip()
-    if "." in text:
-        left, right = text.split(".", 1)
+    text = str(value or '').strip()
+    if '.' in text:
+        left, right = text.split('.', 1)
         exchange = right.strip().upper()
         return _normalize_instrument(left.strip(), exchange), exchange
-    if "_" in text:
-        exchange, instrument = text.split("_", 1)
+    if '_' in text:
+        exchange, instrument = text.split('_', 1)
         exchange = exchange.strip().upper()
         if exchange in _CTP_EXCHANGES:
             return _normalize_instrument(instrument.strip(), exchange), exchange
-    return _normalize_instrument(text, ""), ""
+    return _normalize_instrument(text, ''), ''
 
 
-def _normalize_instrument(instrument: str, exchange_id: str = "") -> str:
-    text = str(instrument or "").strip()
+def _normalize_instrument(instrument: str, exchange_id: str = '') -> str:
+    text = str(instrument or '').strip()
     if not text:
-        return ""
-    match = re.fullmatch(r"([A-Za-z]+)(\d{4})", text)
+        return ''
+    match = re.fullmatch(r'([A-Za-z]+)(\d{4})', text)
     if not match:
         return text
     prefix, digits = match.groups()
-    exchange = str(exchange_id or "").strip().upper()
-    if exchange == "CZCE" or (not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES):
-        return f"{prefix}{digits[-3:]}"
+    exchange = str(exchange_id or '').strip().upper()
+    if exchange == 'CZCE' or (
+        not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES
+    ):
+        return f'{prefix}{digits[-3:]}'
     return text
 
 
@@ -306,46 +328,50 @@ def _alias(aliases: dict[str, set[str]], instrument: str) -> str:
 
 
 def _status(value: Any) -> str:
-    raw = str(getattr(value, "value", value) or "submitted").lower()
-    return {"new": "accepted", "partially_filled": "partial", "filled": "completed"}.get(raw, raw)
+    raw = str(getattr(value, 'value', value) or 'submitted').lower()
+    return {
+        'new': 'accepted',
+        'partially_filled': 'partial',
+        'filled': 'completed',
+    }.get(raw, raw)
 
 
 def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
-    instrument = row.get_symbol_name() or ""
+    instrument = row.get_symbol_name() or ''
     size = int(row.get_order_size() or 0)
     filled = int(row.get_executed_qty() or 0)
     return {
-        "kind": "order",
-        "order_ref": row.get_client_order_id(),
-        "external_order_id": row.get_order_id() or row.get_client_order_id(),
-        "data_name": _alias(aliases, instrument),
-        "instrument": instrument,
-        "exchange_id": row.get_order_exchange_id(),
-        "front_id": row.front_id,
-        "session_id": row.session_id,
-        "status": _status(row.get_order_status()),
-        "status_msg": row.status_msg or "",
-        "side": row.get_order_side(),
-        "offset": row.get_order_offset(),
-        "price": row.get_order_price(),
-        "size": size,
-        "filled": filled,
-        "remaining": max(size - filled, 0),
+        'kind': 'order',
+        'order_ref': row.get_client_order_id(),
+        'external_order_id': row.get_order_id() or row.get_client_order_id(),
+        'data_name': _alias(aliases, instrument),
+        'instrument': instrument,
+        'exchange_id': row.get_order_exchange_id(),
+        'front_id': row.front_id,
+        'session_id': row.session_id,
+        'status': _status(row.get_order_status()),
+        'status_msg': row.status_msg or '',
+        'side': row.get_order_side(),
+        'offset': row.get_order_offset(),
+        'price': row.get_order_price(),
+        'size': size,
+        'filled': filled,
+        'remaining': max(size - filled, 0),
     }
 
 
 def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
-    instrument = row.get_symbol_name() or ""
+    instrument = row.get_symbol_name() or ''
     return {
-        "kind": "trade",
-        "trade_id": row.get_trade_id(),
-        "order_ref": row.get_client_order_id(),
-        "external_order_id": row.get_order_id() or row.get_client_order_id(),
-        "data_name": _alias(aliases, instrument),
-        "instrument": instrument,
-        "exchange_id": row.exchange_id,
-        "side": row.get_trade_side(),
-        "offset": row.get_trade_offset(),
-        "price": row.get_trade_price(),
-        "size": row.get_trade_volume(),
+        'kind': 'trade',
+        'trade_id': row.get_trade_id(),
+        'order_ref': row.get_client_order_id(),
+        'external_order_id': row.get_order_id() or row.get_client_order_id(),
+        'data_name': _alias(aliases, instrument),
+        'instrument': instrument,
+        'exchange_id': row.exchange_id,
+        'side': row.get_trade_side(),
+        'offset': row.get_trade_offset(),
+        'price': row.get_trade_price(),
+        'size': row.get_trade_volume(),
     }

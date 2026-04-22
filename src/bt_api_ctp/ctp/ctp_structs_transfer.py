@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcTransferHeaderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     Version = property(
@@ -36,14 +36,16 @@ class CThostFtdcTransferHeaderField:
         _ctp.CThostFtdcTransferHeaderField_FutureID_set,
     )
     BankID = property(
-        _ctp.CThostFtdcTransferHeaderField_BankID_get, _ctp.CThostFtdcTransferHeaderField_BankID_set
+        _ctp.CThostFtdcTransferHeaderField_BankID_get,
+        _ctp.CThostFtdcTransferHeaderField_BankID_set,
     )
     BankBrchID = property(
         _ctp.CThostFtdcTransferHeaderField_BankBrchID_get,
         _ctp.CThostFtdcTransferHeaderField_BankBrchID_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcTransferHeaderField_OperNo_get, _ctp.CThostFtdcTransferHeaderField_OperNo_set
+        _ctp.CThostFtdcTransferHeaderField_OperNo_get,
+        _ctp.CThostFtdcTransferHeaderField_OperNo_set,
     )
     DeviceID = property(
         _ctp.CThostFtdcTransferHeaderField_DeviceID_get,
@@ -63,7 +65,9 @@ class CThostFtdcTransferHeaderField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTransferHeaderField_swiginit(self, _ctp.new_CThostFtdcTransferHeaderField())
+        _ctp.CThostFtdcTransferHeaderField_swiginit(
+            self, _ctp.new_CThostFtdcTransferHeaderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTransferHeaderField
 
@@ -74,7 +78,7 @@ _ctp.CThostFtdcTransferHeaderField_swigregister(CThostFtdcTransferHeaderField)
 
 class CThostFtdcTransferBankToFutureReqField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FutureAccount = property(
@@ -111,12 +115,14 @@ class CThostFtdcTransferBankToFutureReqField:
 
 
 # Register CThostFtdcTransferBankToFutureReqField in _ctp:
-_ctp.CThostFtdcTransferBankToFutureReqField_swigregister(CThostFtdcTransferBankToFutureReqField)
+_ctp.CThostFtdcTransferBankToFutureReqField_swigregister(
+    CThostFtdcTransferBankToFutureReqField
+)
 
 
 class CThostFtdcTransferBankToFutureRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     RetCode = property(
@@ -153,12 +159,14 @@ class CThostFtdcTransferBankToFutureRspField:
 
 
 # Register CThostFtdcTransferBankToFutureRspField in _ctp:
-_ctp.CThostFtdcTransferBankToFutureRspField_swigregister(CThostFtdcTransferBankToFutureRspField)
+_ctp.CThostFtdcTransferBankToFutureRspField_swigregister(
+    CThostFtdcTransferBankToFutureRspField
+)
 
 
 class CThostFtdcTransferFutureToBankReqField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FutureAccount = property(
@@ -195,12 +203,14 @@ class CThostFtdcTransferFutureToBankReqField:
 
 
 # Register CThostFtdcTransferFutureToBankReqField in _ctp:
-_ctp.CThostFtdcTransferFutureToBankReqField_swigregister(CThostFtdcTransferFutureToBankReqField)
+_ctp.CThostFtdcTransferFutureToBankReqField_swigregister(
+    CThostFtdcTransferFutureToBankReqField
+)
 
 
 class CThostFtdcTransferFutureToBankRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     RetCode = property(
@@ -237,12 +247,14 @@ class CThostFtdcTransferFutureToBankRspField:
 
 
 # Register CThostFtdcTransferFutureToBankRspField in _ctp:
-_ctp.CThostFtdcTransferFutureToBankRspField_swigregister(CThostFtdcTransferFutureToBankRspField)
+_ctp.CThostFtdcTransferFutureToBankRspField_swigregister(
+    CThostFtdcTransferFutureToBankRspField
+)
 
 
 class CThostFtdcTransferQryBankReqField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FutureAccount = property(
@@ -276,7 +288,7 @@ _ctp.CThostFtdcTransferQryBankReqField_swigregister(CThostFtdcTransferQryBankReq
 
 class CThostFtdcTransferQryBankRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     RetCode = property(
@@ -322,7 +334,7 @@ _ctp.CThostFtdcTransferQryBankRspField_swigregister(CThostFtdcTransferQryBankRsp
 
 class CThostFtdcTransferQryDetailReqField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FutureAccount = property(
@@ -339,12 +351,14 @@ class CThostFtdcTransferQryDetailReqField:
 
 
 # Register CThostFtdcTransferQryDetailReqField in _ctp:
-_ctp.CThostFtdcTransferQryDetailReqField_swigregister(CThostFtdcTransferQryDetailReqField)
+_ctp.CThostFtdcTransferQryDetailReqField_swigregister(
+    CThostFtdcTransferQryDetailReqField
+)
 
 
 class CThostFtdcTransferQryDetailRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeDate = property(
@@ -413,12 +427,14 @@ class CThostFtdcTransferQryDetailRspField:
 
 
 # Register CThostFtdcTransferQryDetailRspField in _ctp:
-_ctp.CThostFtdcTransferQryDetailRspField_swigregister(CThostFtdcTransferQryDetailRspField)
+_ctp.CThostFtdcTransferQryDetailRspField_swigregister(
+    CThostFtdcTransferQryDetailRspField
+)
 
 
 class CThostFtdcSecAgentCheckModeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     InvestorID = property(
@@ -456,7 +472,7 @@ _ctp.CThostFtdcSecAgentCheckModeField_swigregister(CThostFtdcSecAgentCheckModeFi
 
 class CThostFtdcSecAgentTradeInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -490,25 +506,30 @@ _ctp.CThostFtdcSecAgentTradeInfoField_swigregister(CThostFtdcSecAgentTradeInfoFi
 
 class CThostFtdcTransferBankField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BankID = property(
-        _ctp.CThostFtdcTransferBankField_BankID_get, _ctp.CThostFtdcTransferBankField_BankID_set
+        _ctp.CThostFtdcTransferBankField_BankID_get,
+        _ctp.CThostFtdcTransferBankField_BankID_set,
     )
     BankBrchID = property(
         _ctp.CThostFtdcTransferBankField_BankBrchID_get,
         _ctp.CThostFtdcTransferBankField_BankBrchID_set,
     )
     BankName = property(
-        _ctp.CThostFtdcTransferBankField_BankName_get, _ctp.CThostFtdcTransferBankField_BankName_set
+        _ctp.CThostFtdcTransferBankField_BankName_get,
+        _ctp.CThostFtdcTransferBankField_BankName_set,
     )
     IsActive = property(
-        _ctp.CThostFtdcTransferBankField_IsActive_get, _ctp.CThostFtdcTransferBankField_IsActive_set
+        _ctp.CThostFtdcTransferBankField_IsActive_get,
+        _ctp.CThostFtdcTransferBankField_IsActive_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTransferBankField_swiginit(self, _ctp.new_CThostFtdcTransferBankField())
+        _ctp.CThostFtdcTransferBankField_swiginit(
+            self, _ctp.new_CThostFtdcTransferBankField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTransferBankField
 
@@ -519,7 +540,7 @@ _ctp.CThostFtdcTransferBankField_swigregister(CThostFtdcTransferBankField)
 
 class CThostFtdcVerifyInvestorPasswordField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -544,12 +565,14 @@ class CThostFtdcVerifyInvestorPasswordField:
 
 
 # Register CThostFtdcVerifyInvestorPasswordField in _ctp:
-_ctp.CThostFtdcVerifyInvestorPasswordField_swigregister(CThostFtdcVerifyInvestorPasswordField)
+_ctp.CThostFtdcVerifyInvestorPasswordField_swigregister(
+    CThostFtdcVerifyInvestorPasswordField
+)
 
 
 class CThostFtdcCFMMCTradingAccountKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -582,12 +605,14 @@ class CThostFtdcCFMMCTradingAccountKeyField:
 
 
 # Register CThostFtdcCFMMCTradingAccountKeyField in _ctp:
-_ctp.CThostFtdcCFMMCTradingAccountKeyField_swigregister(CThostFtdcCFMMCTradingAccountKeyField)
+_ctp.CThostFtdcCFMMCTradingAccountKeyField_swigregister(
+    CThostFtdcCFMMCTradingAccountKeyField
+)
 
 
 class CThostFtdcCFMMCTradingAccountTokenField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -620,12 +645,14 @@ class CThostFtdcCFMMCTradingAccountTokenField:
 
 
 # Register CThostFtdcCFMMCTradingAccountTokenField in _ctp:
-_ctp.CThostFtdcCFMMCTradingAccountTokenField_swigregister(CThostFtdcCFMMCTradingAccountTokenField)
+_ctp.CThostFtdcCFMMCTradingAccountTokenField_swigregister(
+    CThostFtdcCFMMCTradingAccountTokenField
+)
 
 
 class CThostFtdcReqOpenAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -633,7 +660,8 @@ class CThostFtdcReqOpenAccountField:
         _ctp.CThostFtdcReqOpenAccountField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcReqOpenAccountField_BankID_get, _ctp.CThostFtdcReqOpenAccountField_BankID_set
+        _ctp.CThostFtdcReqOpenAccountField_BankID_get,
+        _ctp.CThostFtdcReqOpenAccountField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcReqOpenAccountField_BankBranchID_get,
@@ -688,7 +716,8 @@ class CThostFtdcReqOpenAccountField:
         _ctp.CThostFtdcReqOpenAccountField_IdentifiedCardNo_set,
     )
     Gender = property(
-        _ctp.CThostFtdcReqOpenAccountField_Gender_get, _ctp.CThostFtdcReqOpenAccountField_Gender_set
+        _ctp.CThostFtdcReqOpenAccountField_Gender_get,
+        _ctp.CThostFtdcReqOpenAccountField_Gender_set,
     )
     CountryCode = property(
         _ctp.CThostFtdcReqOpenAccountField_CountryCode_get,
@@ -715,10 +744,12 @@ class CThostFtdcReqOpenAccountField:
         _ctp.CThostFtdcReqOpenAccountField_MobilePhone_set,
     )
     Fax = property(
-        _ctp.CThostFtdcReqOpenAccountField_Fax_get, _ctp.CThostFtdcReqOpenAccountField_Fax_set
+        _ctp.CThostFtdcReqOpenAccountField_Fax_get,
+        _ctp.CThostFtdcReqOpenAccountField_Fax_set,
     )
     EMail = property(
-        _ctp.CThostFtdcReqOpenAccountField_EMail_get, _ctp.CThostFtdcReqOpenAccountField_EMail_set
+        _ctp.CThostFtdcReqOpenAccountField_EMail_get,
+        _ctp.CThostFtdcReqOpenAccountField_EMail_set,
     )
     MoneyAccountStatus = property(
         _ctp.CThostFtdcReqOpenAccountField_MoneyAccountStatus_get,
@@ -757,7 +788,8 @@ class CThostFtdcReqOpenAccountField:
         _ctp.CThostFtdcReqOpenAccountField_CashExchangeCode_set,
     )
     Digest = property(
-        _ctp.CThostFtdcReqOpenAccountField_Digest_get, _ctp.CThostFtdcReqOpenAccountField_Digest_set
+        _ctp.CThostFtdcReqOpenAccountField_Digest_get,
+        _ctp.CThostFtdcReqOpenAccountField_Digest_set,
     )
     BankAccType = property(
         _ctp.CThostFtdcReqOpenAccountField_BankAccType_get,
@@ -788,13 +820,16 @@ class CThostFtdcReqOpenAccountField:
         _ctp.CThostFtdcReqOpenAccountField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcReqOpenAccountField_OperNo_get, _ctp.CThostFtdcReqOpenAccountField_OperNo_set
+        _ctp.CThostFtdcReqOpenAccountField_OperNo_get,
+        _ctp.CThostFtdcReqOpenAccountField_OperNo_set,
     )
     TID = property(
-        _ctp.CThostFtdcReqOpenAccountField_TID_get, _ctp.CThostFtdcReqOpenAccountField_TID_set
+        _ctp.CThostFtdcReqOpenAccountField_TID_get,
+        _ctp.CThostFtdcReqOpenAccountField_TID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqOpenAccountField_UserID_get, _ctp.CThostFtdcReqOpenAccountField_UserID_set
+        _ctp.CThostFtdcReqOpenAccountField_UserID_get,
+        _ctp.CThostFtdcReqOpenAccountField_UserID_set,
     )
     LongCustomerName = property(
         _ctp.CThostFtdcReqOpenAccountField_LongCustomerName_get,
@@ -802,7 +837,9 @@ class CThostFtdcReqOpenAccountField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqOpenAccountField_swiginit(self, _ctp.new_CThostFtdcReqOpenAccountField())
+        _ctp.CThostFtdcReqOpenAccountField_swiginit(
+            self, _ctp.new_CThostFtdcReqOpenAccountField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqOpenAccountField
 
@@ -813,7 +850,7 @@ _ctp.CThostFtdcReqOpenAccountField_swigregister(CThostFtdcReqOpenAccountField)
 
 class CThostFtdcReqCancelAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -905,7 +942,8 @@ class CThostFtdcReqCancelAccountField:
         _ctp.CThostFtdcReqCancelAccountField_MobilePhone_set,
     )
     Fax = property(
-        _ctp.CThostFtdcReqCancelAccountField_Fax_get, _ctp.CThostFtdcReqCancelAccountField_Fax_set
+        _ctp.CThostFtdcReqCancelAccountField_Fax_get,
+        _ctp.CThostFtdcReqCancelAccountField_Fax_set,
     )
     EMail = property(
         _ctp.CThostFtdcReqCancelAccountField_EMail_get,
@@ -984,7 +1022,8 @@ class CThostFtdcReqCancelAccountField:
         _ctp.CThostFtdcReqCancelAccountField_OperNo_set,
     )
     TID = property(
-        _ctp.CThostFtdcReqCancelAccountField_TID_get, _ctp.CThostFtdcReqCancelAccountField_TID_set
+        _ctp.CThostFtdcReqCancelAccountField_TID_get,
+        _ctp.CThostFtdcReqCancelAccountField_TID_set,
     )
     UserID = property(
         _ctp.CThostFtdcReqCancelAccountField_UserID_get,
@@ -1009,7 +1048,7 @@ _ctp.CThostFtdcReqCancelAccountField_swigregister(CThostFtdcReqCancelAccountFiel
 
 class CThostFtdcReqChangeAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -1101,7 +1140,8 @@ class CThostFtdcReqChangeAccountField:
         _ctp.CThostFtdcReqChangeAccountField_MobilePhone_set,
     )
     Fax = property(
-        _ctp.CThostFtdcReqChangeAccountField_Fax_get, _ctp.CThostFtdcReqChangeAccountField_Fax_set
+        _ctp.CThostFtdcReqChangeAccountField_Fax_get,
+        _ctp.CThostFtdcReqChangeAccountField_Fax_set,
     )
     EMail = property(
         _ctp.CThostFtdcReqChangeAccountField_EMail_get,
@@ -1164,7 +1204,8 @@ class CThostFtdcReqChangeAccountField:
         _ctp.CThostFtdcReqChangeAccountField_SecuPwdFlag_set,
     )
     TID = property(
-        _ctp.CThostFtdcReqChangeAccountField_TID_get, _ctp.CThostFtdcReqChangeAccountField_TID_set
+        _ctp.CThostFtdcReqChangeAccountField_TID_get,
+        _ctp.CThostFtdcReqChangeAccountField_TID_set,
     )
     Digest = property(
         _ctp.CThostFtdcReqChangeAccountField_Digest_get,
@@ -1189,7 +1230,7 @@ _ctp.CThostFtdcReqChangeAccountField_swigregister(CThostFtdcReqChangeAccountFiel
 
 class CThostFtdcReqRepealField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     RepealTimeInterval = property(
@@ -1221,115 +1262,140 @@ class CThostFtdcReqRepealField:
         _ctp.CThostFtdcReqRepealField_FutureRepealSerial_set,
     )
     TradeCode = property(
-        _ctp.CThostFtdcReqRepealField_TradeCode_get, _ctp.CThostFtdcReqRepealField_TradeCode_set
+        _ctp.CThostFtdcReqRepealField_TradeCode_get,
+        _ctp.CThostFtdcReqRepealField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcReqRepealField_BankID_get, _ctp.CThostFtdcReqRepealField_BankID_set
+        _ctp.CThostFtdcReqRepealField_BankID_get,
+        _ctp.CThostFtdcReqRepealField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcReqRepealField_BankBranchID_get,
         _ctp.CThostFtdcReqRepealField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcReqRepealField_BrokerID_get, _ctp.CThostFtdcReqRepealField_BrokerID_set
+        _ctp.CThostFtdcReqRepealField_BrokerID_get,
+        _ctp.CThostFtdcReqRepealField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcReqRepealField_BrokerBranchID_get,
         _ctp.CThostFtdcReqRepealField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcReqRepealField_TradeDate_get, _ctp.CThostFtdcReqRepealField_TradeDate_set
+        _ctp.CThostFtdcReqRepealField_TradeDate_get,
+        _ctp.CThostFtdcReqRepealField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcReqRepealField_TradeTime_get, _ctp.CThostFtdcReqRepealField_TradeTime_set
+        _ctp.CThostFtdcReqRepealField_TradeTime_get,
+        _ctp.CThostFtdcReqRepealField_TradeTime_set,
     )
     BankSerial = property(
-        _ctp.CThostFtdcReqRepealField_BankSerial_get, _ctp.CThostFtdcReqRepealField_BankSerial_set
+        _ctp.CThostFtdcReqRepealField_BankSerial_get,
+        _ctp.CThostFtdcReqRepealField_BankSerial_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcReqRepealField_TradingDay_get, _ctp.CThostFtdcReqRepealField_TradingDay_set
+        _ctp.CThostFtdcReqRepealField_TradingDay_get,
+        _ctp.CThostFtdcReqRepealField_TradingDay_set,
     )
     PlateSerial = property(
-        _ctp.CThostFtdcReqRepealField_PlateSerial_get, _ctp.CThostFtdcReqRepealField_PlateSerial_set
+        _ctp.CThostFtdcReqRepealField_PlateSerial_get,
+        _ctp.CThostFtdcReqRepealField_PlateSerial_set,
     )
     LastFragment = property(
         _ctp.CThostFtdcReqRepealField_LastFragment_get,
         _ctp.CThostFtdcReqRepealField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcReqRepealField_SessionID_get, _ctp.CThostFtdcReqRepealField_SessionID_set
+        _ctp.CThostFtdcReqRepealField_SessionID_get,
+        _ctp.CThostFtdcReqRepealField_SessionID_set,
     )
     CustomerName = property(
         _ctp.CThostFtdcReqRepealField_CustomerName_get,
         _ctp.CThostFtdcReqRepealField_CustomerName_set,
     )
     IdCardType = property(
-        _ctp.CThostFtdcReqRepealField_IdCardType_get, _ctp.CThostFtdcReqRepealField_IdCardType_set
+        _ctp.CThostFtdcReqRepealField_IdCardType_get,
+        _ctp.CThostFtdcReqRepealField_IdCardType_set,
     )
     IdentifiedCardNo = property(
         _ctp.CThostFtdcReqRepealField_IdentifiedCardNo_get,
         _ctp.CThostFtdcReqRepealField_IdentifiedCardNo_set,
     )
     CustType = property(
-        _ctp.CThostFtdcReqRepealField_CustType_get, _ctp.CThostFtdcReqRepealField_CustType_set
+        _ctp.CThostFtdcReqRepealField_CustType_get,
+        _ctp.CThostFtdcReqRepealField_CustType_set,
     )
     BankAccount = property(
-        _ctp.CThostFtdcReqRepealField_BankAccount_get, _ctp.CThostFtdcReqRepealField_BankAccount_set
+        _ctp.CThostFtdcReqRepealField_BankAccount_get,
+        _ctp.CThostFtdcReqRepealField_BankAccount_set,
     )
     BankPassWord = property(
         _ctp.CThostFtdcReqRepealField_BankPassWord_get,
         _ctp.CThostFtdcReqRepealField_BankPassWord_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcReqRepealField_AccountID_get, _ctp.CThostFtdcReqRepealField_AccountID_set
+        _ctp.CThostFtdcReqRepealField_AccountID_get,
+        _ctp.CThostFtdcReqRepealField_AccountID_set,
     )
     Password = property(
-        _ctp.CThostFtdcReqRepealField_Password_get, _ctp.CThostFtdcReqRepealField_Password_set
+        _ctp.CThostFtdcReqRepealField_Password_get,
+        _ctp.CThostFtdcReqRepealField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcReqRepealField_InstallID_get, _ctp.CThostFtdcReqRepealField_InstallID_set
+        _ctp.CThostFtdcReqRepealField_InstallID_get,
+        _ctp.CThostFtdcReqRepealField_InstallID_set,
     )
     FutureSerial = property(
         _ctp.CThostFtdcReqRepealField_FutureSerial_get,
         _ctp.CThostFtdcReqRepealField_FutureSerial_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqRepealField_UserID_get, _ctp.CThostFtdcReqRepealField_UserID_set
+        _ctp.CThostFtdcReqRepealField_UserID_get,
+        _ctp.CThostFtdcReqRepealField_UserID_set,
     )
     VerifyCertNoFlag = property(
         _ctp.CThostFtdcReqRepealField_VerifyCertNoFlag_get,
         _ctp.CThostFtdcReqRepealField_VerifyCertNoFlag_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcReqRepealField_CurrencyID_get, _ctp.CThostFtdcReqRepealField_CurrencyID_set
+        _ctp.CThostFtdcReqRepealField_CurrencyID_get,
+        _ctp.CThostFtdcReqRepealField_CurrencyID_set,
     )
     TradeAmount = property(
-        _ctp.CThostFtdcReqRepealField_TradeAmount_get, _ctp.CThostFtdcReqRepealField_TradeAmount_set
+        _ctp.CThostFtdcReqRepealField_TradeAmount_get,
+        _ctp.CThostFtdcReqRepealField_TradeAmount_set,
     )
     FutureFetchAmount = property(
         _ctp.CThostFtdcReqRepealField_FutureFetchAmount_get,
         _ctp.CThostFtdcReqRepealField_FutureFetchAmount_set,
     )
     FeePayFlag = property(
-        _ctp.CThostFtdcReqRepealField_FeePayFlag_get, _ctp.CThostFtdcReqRepealField_FeePayFlag_set
+        _ctp.CThostFtdcReqRepealField_FeePayFlag_get,
+        _ctp.CThostFtdcReqRepealField_FeePayFlag_set,
     )
     CustFee = property(
-        _ctp.CThostFtdcReqRepealField_CustFee_get, _ctp.CThostFtdcReqRepealField_CustFee_set
+        _ctp.CThostFtdcReqRepealField_CustFee_get,
+        _ctp.CThostFtdcReqRepealField_CustFee_set,
     )
     BrokerFee = property(
-        _ctp.CThostFtdcReqRepealField_BrokerFee_get, _ctp.CThostFtdcReqRepealField_BrokerFee_set
+        _ctp.CThostFtdcReqRepealField_BrokerFee_get,
+        _ctp.CThostFtdcReqRepealField_BrokerFee_set,
     )
     Message = property(
-        _ctp.CThostFtdcReqRepealField_Message_get, _ctp.CThostFtdcReqRepealField_Message_set
+        _ctp.CThostFtdcReqRepealField_Message_get,
+        _ctp.CThostFtdcReqRepealField_Message_set,
     )
     Digest = property(
-        _ctp.CThostFtdcReqRepealField_Digest_get, _ctp.CThostFtdcReqRepealField_Digest_set
+        _ctp.CThostFtdcReqRepealField_Digest_get,
+        _ctp.CThostFtdcReqRepealField_Digest_set,
     )
     BankAccType = property(
-        _ctp.CThostFtdcReqRepealField_BankAccType_get, _ctp.CThostFtdcReqRepealField_BankAccType_set
+        _ctp.CThostFtdcReqRepealField_BankAccType_get,
+        _ctp.CThostFtdcReqRepealField_BankAccType_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcReqRepealField_DeviceID_get, _ctp.CThostFtdcReqRepealField_DeviceID_set
+        _ctp.CThostFtdcReqRepealField_DeviceID_get,
+        _ctp.CThostFtdcReqRepealField_DeviceID_set,
     )
     BankSecuAccType = property(
         _ctp.CThostFtdcReqRepealField_BankSecuAccType_get,
@@ -1340,21 +1406,28 @@ class CThostFtdcReqRepealField:
         _ctp.CThostFtdcReqRepealField_BrokerIDByBank_set,
     )
     BankSecuAcc = property(
-        _ctp.CThostFtdcReqRepealField_BankSecuAcc_get, _ctp.CThostFtdcReqRepealField_BankSecuAcc_set
+        _ctp.CThostFtdcReqRepealField_BankSecuAcc_get,
+        _ctp.CThostFtdcReqRepealField_BankSecuAcc_set,
     )
     BankPwdFlag = property(
-        _ctp.CThostFtdcReqRepealField_BankPwdFlag_get, _ctp.CThostFtdcReqRepealField_BankPwdFlag_set
+        _ctp.CThostFtdcReqRepealField_BankPwdFlag_get,
+        _ctp.CThostFtdcReqRepealField_BankPwdFlag_set,
     )
     SecuPwdFlag = property(
-        _ctp.CThostFtdcReqRepealField_SecuPwdFlag_get, _ctp.CThostFtdcReqRepealField_SecuPwdFlag_set
+        _ctp.CThostFtdcReqRepealField_SecuPwdFlag_get,
+        _ctp.CThostFtdcReqRepealField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcReqRepealField_OperNo_get, _ctp.CThostFtdcReqRepealField_OperNo_set
+        _ctp.CThostFtdcReqRepealField_OperNo_get,
+        _ctp.CThostFtdcReqRepealField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcReqRepealField_RequestID_get, _ctp.CThostFtdcReqRepealField_RequestID_set
+        _ctp.CThostFtdcReqRepealField_RequestID_get,
+        _ctp.CThostFtdcReqRepealField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcReqRepealField_TID_get, _ctp.CThostFtdcReqRepealField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcReqRepealField_TID_get, _ctp.CThostFtdcReqRepealField_TID_set
+    )
     TransferStatus = property(
         _ctp.CThostFtdcReqRepealField_TransferStatus_get,
         _ctp.CThostFtdcReqRepealField_TransferStatus_set,
@@ -1365,7 +1438,9 @@ class CThostFtdcReqRepealField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReqRepealField_swiginit(self, _ctp.new_CThostFtdcReqRepealField())
+        _ctp.CThostFtdcReqRepealField_swiginit(
+            self, _ctp.new_CThostFtdcReqRepealField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqRepealField
 
@@ -1376,7 +1451,7 @@ _ctp.CThostFtdcReqRepealField_swigregister(CThostFtdcReqRepealField)
 
 class CThostFtdcRspRepealField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     RepealTimeInterval = property(
@@ -1408,115 +1483,140 @@ class CThostFtdcRspRepealField:
         _ctp.CThostFtdcRspRepealField_FutureRepealSerial_set,
     )
     TradeCode = property(
-        _ctp.CThostFtdcRspRepealField_TradeCode_get, _ctp.CThostFtdcRspRepealField_TradeCode_set
+        _ctp.CThostFtdcRspRepealField_TradeCode_get,
+        _ctp.CThostFtdcRspRepealField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcRspRepealField_BankID_get, _ctp.CThostFtdcRspRepealField_BankID_set
+        _ctp.CThostFtdcRspRepealField_BankID_get,
+        _ctp.CThostFtdcRspRepealField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcRspRepealField_BankBranchID_get,
         _ctp.CThostFtdcRspRepealField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcRspRepealField_BrokerID_get, _ctp.CThostFtdcRspRepealField_BrokerID_set
+        _ctp.CThostFtdcRspRepealField_BrokerID_get,
+        _ctp.CThostFtdcRspRepealField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcRspRepealField_BrokerBranchID_get,
         _ctp.CThostFtdcRspRepealField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcRspRepealField_TradeDate_get, _ctp.CThostFtdcRspRepealField_TradeDate_set
+        _ctp.CThostFtdcRspRepealField_TradeDate_get,
+        _ctp.CThostFtdcRspRepealField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcRspRepealField_TradeTime_get, _ctp.CThostFtdcRspRepealField_TradeTime_set
+        _ctp.CThostFtdcRspRepealField_TradeTime_get,
+        _ctp.CThostFtdcRspRepealField_TradeTime_set,
     )
     BankSerial = property(
-        _ctp.CThostFtdcRspRepealField_BankSerial_get, _ctp.CThostFtdcRspRepealField_BankSerial_set
+        _ctp.CThostFtdcRspRepealField_BankSerial_get,
+        _ctp.CThostFtdcRspRepealField_BankSerial_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcRspRepealField_TradingDay_get, _ctp.CThostFtdcRspRepealField_TradingDay_set
+        _ctp.CThostFtdcRspRepealField_TradingDay_get,
+        _ctp.CThostFtdcRspRepealField_TradingDay_set,
     )
     PlateSerial = property(
-        _ctp.CThostFtdcRspRepealField_PlateSerial_get, _ctp.CThostFtdcRspRepealField_PlateSerial_set
+        _ctp.CThostFtdcRspRepealField_PlateSerial_get,
+        _ctp.CThostFtdcRspRepealField_PlateSerial_set,
     )
     LastFragment = property(
         _ctp.CThostFtdcRspRepealField_LastFragment_get,
         _ctp.CThostFtdcRspRepealField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcRspRepealField_SessionID_get, _ctp.CThostFtdcRspRepealField_SessionID_set
+        _ctp.CThostFtdcRspRepealField_SessionID_get,
+        _ctp.CThostFtdcRspRepealField_SessionID_set,
     )
     CustomerName = property(
         _ctp.CThostFtdcRspRepealField_CustomerName_get,
         _ctp.CThostFtdcRspRepealField_CustomerName_set,
     )
     IdCardType = property(
-        _ctp.CThostFtdcRspRepealField_IdCardType_get, _ctp.CThostFtdcRspRepealField_IdCardType_set
+        _ctp.CThostFtdcRspRepealField_IdCardType_get,
+        _ctp.CThostFtdcRspRepealField_IdCardType_set,
     )
     IdentifiedCardNo = property(
         _ctp.CThostFtdcRspRepealField_IdentifiedCardNo_get,
         _ctp.CThostFtdcRspRepealField_IdentifiedCardNo_set,
     )
     CustType = property(
-        _ctp.CThostFtdcRspRepealField_CustType_get, _ctp.CThostFtdcRspRepealField_CustType_set
+        _ctp.CThostFtdcRspRepealField_CustType_get,
+        _ctp.CThostFtdcRspRepealField_CustType_set,
     )
     BankAccount = property(
-        _ctp.CThostFtdcRspRepealField_BankAccount_get, _ctp.CThostFtdcRspRepealField_BankAccount_set
+        _ctp.CThostFtdcRspRepealField_BankAccount_get,
+        _ctp.CThostFtdcRspRepealField_BankAccount_set,
     )
     BankPassWord = property(
         _ctp.CThostFtdcRspRepealField_BankPassWord_get,
         _ctp.CThostFtdcRspRepealField_BankPassWord_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcRspRepealField_AccountID_get, _ctp.CThostFtdcRspRepealField_AccountID_set
+        _ctp.CThostFtdcRspRepealField_AccountID_get,
+        _ctp.CThostFtdcRspRepealField_AccountID_set,
     )
     Password = property(
-        _ctp.CThostFtdcRspRepealField_Password_get, _ctp.CThostFtdcRspRepealField_Password_set
+        _ctp.CThostFtdcRspRepealField_Password_get,
+        _ctp.CThostFtdcRspRepealField_Password_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcRspRepealField_InstallID_get, _ctp.CThostFtdcRspRepealField_InstallID_set
+        _ctp.CThostFtdcRspRepealField_InstallID_get,
+        _ctp.CThostFtdcRspRepealField_InstallID_set,
     )
     FutureSerial = property(
         _ctp.CThostFtdcRspRepealField_FutureSerial_get,
         _ctp.CThostFtdcRspRepealField_FutureSerial_set,
     )
     UserID = property(
-        _ctp.CThostFtdcRspRepealField_UserID_get, _ctp.CThostFtdcRspRepealField_UserID_set
+        _ctp.CThostFtdcRspRepealField_UserID_get,
+        _ctp.CThostFtdcRspRepealField_UserID_set,
     )
     VerifyCertNoFlag = property(
         _ctp.CThostFtdcRspRepealField_VerifyCertNoFlag_get,
         _ctp.CThostFtdcRspRepealField_VerifyCertNoFlag_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcRspRepealField_CurrencyID_get, _ctp.CThostFtdcRspRepealField_CurrencyID_set
+        _ctp.CThostFtdcRspRepealField_CurrencyID_get,
+        _ctp.CThostFtdcRspRepealField_CurrencyID_set,
     )
     TradeAmount = property(
-        _ctp.CThostFtdcRspRepealField_TradeAmount_get, _ctp.CThostFtdcRspRepealField_TradeAmount_set
+        _ctp.CThostFtdcRspRepealField_TradeAmount_get,
+        _ctp.CThostFtdcRspRepealField_TradeAmount_set,
     )
     FutureFetchAmount = property(
         _ctp.CThostFtdcRspRepealField_FutureFetchAmount_get,
         _ctp.CThostFtdcRspRepealField_FutureFetchAmount_set,
     )
     FeePayFlag = property(
-        _ctp.CThostFtdcRspRepealField_FeePayFlag_get, _ctp.CThostFtdcRspRepealField_FeePayFlag_set
+        _ctp.CThostFtdcRspRepealField_FeePayFlag_get,
+        _ctp.CThostFtdcRspRepealField_FeePayFlag_set,
     )
     CustFee = property(
-        _ctp.CThostFtdcRspRepealField_CustFee_get, _ctp.CThostFtdcRspRepealField_CustFee_set
+        _ctp.CThostFtdcRspRepealField_CustFee_get,
+        _ctp.CThostFtdcRspRepealField_CustFee_set,
     )
     BrokerFee = property(
-        _ctp.CThostFtdcRspRepealField_BrokerFee_get, _ctp.CThostFtdcRspRepealField_BrokerFee_set
+        _ctp.CThostFtdcRspRepealField_BrokerFee_get,
+        _ctp.CThostFtdcRspRepealField_BrokerFee_set,
     )
     Message = property(
-        _ctp.CThostFtdcRspRepealField_Message_get, _ctp.CThostFtdcRspRepealField_Message_set
+        _ctp.CThostFtdcRspRepealField_Message_get,
+        _ctp.CThostFtdcRspRepealField_Message_set,
     )
     Digest = property(
-        _ctp.CThostFtdcRspRepealField_Digest_get, _ctp.CThostFtdcRspRepealField_Digest_set
+        _ctp.CThostFtdcRspRepealField_Digest_get,
+        _ctp.CThostFtdcRspRepealField_Digest_set,
     )
     BankAccType = property(
-        _ctp.CThostFtdcRspRepealField_BankAccType_get, _ctp.CThostFtdcRspRepealField_BankAccType_set
+        _ctp.CThostFtdcRspRepealField_BankAccType_get,
+        _ctp.CThostFtdcRspRepealField_BankAccType_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcRspRepealField_DeviceID_get, _ctp.CThostFtdcRspRepealField_DeviceID_set
+        _ctp.CThostFtdcRspRepealField_DeviceID_get,
+        _ctp.CThostFtdcRspRepealField_DeviceID_set,
     )
     BankSecuAccType = property(
         _ctp.CThostFtdcRspRepealField_BankSecuAccType_get,
@@ -1527,30 +1627,39 @@ class CThostFtdcRspRepealField:
         _ctp.CThostFtdcRspRepealField_BrokerIDByBank_set,
     )
     BankSecuAcc = property(
-        _ctp.CThostFtdcRspRepealField_BankSecuAcc_get, _ctp.CThostFtdcRspRepealField_BankSecuAcc_set
+        _ctp.CThostFtdcRspRepealField_BankSecuAcc_get,
+        _ctp.CThostFtdcRspRepealField_BankSecuAcc_set,
     )
     BankPwdFlag = property(
-        _ctp.CThostFtdcRspRepealField_BankPwdFlag_get, _ctp.CThostFtdcRspRepealField_BankPwdFlag_set
+        _ctp.CThostFtdcRspRepealField_BankPwdFlag_get,
+        _ctp.CThostFtdcRspRepealField_BankPwdFlag_set,
     )
     SecuPwdFlag = property(
-        _ctp.CThostFtdcRspRepealField_SecuPwdFlag_get, _ctp.CThostFtdcRspRepealField_SecuPwdFlag_set
+        _ctp.CThostFtdcRspRepealField_SecuPwdFlag_get,
+        _ctp.CThostFtdcRspRepealField_SecuPwdFlag_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcRspRepealField_OperNo_get, _ctp.CThostFtdcRspRepealField_OperNo_set
+        _ctp.CThostFtdcRspRepealField_OperNo_get,
+        _ctp.CThostFtdcRspRepealField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcRspRepealField_RequestID_get, _ctp.CThostFtdcRspRepealField_RequestID_set
+        _ctp.CThostFtdcRspRepealField_RequestID_get,
+        _ctp.CThostFtdcRspRepealField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcRspRepealField_TID_get, _ctp.CThostFtdcRspRepealField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcRspRepealField_TID_get, _ctp.CThostFtdcRspRepealField_TID_set
+    )
     TransferStatus = property(
         _ctp.CThostFtdcRspRepealField_TransferStatus_get,
         _ctp.CThostFtdcRspRepealField_TransferStatus_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcRspRepealField_ErrorID_get, _ctp.CThostFtdcRspRepealField_ErrorID_set
+        _ctp.CThostFtdcRspRepealField_ErrorID_get,
+        _ctp.CThostFtdcRspRepealField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcRspRepealField_ErrorMsg_get, _ctp.CThostFtdcRspRepealField_ErrorMsg_set
+        _ctp.CThostFtdcRspRepealField_ErrorMsg_get,
+        _ctp.CThostFtdcRspRepealField_ErrorMsg_set,
     )
     LongCustomerName = property(
         _ctp.CThostFtdcRspRepealField_LongCustomerName_get,
@@ -1558,7 +1667,9 @@ class CThostFtdcRspRepealField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspRepealField_swiginit(self, _ctp.new_CThostFtdcRspRepealField())
+        _ctp.CThostFtdcRspRepealField_swiginit(
+            self, _ctp.new_CThostFtdcRspRepealField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspRepealField
 
@@ -1569,7 +1680,7 @@ _ctp.CThostFtdcRspRepealField_swigregister(CThostFtdcRspRepealField)
 
 class CThostFtdcReqQueryAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -1713,7 +1824,8 @@ class CThostFtdcReqQueryAccountField:
         _ctp.CThostFtdcReqQueryAccountField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcReqQueryAccountField_TID_get, _ctp.CThostFtdcReqQueryAccountField_TID_set
+        _ctp.CThostFtdcReqQueryAccountField_TID_get,
+        _ctp.CThostFtdcReqQueryAccountField_TID_set,
     )
     LongCustomerName = property(
         _ctp.CThostFtdcReqQueryAccountField_LongCustomerName_get,
@@ -1734,7 +1846,7 @@ _ctp.CThostFtdcReqQueryAccountField_swigregister(CThostFtdcReqQueryAccountField)
 
 class CThostFtdcRspQueryAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -1878,7 +1990,8 @@ class CThostFtdcRspQueryAccountField:
         _ctp.CThostFtdcRspQueryAccountField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcRspQueryAccountField_TID_get, _ctp.CThostFtdcRspQueryAccountField_TID_set
+        _ctp.CThostFtdcRspQueryAccountField_TID_get,
+        _ctp.CThostFtdcRspQueryAccountField_TID_set,
     )
     BankUseAmount = property(
         _ctp.CThostFtdcRspQueryAccountField_BankUseAmount_get,
@@ -1907,7 +2020,7 @@ _ctp.CThostFtdcRspQueryAccountField_swigregister(CThostFtdcRspQueryAccountField)
 
 class CThostFtdcRspFutureSignInField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -1991,7 +2104,8 @@ class CThostFtdcRspFutureSignInField:
         _ctp.CThostFtdcRspFutureSignInField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcRspFutureSignInField_TID_get, _ctp.CThostFtdcRspFutureSignInField_TID_set
+        _ctp.CThostFtdcRspFutureSignInField_TID_get,
+        _ctp.CThostFtdcRspFutureSignInField_TID_set,
     )
     ErrorID = property(
         _ctp.CThostFtdcRspFutureSignInField_ErrorID_get,
@@ -2024,7 +2138,7 @@ _ctp.CThostFtdcRspFutureSignInField_swigregister(CThostFtdcRspFutureSignInField)
 
 class CThostFtdcReqFutureSignOutField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2108,7 +2222,8 @@ class CThostFtdcReqFutureSignOutField:
         _ctp.CThostFtdcReqFutureSignOutField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcReqFutureSignOutField_TID_get, _ctp.CThostFtdcReqFutureSignOutField_TID_set
+        _ctp.CThostFtdcReqFutureSignOutField_TID_get,
+        _ctp.CThostFtdcReqFutureSignOutField_TID_set,
     )
 
     def __init__(self):
@@ -2125,7 +2240,7 @@ _ctp.CThostFtdcReqFutureSignOutField_swigregister(CThostFtdcReqFutureSignOutFiel
 
 class CThostFtdcRspFutureSignOutField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2209,7 +2324,8 @@ class CThostFtdcRspFutureSignOutField:
         _ctp.CThostFtdcRspFutureSignOutField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcRspFutureSignOutField_TID_get, _ctp.CThostFtdcRspFutureSignOutField_TID_set
+        _ctp.CThostFtdcRspFutureSignOutField_TID_get,
+        _ctp.CThostFtdcRspFutureSignOutField_TID_set,
     )
     ErrorID = property(
         _ctp.CThostFtdcRspFutureSignOutField_ErrorID_get,
@@ -2234,7 +2350,7 @@ _ctp.CThostFtdcRspFutureSignOutField_swigregister(CThostFtdcRspFutureSignOutFiel
 
 class CThostFtdcReqQueryTradeResultBySerialField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2362,7 +2478,7 @@ _ctp.CThostFtdcReqQueryTradeResultBySerialField_swigregister(
 
 class CThostFtdcRspQueryTradeResultBySerialField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2486,7 +2602,7 @@ _ctp.CThostFtdcRspQueryTradeResultBySerialField_swigregister(
 
 class CThostFtdcReqDayEndFileReadyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2560,7 +2676,7 @@ _ctp.CThostFtdcReqDayEndFileReadyField_swigregister(CThostFtdcReqDayEndFileReady
 
 class CThostFtdcReturnResultField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ReturnCode = property(
@@ -2573,7 +2689,9 @@ class CThostFtdcReturnResultField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcReturnResultField_swiginit(self, _ctp.new_CThostFtdcReturnResultField())
+        _ctp.CThostFtdcReturnResultField_swiginit(
+            self, _ctp.new_CThostFtdcReturnResultField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReturnResultField
 
@@ -2584,7 +2702,7 @@ _ctp.CThostFtdcReturnResultField_swigregister(CThostFtdcReturnResultField)
 
 class CThostFtdcVerifyFuturePasswordField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -2673,12 +2791,14 @@ class CThostFtdcVerifyFuturePasswordField:
 
 
 # Register CThostFtdcVerifyFuturePasswordField in _ctp:
-_ctp.CThostFtdcVerifyFuturePasswordField_swigregister(CThostFtdcVerifyFuturePasswordField)
+_ctp.CThostFtdcVerifyFuturePasswordField_swigregister(
+    CThostFtdcVerifyFuturePasswordField
+)
 
 
 class CThostFtdcVerifyCustInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     CustomerName = property(
@@ -2703,7 +2823,9 @@ class CThostFtdcVerifyCustInfoField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcVerifyCustInfoField_swiginit(self, _ctp.new_CThostFtdcVerifyCustInfoField())
+        _ctp.CThostFtdcVerifyCustInfoField_swiginit(
+            self, _ctp.new_CThostFtdcVerifyCustInfoField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcVerifyCustInfoField
 
@@ -2714,7 +2836,7 @@ _ctp.CThostFtdcVerifyCustInfoField_swigregister(CThostFtdcVerifyCustInfoField)
 
 class CThostFtdcVerifyFuturePasswordAndCustInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     CustomerName = property(
@@ -2766,37 +2888,44 @@ _ctp.CThostFtdcVerifyFuturePasswordAndCustInfoField_swigregister(
 
 class CThostFtdcReqSyncKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
-        _ctp.CThostFtdcReqSyncKeyField_TradeCode_get, _ctp.CThostFtdcReqSyncKeyField_TradeCode_set
+        _ctp.CThostFtdcReqSyncKeyField_TradeCode_get,
+        _ctp.CThostFtdcReqSyncKeyField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcReqSyncKeyField_BankID_get, _ctp.CThostFtdcReqSyncKeyField_BankID_set
+        _ctp.CThostFtdcReqSyncKeyField_BankID_get,
+        _ctp.CThostFtdcReqSyncKeyField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcReqSyncKeyField_BankBranchID_get,
         _ctp.CThostFtdcReqSyncKeyField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcReqSyncKeyField_BrokerID_get, _ctp.CThostFtdcReqSyncKeyField_BrokerID_set
+        _ctp.CThostFtdcReqSyncKeyField_BrokerID_get,
+        _ctp.CThostFtdcReqSyncKeyField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcReqSyncKeyField_BrokerBranchID_get,
         _ctp.CThostFtdcReqSyncKeyField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcReqSyncKeyField_TradeDate_get, _ctp.CThostFtdcReqSyncKeyField_TradeDate_set
+        _ctp.CThostFtdcReqSyncKeyField_TradeDate_get,
+        _ctp.CThostFtdcReqSyncKeyField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcReqSyncKeyField_TradeTime_get, _ctp.CThostFtdcReqSyncKeyField_TradeTime_set
+        _ctp.CThostFtdcReqSyncKeyField_TradeTime_get,
+        _ctp.CThostFtdcReqSyncKeyField_TradeTime_set,
     )
     BankSerial = property(
-        _ctp.CThostFtdcReqSyncKeyField_BankSerial_get, _ctp.CThostFtdcReqSyncKeyField_BankSerial_set
+        _ctp.CThostFtdcReqSyncKeyField_BankSerial_get,
+        _ctp.CThostFtdcReqSyncKeyField_BankSerial_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcReqSyncKeyField_TradingDay_get, _ctp.CThostFtdcReqSyncKeyField_TradingDay_set
+        _ctp.CThostFtdcReqSyncKeyField_TradingDay_get,
+        _ctp.CThostFtdcReqSyncKeyField_TradingDay_set,
     )
     PlateSerial = property(
         _ctp.CThostFtdcReqSyncKeyField_PlateSerial_get,
@@ -2807,34 +2936,45 @@ class CThostFtdcReqSyncKeyField:
         _ctp.CThostFtdcReqSyncKeyField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcReqSyncKeyField_SessionID_get, _ctp.CThostFtdcReqSyncKeyField_SessionID_set
+        _ctp.CThostFtdcReqSyncKeyField_SessionID_get,
+        _ctp.CThostFtdcReqSyncKeyField_SessionID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcReqSyncKeyField_InstallID_get, _ctp.CThostFtdcReqSyncKeyField_InstallID_set
+        _ctp.CThostFtdcReqSyncKeyField_InstallID_get,
+        _ctp.CThostFtdcReqSyncKeyField_InstallID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcReqSyncKeyField_UserID_get, _ctp.CThostFtdcReqSyncKeyField_UserID_set
+        _ctp.CThostFtdcReqSyncKeyField_UserID_get,
+        _ctp.CThostFtdcReqSyncKeyField_UserID_set,
     )
     Message = property(
-        _ctp.CThostFtdcReqSyncKeyField_Message_get, _ctp.CThostFtdcReqSyncKeyField_Message_set
+        _ctp.CThostFtdcReqSyncKeyField_Message_get,
+        _ctp.CThostFtdcReqSyncKeyField_Message_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcReqSyncKeyField_DeviceID_get, _ctp.CThostFtdcReqSyncKeyField_DeviceID_set
+        _ctp.CThostFtdcReqSyncKeyField_DeviceID_get,
+        _ctp.CThostFtdcReqSyncKeyField_DeviceID_set,
     )
     BrokerIDByBank = property(
         _ctp.CThostFtdcReqSyncKeyField_BrokerIDByBank_get,
         _ctp.CThostFtdcReqSyncKeyField_BrokerIDByBank_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcReqSyncKeyField_OperNo_get, _ctp.CThostFtdcReqSyncKeyField_OperNo_set
+        _ctp.CThostFtdcReqSyncKeyField_OperNo_get,
+        _ctp.CThostFtdcReqSyncKeyField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcReqSyncKeyField_RequestID_get, _ctp.CThostFtdcReqSyncKeyField_RequestID_set
+        _ctp.CThostFtdcReqSyncKeyField_RequestID_get,
+        _ctp.CThostFtdcReqSyncKeyField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcReqSyncKeyField_TID_get, _ctp.CThostFtdcReqSyncKeyField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcReqSyncKeyField_TID_get, _ctp.CThostFtdcReqSyncKeyField_TID_set
+    )
 
     def __init__(self):
-        _ctp.CThostFtdcReqSyncKeyField_swiginit(self, _ctp.new_CThostFtdcReqSyncKeyField())
+        _ctp.CThostFtdcReqSyncKeyField_swiginit(
+            self, _ctp.new_CThostFtdcReqSyncKeyField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcReqSyncKeyField
 
@@ -2845,37 +2985,44 @@ _ctp.CThostFtdcReqSyncKeyField_swigregister(CThostFtdcReqSyncKeyField)
 
 class CThostFtdcRspSyncKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
-        _ctp.CThostFtdcRspSyncKeyField_TradeCode_get, _ctp.CThostFtdcRspSyncKeyField_TradeCode_set
+        _ctp.CThostFtdcRspSyncKeyField_TradeCode_get,
+        _ctp.CThostFtdcRspSyncKeyField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcRspSyncKeyField_BankID_get, _ctp.CThostFtdcRspSyncKeyField_BankID_set
+        _ctp.CThostFtdcRspSyncKeyField_BankID_get,
+        _ctp.CThostFtdcRspSyncKeyField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcRspSyncKeyField_BankBranchID_get,
         _ctp.CThostFtdcRspSyncKeyField_BankBranchID_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcRspSyncKeyField_BrokerID_get, _ctp.CThostFtdcRspSyncKeyField_BrokerID_set
+        _ctp.CThostFtdcRspSyncKeyField_BrokerID_get,
+        _ctp.CThostFtdcRspSyncKeyField_BrokerID_set,
     )
     BrokerBranchID = property(
         _ctp.CThostFtdcRspSyncKeyField_BrokerBranchID_get,
         _ctp.CThostFtdcRspSyncKeyField_BrokerBranchID_set,
     )
     TradeDate = property(
-        _ctp.CThostFtdcRspSyncKeyField_TradeDate_get, _ctp.CThostFtdcRspSyncKeyField_TradeDate_set
+        _ctp.CThostFtdcRspSyncKeyField_TradeDate_get,
+        _ctp.CThostFtdcRspSyncKeyField_TradeDate_set,
     )
     TradeTime = property(
-        _ctp.CThostFtdcRspSyncKeyField_TradeTime_get, _ctp.CThostFtdcRspSyncKeyField_TradeTime_set
+        _ctp.CThostFtdcRspSyncKeyField_TradeTime_get,
+        _ctp.CThostFtdcRspSyncKeyField_TradeTime_set,
     )
     BankSerial = property(
-        _ctp.CThostFtdcRspSyncKeyField_BankSerial_get, _ctp.CThostFtdcRspSyncKeyField_BankSerial_set
+        _ctp.CThostFtdcRspSyncKeyField_BankSerial_get,
+        _ctp.CThostFtdcRspSyncKeyField_BankSerial_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcRspSyncKeyField_TradingDay_get, _ctp.CThostFtdcRspSyncKeyField_TradingDay_set
+        _ctp.CThostFtdcRspSyncKeyField_TradingDay_get,
+        _ctp.CThostFtdcRspSyncKeyField_TradingDay_set,
     )
     PlateSerial = property(
         _ctp.CThostFtdcRspSyncKeyField_PlateSerial_get,
@@ -2886,40 +3033,53 @@ class CThostFtdcRspSyncKeyField:
         _ctp.CThostFtdcRspSyncKeyField_LastFragment_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcRspSyncKeyField_SessionID_get, _ctp.CThostFtdcRspSyncKeyField_SessionID_set
+        _ctp.CThostFtdcRspSyncKeyField_SessionID_get,
+        _ctp.CThostFtdcRspSyncKeyField_SessionID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcRspSyncKeyField_InstallID_get, _ctp.CThostFtdcRspSyncKeyField_InstallID_set
+        _ctp.CThostFtdcRspSyncKeyField_InstallID_get,
+        _ctp.CThostFtdcRspSyncKeyField_InstallID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcRspSyncKeyField_UserID_get, _ctp.CThostFtdcRspSyncKeyField_UserID_set
+        _ctp.CThostFtdcRspSyncKeyField_UserID_get,
+        _ctp.CThostFtdcRspSyncKeyField_UserID_set,
     )
     Message = property(
-        _ctp.CThostFtdcRspSyncKeyField_Message_get, _ctp.CThostFtdcRspSyncKeyField_Message_set
+        _ctp.CThostFtdcRspSyncKeyField_Message_get,
+        _ctp.CThostFtdcRspSyncKeyField_Message_set,
     )
     DeviceID = property(
-        _ctp.CThostFtdcRspSyncKeyField_DeviceID_get, _ctp.CThostFtdcRspSyncKeyField_DeviceID_set
+        _ctp.CThostFtdcRspSyncKeyField_DeviceID_get,
+        _ctp.CThostFtdcRspSyncKeyField_DeviceID_set,
     )
     BrokerIDByBank = property(
         _ctp.CThostFtdcRspSyncKeyField_BrokerIDByBank_get,
         _ctp.CThostFtdcRspSyncKeyField_BrokerIDByBank_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcRspSyncKeyField_OperNo_get, _ctp.CThostFtdcRspSyncKeyField_OperNo_set
+        _ctp.CThostFtdcRspSyncKeyField_OperNo_get,
+        _ctp.CThostFtdcRspSyncKeyField_OperNo_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcRspSyncKeyField_RequestID_get, _ctp.CThostFtdcRspSyncKeyField_RequestID_set
+        _ctp.CThostFtdcRspSyncKeyField_RequestID_get,
+        _ctp.CThostFtdcRspSyncKeyField_RequestID_set,
     )
-    TID = property(_ctp.CThostFtdcRspSyncKeyField_TID_get, _ctp.CThostFtdcRspSyncKeyField_TID_set)
+    TID = property(
+        _ctp.CThostFtdcRspSyncKeyField_TID_get, _ctp.CThostFtdcRspSyncKeyField_TID_set
+    )
     ErrorID = property(
-        _ctp.CThostFtdcRspSyncKeyField_ErrorID_get, _ctp.CThostFtdcRspSyncKeyField_ErrorID_set
+        _ctp.CThostFtdcRspSyncKeyField_ErrorID_get,
+        _ctp.CThostFtdcRspSyncKeyField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcRspSyncKeyField_ErrorMsg_get, _ctp.CThostFtdcRspSyncKeyField_ErrorMsg_set
+        _ctp.CThostFtdcRspSyncKeyField_ErrorMsg_get,
+        _ctp.CThostFtdcRspSyncKeyField_ErrorMsg_set,
     )
 
     def __init__(self):
-        _ctp.CThostFtdcRspSyncKeyField_swiginit(self, _ctp.new_CThostFtdcRspSyncKeyField())
+        _ctp.CThostFtdcRspSyncKeyField_swiginit(
+            self, _ctp.new_CThostFtdcRspSyncKeyField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcRspSyncKeyField
 
@@ -2930,7 +3090,7 @@ _ctp.CThostFtdcRspSyncKeyField_swigregister(CThostFtdcRspSyncKeyField)
 
 class CThostFtdcNotifyQueryAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3112,7 +3272,7 @@ _ctp.CThostFtdcNotifyQueryAccountField_swigregister(CThostFtdcNotifyQueryAccount
 
 class CThostFtdcTransferSerialField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     PlateSerial = property(
@@ -3140,7 +3300,8 @@ class CThostFtdcTransferSerialField:
         _ctp.CThostFtdcTransferSerialField_SessionID_set,
     )
     BankID = property(
-        _ctp.CThostFtdcTransferSerialField_BankID_get, _ctp.CThostFtdcTransferSerialField_BankID_set
+        _ctp.CThostFtdcTransferSerialField_BankID_get,
+        _ctp.CThostFtdcTransferSerialField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcTransferSerialField_BankBranchID_get,
@@ -3228,7 +3389,9 @@ class CThostFtdcTransferSerialField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTransferSerialField_swiginit(self, _ctp.new_CThostFtdcTransferSerialField())
+        _ctp.CThostFtdcTransferSerialField_swiginit(
+            self, _ctp.new_CThostFtdcTransferSerialField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTransferSerialField
 
@@ -3239,7 +3402,7 @@ _ctp.CThostFtdcTransferSerialField_swigregister(CThostFtdcTransferSerialField)
 
 class CThostFtdcNotifyFutureSignInField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3357,7 +3520,7 @@ _ctp.CThostFtdcNotifyFutureSignInField_swigregister(CThostFtdcNotifyFutureSignIn
 
 class CThostFtdcNotifyFutureSignOutField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3467,7 +3630,7 @@ _ctp.CThostFtdcNotifyFutureSignOutField_swigregister(CThostFtdcNotifyFutureSignO
 
 class CThostFtdcNotifySyncKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3475,7 +3638,8 @@ class CThostFtdcNotifySyncKeyField:
         _ctp.CThostFtdcNotifySyncKeyField_TradeCode_set,
     )
     BankID = property(
-        _ctp.CThostFtdcNotifySyncKeyField_BankID_get, _ctp.CThostFtdcNotifySyncKeyField_BankID_set
+        _ctp.CThostFtdcNotifySyncKeyField_BankID_get,
+        _ctp.CThostFtdcNotifySyncKeyField_BankID_set,
     )
     BankBranchID = property(
         _ctp.CThostFtdcNotifySyncKeyField_BankBranchID_get,
@@ -3522,10 +3686,12 @@ class CThostFtdcNotifySyncKeyField:
         _ctp.CThostFtdcNotifySyncKeyField_InstallID_set,
     )
     UserID = property(
-        _ctp.CThostFtdcNotifySyncKeyField_UserID_get, _ctp.CThostFtdcNotifySyncKeyField_UserID_set
+        _ctp.CThostFtdcNotifySyncKeyField_UserID_get,
+        _ctp.CThostFtdcNotifySyncKeyField_UserID_set,
     )
     Message = property(
-        _ctp.CThostFtdcNotifySyncKeyField_Message_get, _ctp.CThostFtdcNotifySyncKeyField_Message_set
+        _ctp.CThostFtdcNotifySyncKeyField_Message_get,
+        _ctp.CThostFtdcNotifySyncKeyField_Message_set,
     )
     DeviceID = property(
         _ctp.CThostFtdcNotifySyncKeyField_DeviceID_get,
@@ -3536,17 +3702,20 @@ class CThostFtdcNotifySyncKeyField:
         _ctp.CThostFtdcNotifySyncKeyField_BrokerIDByBank_set,
     )
     OperNo = property(
-        _ctp.CThostFtdcNotifySyncKeyField_OperNo_get, _ctp.CThostFtdcNotifySyncKeyField_OperNo_set
+        _ctp.CThostFtdcNotifySyncKeyField_OperNo_get,
+        _ctp.CThostFtdcNotifySyncKeyField_OperNo_set,
     )
     RequestID = property(
         _ctp.CThostFtdcNotifySyncKeyField_RequestID_get,
         _ctp.CThostFtdcNotifySyncKeyField_RequestID_set,
     )
     TID = property(
-        _ctp.CThostFtdcNotifySyncKeyField_TID_get, _ctp.CThostFtdcNotifySyncKeyField_TID_set
+        _ctp.CThostFtdcNotifySyncKeyField_TID_get,
+        _ctp.CThostFtdcNotifySyncKeyField_TID_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcNotifySyncKeyField_ErrorID_get, _ctp.CThostFtdcNotifySyncKeyField_ErrorID_set
+        _ctp.CThostFtdcNotifySyncKeyField_ErrorID_get,
+        _ctp.CThostFtdcNotifySyncKeyField_ErrorID_set,
     )
     ErrorMsg = property(
         _ctp.CThostFtdcNotifySyncKeyField_ErrorMsg_get,
@@ -3554,7 +3723,9 @@ class CThostFtdcNotifySyncKeyField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcNotifySyncKeyField_swiginit(self, _ctp.new_CThostFtdcNotifySyncKeyField())
+        _ctp.CThostFtdcNotifySyncKeyField_swiginit(
+            self, _ctp.new_CThostFtdcNotifySyncKeyField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcNotifySyncKeyField
 
@@ -3565,7 +3736,7 @@ _ctp.CThostFtdcNotifySyncKeyField_swigregister(CThostFtdcNotifySyncKeyField)
 
 class CThostFtdcAccountregisterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeDay = property(
@@ -3625,7 +3796,8 @@ class CThostFtdcAccountregisterField:
         _ctp.CThostFtdcAccountregisterField_OutDate_set,
     )
     TID = property(
-        _ctp.CThostFtdcAccountregisterField_TID_get, _ctp.CThostFtdcAccountregisterField_TID_set
+        _ctp.CThostFtdcAccountregisterField_TID_get,
+        _ctp.CThostFtdcAccountregisterField_TID_set,
     )
     CustType = property(
         _ctp.CThostFtdcAccountregisterField_CustType_get,
@@ -3654,7 +3826,7 @@ _ctp.CThostFtdcAccountregisterField_swigregister(CThostFtdcAccountregisterField)
 
 class CThostFtdcSecAgentACIDMapField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3692,7 +3864,7 @@ _ctp.CThostFtdcSecAgentACIDMapField_swigregister(CThostFtdcSecAgentACIDMapField)
 
 class CThostFtdcReserveOpenAccountConfirmField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -3869,12 +4041,14 @@ class CThostFtdcReserveOpenAccountConfirmField:
 
 
 # Register CThostFtdcReserveOpenAccountConfirmField in _ctp:
-_ctp.CThostFtdcReserveOpenAccountConfirmField_swigregister(CThostFtdcReserveOpenAccountConfirmField)
+_ctp.CThostFtdcReserveOpenAccountConfirmField_swigregister(
+    CThostFtdcReserveOpenAccountConfirmField
+)
 
 
 class CThostFtdcReserveOpenAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradeCode = property(
@@ -4040,7 +4214,7 @@ _ctp.CThostFtdcReserveOpenAccountField_swigregister(CThostFtdcReserveOpenAccount
 
 class CThostFtdcReqApiHandshakeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     CryptoKeyVersion = property(
@@ -4062,7 +4236,7 @@ _ctp.CThostFtdcReqApiHandshakeField_swigregister(CThostFtdcReqApiHandshakeField)
 
 class CThostFtdcRspApiHandshakeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     FrontHandshakeDataLen = property(
@@ -4092,7 +4266,7 @@ _ctp.CThostFtdcRspApiHandshakeField_swigregister(CThostFtdcRspApiHandshakeField)
 
 class CThostFtdcReqVerifyApiKeyField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ApiHandshakeDataLen = property(
@@ -4116,50 +4290,50 @@ class CThostFtdcReqVerifyApiKeyField:
 _ctp.CThostFtdcReqVerifyApiKeyField_swigregister(CThostFtdcReqVerifyApiKeyField)
 
 __all__ = [
-    "CThostFtdcTransferHeaderField",
-    "CThostFtdcTransferBankToFutureReqField",
-    "CThostFtdcTransferBankToFutureRspField",
-    "CThostFtdcTransferFutureToBankReqField",
-    "CThostFtdcTransferFutureToBankRspField",
-    "CThostFtdcTransferQryBankReqField",
-    "CThostFtdcTransferQryBankRspField",
-    "CThostFtdcTransferQryDetailReqField",
-    "CThostFtdcTransferQryDetailRspField",
-    "CThostFtdcSecAgentCheckModeField",
-    "CThostFtdcSecAgentTradeInfoField",
-    "CThostFtdcTransferBankField",
-    "CThostFtdcVerifyInvestorPasswordField",
-    "CThostFtdcCFMMCTradingAccountKeyField",
-    "CThostFtdcCFMMCTradingAccountTokenField",
-    "CThostFtdcReqOpenAccountField",
-    "CThostFtdcReqCancelAccountField",
-    "CThostFtdcReqChangeAccountField",
-    "CThostFtdcReqRepealField",
-    "CThostFtdcRspRepealField",
-    "CThostFtdcReqQueryAccountField",
-    "CThostFtdcRspQueryAccountField",
-    "CThostFtdcRspFutureSignInField",
-    "CThostFtdcReqFutureSignOutField",
-    "CThostFtdcRspFutureSignOutField",
-    "CThostFtdcReqQueryTradeResultBySerialField",
-    "CThostFtdcRspQueryTradeResultBySerialField",
-    "CThostFtdcReqDayEndFileReadyField",
-    "CThostFtdcReturnResultField",
-    "CThostFtdcVerifyFuturePasswordField",
-    "CThostFtdcVerifyCustInfoField",
-    "CThostFtdcVerifyFuturePasswordAndCustInfoField",
-    "CThostFtdcReqSyncKeyField",
-    "CThostFtdcRspSyncKeyField",
-    "CThostFtdcNotifyQueryAccountField",
-    "CThostFtdcTransferSerialField",
-    "CThostFtdcNotifyFutureSignInField",
-    "CThostFtdcNotifyFutureSignOutField",
-    "CThostFtdcNotifySyncKeyField",
-    "CThostFtdcAccountregisterField",
-    "CThostFtdcSecAgentACIDMapField",
-    "CThostFtdcReserveOpenAccountConfirmField",
-    "CThostFtdcReserveOpenAccountField",
-    "CThostFtdcReqApiHandshakeField",
-    "CThostFtdcRspApiHandshakeField",
-    "CThostFtdcReqVerifyApiKeyField",
+    'CThostFtdcTransferHeaderField',
+    'CThostFtdcTransferBankToFutureReqField',
+    'CThostFtdcTransferBankToFutureRspField',
+    'CThostFtdcTransferFutureToBankReqField',
+    'CThostFtdcTransferFutureToBankRspField',
+    'CThostFtdcTransferQryBankReqField',
+    'CThostFtdcTransferQryBankRspField',
+    'CThostFtdcTransferQryDetailReqField',
+    'CThostFtdcTransferQryDetailRspField',
+    'CThostFtdcSecAgentCheckModeField',
+    'CThostFtdcSecAgentTradeInfoField',
+    'CThostFtdcTransferBankField',
+    'CThostFtdcVerifyInvestorPasswordField',
+    'CThostFtdcCFMMCTradingAccountKeyField',
+    'CThostFtdcCFMMCTradingAccountTokenField',
+    'CThostFtdcReqOpenAccountField',
+    'CThostFtdcReqCancelAccountField',
+    'CThostFtdcReqChangeAccountField',
+    'CThostFtdcReqRepealField',
+    'CThostFtdcRspRepealField',
+    'CThostFtdcReqQueryAccountField',
+    'CThostFtdcRspQueryAccountField',
+    'CThostFtdcRspFutureSignInField',
+    'CThostFtdcReqFutureSignOutField',
+    'CThostFtdcRspFutureSignOutField',
+    'CThostFtdcReqQueryTradeResultBySerialField',
+    'CThostFtdcRspQueryTradeResultBySerialField',
+    'CThostFtdcReqDayEndFileReadyField',
+    'CThostFtdcReturnResultField',
+    'CThostFtdcVerifyFuturePasswordField',
+    'CThostFtdcVerifyCustInfoField',
+    'CThostFtdcVerifyFuturePasswordAndCustInfoField',
+    'CThostFtdcReqSyncKeyField',
+    'CThostFtdcRspSyncKeyField',
+    'CThostFtdcNotifyQueryAccountField',
+    'CThostFtdcTransferSerialField',
+    'CThostFtdcNotifyFutureSignInField',
+    'CThostFtdcNotifyFutureSignOutField',
+    'CThostFtdcNotifySyncKeyField',
+    'CThostFtdcAccountregisterField',
+    'CThostFtdcSecAgentACIDMapField',
+    'CThostFtdcReserveOpenAccountConfirmField',
+    'CThostFtdcReserveOpenAccountField',
+    'CThostFtdcReqApiHandshakeField',
+    'CThostFtdcRspApiHandshakeField',
+    'CThostFtdcReqVerifyApiKeyField',
 ]

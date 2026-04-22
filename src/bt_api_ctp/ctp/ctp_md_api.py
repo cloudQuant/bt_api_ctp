@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr, print_exception, stderr, weakref
 
 class CThostFtdcMdSpi:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
 
@@ -31,7 +31,9 @@ class CThostFtdcMdSpi:
             self, pUserLogout, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryMulticastInstrument(self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast):
+    def OnRspQryMulticastInstrument(
+        self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast
+    ):
         return _ctp.CThostFtdcMdSpi_OnRspQryMulticastInstrument(
             self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast
         )
@@ -70,7 +72,7 @@ class CThostFtdcMdSpi:
 
         Arguments are those provided by sys.exc_info()
         """
-        stderr.write("Exception thrown during method dispatch:\n")
+        stderr.write('Exception thrown during method dispatch:\n')
         print_exception(type, value, traceback)
 
     def __init__(self):
@@ -96,11 +98,11 @@ _ctp.CThostFtdcMdSpi_swigregister(CThostFtdcMdSpi)
 
 class CThostFtdcMdApi:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
 
     def __init__(self, *args, **kwargs):
-        raise AttributeError("No constructor defined - class is abstract")
+        raise AttributeError('No constructor defined - class is abstract')
 
     __repr__ = _swig_repr
 
@@ -164,6 +166,6 @@ class CThostFtdcMdApi:
 _ctp.CThostFtdcMdApi_swigregister(CThostFtdcMdApi)
 
 __all__ = [
-    "CThostFtdcMdSpi",
-    "CThostFtdcMdApi",
+    'CThostFtdcMdSpi',
+    'CThostFtdcMdApi',
 ]

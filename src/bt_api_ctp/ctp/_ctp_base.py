@@ -23,7 +23,7 @@ class _FallbackSwigHandle:
         self._owned = False
 
     def __repr__(self) -> str:
-        return f"<fallback-ctp-handle owned={self._owned}>"
+        return f'<fallback-ctp-handle owned={self._owned}>'
 
 
 class _FallbackApiObject:
@@ -31,75 +31,75 @@ class _FallbackApiObject:
         self._api_name = api_name
 
     def __getattr__(self, name: str):
-        if name == "GetApiVersion":
-            return lambda *args, **kwargs: "fallback-ctp"
+        if name == 'GetApiVersion':
+            return lambda *args, **kwargs: 'fallback-ctp'
         return lambda *args, **kwargs: 0
 
     def __repr__(self) -> str:
-        return f"<fallback-ctp-api {self._api_name}>"
+        return f'<fallback-ctp-api {self._api_name}>'
 
 
 class _FallbackCtpModule(ModuleType):
     def __init__(self, import_error: Exception) -> None:
-        super().__init__("_ctp_fallback")
+        super().__init__('_ctp_fallback')
         self._import_error = import_error
         self._constants: dict[str, object] = {}
 
     def __getattr__(self, name: str):
-        if name.startswith("THOST_"):
+        if name.startswith('THOST_'):
             return self._constants.setdefault(name, name)
 
-        if name.startswith("new_"):
+        if name.startswith('new_'):
             ctor_name = name[4:]
-            if ctor_name.endswith("Api"):
+            if ctor_name.endswith('Api'):
                 return lambda *args, **kwargs: _FallbackApiObject(ctor_name)
             return lambda *args, **kwargs: _FallbackSwigHandle()
 
-        if name.startswith("delete_"):
+        if name.startswith('delete_'):
             return lambda *args, **kwargs: None
 
-        if name.startswith("disown_"):
+        if name.startswith('disown_'):
 
             def _disown(instance, *args, **kwargs):
-                handle = getattr(instance, "this", None)
-                if handle is not None and hasattr(handle, "disown"):
+                handle = getattr(instance, 'this', None)
+                if handle is not None and hasattr(handle, 'disown'):
                     handle.disown()
                 return None
 
             return _disown
 
-        if name.endswith("_swiginit"):
+        if name.endswith('_swiginit'):
 
             def _swiginit(instance, handle):
-                object.__setattr__(instance, "this", handle)
+                object.__setattr__(instance, 'this', handle)
                 return None
 
             return _swiginit
 
-        if name.endswith("_swigregister"):
+        if name.endswith('_swigregister'):
             return lambda *args, **kwargs: None
 
-        if name.endswith("_CreateFtdcMdApi") or name.endswith("_CreateFtdcTraderApi"):
-            api_name = name.split("_", 1)[0]
+        if name.endswith('_CreateFtdcMdApi') or name.endswith('_CreateFtdcTraderApi'):
+            api_name = name.split('_', 1)[0]
             return lambda *args, **kwargs: _FallbackApiObject(api_name)
 
-        if name.endswith("_GetApiVersion"):
-            return lambda *args, **kwargs: "fallback-ctp"
+        if name.endswith('_GetApiVersion'):
+            return lambda *args, **kwargs: 'fallback-ctp'
 
-        if name.endswith("_get"):
-            prop_name = name.rsplit("_", 2)[1]
+        if name.endswith('_get'):
+            prop_name = name.rsplit('_', 2)[1]
 
             def _getter(instance):
-                values = instance.__dict__.get("_fallback_values", {})
+                values = instance.__dict__.get('_fallback_values', {})
                 return values.get(prop_name)
 
             return _getter
 
-        if name.endswith("_set"):
-            prop_name = name.rsplit("_", 2)[1]
+        if name.endswith('_set'):
+            prop_name = name.rsplit('_', 2)[1]
 
             def _setter(instance, value):
-                values = instance.__dict__.setdefault("_fallback_values", {})
+                values = instance.__dict__.setdefault('_fallback_values', {})
                 values[prop_name] = value
                 return None
 
@@ -109,7 +109,11 @@ class _FallbackCtpModule(ModuleType):
 
 
 try:
-    if getattr(globals().get("__spec__"), "parent", None) or __package__ or "." in __name__:
+    if (
+        getattr(globals().get('__spec__'), 'parent', None)
+        or __package__
+        or '.' in __name__
+    ):
         from . import _ctp
     else:
         import _ctp
@@ -117,9 +121,9 @@ except Exception as _ctp_import_error:
     import warnings as _warnings
 
     _warnings.warn(
-        f"CTP C++ extension (_ctp) failed to load: {_ctp_import_error}. "
-        "All CTP operations will silently no-op. "
-        "If using Git LFS, run: git lfs install && git lfs pull",
+        f'CTP C++ extension (_ctp) failed to load: {_ctp_import_error}. '
+        'All CTP operations will silently no-op. '
+        'If using Git LFS, run: git lfs install && git lfs pull',
         RuntimeWarning,
         stacklevel=1,
     )
@@ -140,14 +144,14 @@ def get_ctp_import_error():
 
 def _swig_setattr_nondynamic_instance_variable(setter):
     def set_instance_attr(self, name, value):
-        if name == "this":
+        if name == 'this':
             setter(self, name, value)
-        elif name == "thisown":
+        elif name == 'thisown':
             self.this.own(value)
         elif hasattr(self, name) and isinstance(getattr(type(self), name), property):
             setter(self, name, value)
         else:
-            raise AttributeError(f"You cannot add instance attributes to {self}")
+            raise AttributeError(f'You cannot add instance attributes to {self}')
 
     return set_instance_attr
 
@@ -157,7 +161,7 @@ def _swig_setattr_nondynamic_class_variable(setter):
         if hasattr(cls, name) and not isinstance(getattr(cls, name), property):
             setter(cls, name, value)
         else:
-            raise AttributeError(f"You cannot add class attributes to {cls}")
+            raise AttributeError(f'You cannot add class attributes to {cls}')
 
     return set_class_attr
 
@@ -180,32 +184,34 @@ class _SwigNonDynamicMeta(type):
 def _swig_repr(self):
     values = []
     for key in vars(self.__class__):
-        if key.startswith("_"):
+        if key.startswith('_'):
             continue
         value = getattr(self, key)
         if isinstance(value, float):
             if value == float_info.max:
-                values.append(f"{key}: None")
+                values.append(f'{key}: None')
             else:
-                values.append(f"{key}: {value:.2f}")
+                values.append(f'{key}: {value:.2f}')
         elif isinstance(value, int):
-            values.append(f"{key}: {value}")
+            values.append(f'{key}: {value}')
         else:
             values.append(f'{key}: "{value}"')
 
-    return f"<{self.__class__.__module__}.{self.__class__.__name__}; {', '.join(values)}>"
+    return (
+        f'<{self.__class__.__module__}.{self.__class__.__name__}; {", ".join(values)}>'
+    )
 
 
 __all__ = [
-    "_ctp",
-    "_swig_repr",
-    "_swig_setattr_nondynamic_instance_variable",
-    "_swig_setattr_nondynamic_class_variable",
-    "_swig_add_metaclass",
-    "_SwigNonDynamicMeta",
-    "is_ctp_native_loaded",
-    "get_ctp_import_error",
-    "print_exception",
-    "stderr",
-    "weakref",
+    '_ctp',
+    '_swig_repr',
+    '_swig_setattr_nondynamic_instance_variable',
+    '_swig_setattr_nondynamic_class_variable',
+    '_swig_add_metaclass',
+    '_SwigNonDynamicMeta',
+    'is_ctp_native_loaded',
+    'get_ctp_import_error',
+    'print_exception',
+    'stderr',
+    'weakref',
 ]

@@ -38,11 +38,13 @@ from contextlib import suppress
 
 from ._ctp_base import get_ctp_import_error, is_ctp_native_loaded
 
-_USE_EXTERNAL_CTP = str(os.environ.get("BT_API_PY_USE_EXTERNAL_CTP") or "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
+_USE_EXTERNAL_CTP = str(
+    os.environ.get('BT_API_PY_USE_EXTERNAL_CTP') or ''
+).strip().lower() in {
+    '1',
+    'true',
+    'yes',
+    'on',
 }
 
 if _USE_EXTERNAL_CTP:
@@ -58,7 +60,7 @@ if _USE_EXTERNAL_CTP:
         CThostFtdcTraderSpi,
     )
 
-    _CTP_RUNTIME_SOURCE = "external_ctp_python"
+    _CTP_RUNTIME_SOURCE = 'external_ctp_python'
 else:
     from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
     from .ctp_structs_common import (
@@ -72,19 +74,19 @@ else:
     )
     from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
-    _CTP_RUNTIME_SOURCE = "vendored_bt_api_py"
+    _CTP_RUNTIME_SOURCE = 'vendored_bt_api_py'
 
 
 def _check_native_module():
     """Raise ImportError early if the CTP C++ extension is not available."""
-    if _CTP_RUNTIME_SOURCE == "external_ctp_python":
+    if _CTP_RUNTIME_SOURCE == 'external_ctp_python':
         return
     if not is_ctp_native_loaded():
         err = get_ctp_import_error()
         raise ImportError(
-            f"CTP C++ extension (_ctp) not available: {err}. "
-            "Connections will silently fail. "
-            "If using Git LFS, run: git lfs install && git lfs pull"
+            f'CTP C++ extension (_ctp) not available: {err}. '
+            'Connections will silently fail. '
+            'If using Git LFS, run: git lfs install && git lfs pull'
         )
 
 
@@ -94,8 +96,8 @@ def get_ctp_runtime_source() -> str:
 
 def _flow_dir(prefix):
     """Create a temp directory for CTP flow files."""
-    h = hashlib.md5(prefix.encode("utf-8"), usedforsecurity=False).hexdigest()
-    path = os.path.join(tempfile.gettempdir(), "ctp_client", h) + os.sep
+    h = hashlib.md5(prefix.encode('utf-8'), usedforsecurity=False).hexdigest()
+    path = os.path.join(tempfile.gettempdir(), 'ctp_client', h) + os.sep
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -112,7 +114,7 @@ def _snapshot_ctp_field(field):
 
     result = {}
     for attr in dir(field):
-        if attr.startswith("_") or attr in {"this", "thisown"}:
+        if attr.startswith('_') or attr in {'this', 'thisown'}:
             continue
         try:
             value = getattr(field, attr)
@@ -208,7 +210,7 @@ class MdClient:
             block: True=阻塞直到断开, False=后台线程运行
         """
         _check_native_module()
-        flow = _flow_dir(f"md_{self.broker_id}_{self.user_id}")
+        flow = _flow_dir(f'md_{self.broker_id}_{self.user_id}')
         self._api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
         self._spi = _MdSpi(self)
         self._api.RegisterSpi(self._spi)
@@ -288,7 +290,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
         # Some fronts may not populate RspInfo on success; treat missing as OK.
-        ok = pRspInfo is None or getattr(pRspInfo, "ErrorID", 0) == 0
+        ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if not ok and self._c.on_error:
             self._c.on_error(pRspInfo)
 
@@ -301,14 +303,14 @@ class _TraderSpi(CThostFtdcTraderSpi):
         self._c._api.ReqUserLogin(field, self._c._req_id)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
-        ok = pRspInfo is None or getattr(pRspInfo, "ErrorID", 0) == 0
+        ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if ok:
             self._c._front_id = pRspUserLogin.FrontID
             self._c._session_id = pRspUserLogin.SessionID
             with suppress(TypeError, ValueError):
                 self._c._max_order_ref = max(
                     self._c._max_order_ref,
-                    int(getattr(pRspUserLogin, "MaxOrderRef", "") or 0),
+                    int(getattr(pRspUserLogin, 'MaxOrderRef', '') or 0),
                 )
             field = CThostFtdcSettlementInfoConfirmField()
             field.BrokerID = self._c.broker_id
@@ -324,8 +326,10 @@ class _TraderSpi(CThostFtdcTraderSpi):
         elif self._c.on_error:
             self._c.on_error(pRspInfo)
 
-    def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
-        ok = pRspInfo is None or getattr(pRspInfo, "ErrorID", 0) == 0
+    def OnRspSettlementInfoConfirm(
+        self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
+    ):
+        ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if ok:
             self._c._ready = True
 
@@ -349,7 +353,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
         self._c._push_error_event(
-            event_type="order_insert_response",
+            event_type='order_insert_response',
             rsp_info=pRspInfo,
             field=pInputOrder,
             request_id=nRequestID,
@@ -357,14 +361,14 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
         self._c._push_error_event(
-            event_type="order_insert_error",
+            event_type='order_insert_error',
             rsp_info=pRspInfo,
             field=pInputOrder,
         )
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
         self._c._push_error_event(
-            event_type="response_error",
+            event_type='response_error',
             rsp_info=pRspInfo,
             request_id=nRequestID,
         )
@@ -388,8 +392,8 @@ class TraderClient:
         broker_id,
         user_id,
         password,
-        app_id="simnow_client_test",
-        auth_code="0000000000000000",
+        app_id='simnow_client_test',
+        auth_code='0000000000000000',
     ):
         self.front = front
         self.broker_id = broker_id
@@ -423,7 +427,7 @@ class TraderClient:
     def start(self, block=False):
         """启动连接（默认后台运行）"""
         _check_native_module()
-        flow = _flow_dir(f"td_{self.broker_id}_{self.user_id}")
+        flow = _flow_dir(f'td_{self.broker_id}_{self.user_id}')
         self._api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
         self._spi = _TraderSpi(self)
         self._api.RegisterSpi(self._spi)
@@ -524,13 +528,17 @@ class TraderClient:
         if self.on_trade:
             self.on_trade(trade_field)
 
-    def _push_error_event(self, event_type, rsp_info=None, field=None, request_id=None) -> None:
+    def _push_error_event(
+        self, event_type, rsp_info=None, field=None, request_id=None
+    ) -> None:
         payload = {
-            "event": event_type,
-            "request_id": request_id,
-            "error_id": getattr(rsp_info, "ErrorID", 0) if rsp_info is not None else 0,
-            "error_msg": getattr(rsp_info, "ErrorMsg", "") if rsp_info is not None else "",
-            "field": _snapshot_ctp_field(field),
+            'event': event_type,
+            'request_id': request_id,
+            'error_id': getattr(rsp_info, 'ErrorID', 0) if rsp_info is not None else 0,
+            'error_msg': getattr(rsp_info, 'ErrorMsg', '')
+            if rsp_info is not None
+            else '',
+            'field': _snapshot_ctp_field(field),
         }
         self._error_events.put(payload)
         if self.on_error and rsp_info is not None:

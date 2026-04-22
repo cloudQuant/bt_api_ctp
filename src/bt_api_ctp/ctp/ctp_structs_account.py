@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcTradingAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -72,7 +72,8 @@ class CThostFtdcTradingAccountField:
         _ctp.CThostFtdcTradingAccountField_CurrMargin_set,
     )
     CashIn = property(
-        _ctp.CThostFtdcTradingAccountField_CashIn_get, _ctp.CThostFtdcTradingAccountField_CashIn_set
+        _ctp.CThostFtdcTradingAccountField_CashIn_get,
+        _ctp.CThostFtdcTradingAccountField_CashIn_set,
     )
     Commission = property(
         _ctp.CThostFtdcTradingAccountField_Commission_get,
@@ -111,7 +112,8 @@ class CThostFtdcTradingAccountField:
         _ctp.CThostFtdcTradingAccountField_SettlementID_set,
     )
     Credit = property(
-        _ctp.CThostFtdcTradingAccountField_Credit_get, _ctp.CThostFtdcTradingAccountField_Credit_set
+        _ctp.CThostFtdcTradingAccountField_Credit_get,
+        _ctp.CThostFtdcTradingAccountField_Credit_set,
     )
     Mortgage = property(
         _ctp.CThostFtdcTradingAccountField_Mortgage_get,
@@ -207,7 +209,9 @@ class CThostFtdcTradingAccountField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTradingAccountField_swiginit(self, _ctp.new_CThostFtdcTradingAccountField())
+        _ctp.CThostFtdcTradingAccountField_swiginit(
+            self, _ctp.new_CThostFtdcTradingAccountField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTradingAccountField
 
@@ -218,7 +222,7 @@ _ctp.CThostFtdcTradingAccountField_swigregister(CThostFtdcTradingAccountField)
 
 class CThostFtdcSyncDepositField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     DepositSeqNo = property(
@@ -226,17 +230,20 @@ class CThostFtdcSyncDepositField:
         _ctp.CThostFtdcSyncDepositField_DepositSeqNo_set,
     )
     BrokerID = property(
-        _ctp.CThostFtdcSyncDepositField_BrokerID_get, _ctp.CThostFtdcSyncDepositField_BrokerID_set
+        _ctp.CThostFtdcSyncDepositField_BrokerID_get,
+        _ctp.CThostFtdcSyncDepositField_BrokerID_set,
     )
     InvestorID = property(
         _ctp.CThostFtdcSyncDepositField_InvestorID_get,
         _ctp.CThostFtdcSyncDepositField_InvestorID_set,
     )
     Deposit = property(
-        _ctp.CThostFtdcSyncDepositField_Deposit_get, _ctp.CThostFtdcSyncDepositField_Deposit_set
+        _ctp.CThostFtdcSyncDepositField_Deposit_get,
+        _ctp.CThostFtdcSyncDepositField_Deposit_set,
     )
     IsForce = property(
-        _ctp.CThostFtdcSyncDepositField_IsForce_get, _ctp.CThostFtdcSyncDepositField_IsForce_set
+        _ctp.CThostFtdcSyncDepositField_IsForce_get,
+        _ctp.CThostFtdcSyncDepositField_IsForce_set,
     )
     CurrencyID = property(
         _ctp.CThostFtdcSyncDepositField_CurrencyID_get,
@@ -256,7 +263,9 @@ class CThostFtdcSyncDepositField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSyncDepositField_swiginit(self, _ctp.new_CThostFtdcSyncDepositField())
+        _ctp.CThostFtdcSyncDepositField_swiginit(
+            self, _ctp.new_CThostFtdcSyncDepositField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncDepositField
 
@@ -267,7 +276,7 @@ _ctp.CThostFtdcSyncDepositField_swigregister(CThostFtdcSyncDepositField)
 
 class CThostFtdcSyncFundMortgageField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     MortgageSeqNo = property(
@@ -309,7 +318,7 @@ _ctp.CThostFtdcSyncFundMortgageField_swigregister(CThostFtdcSyncFundMortgageFiel
 
 class CThostFtdcSyncDelaySwapField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     DelaySwapSeqNo = property(
@@ -358,7 +367,9 @@ class CThostFtdcSyncDelaySwapField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSyncDelaySwapField_swiginit(self, _ctp.new_CThostFtdcSyncDelaySwapField())
+        _ctp.CThostFtdcSyncDelaySwapField_swiginit(
+            self, _ctp.new_CThostFtdcSyncDelaySwapField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncDelaySwapField
 
@@ -369,7 +380,7 @@ _ctp.CThostFtdcSyncDelaySwapField_swigregister(CThostFtdcSyncDelaySwapField)
 
 class CThostFtdcTradingAccountPasswordField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -398,12 +409,14 @@ class CThostFtdcTradingAccountPasswordField:
 
 
 # Register CThostFtdcTradingAccountPasswordField in _ctp:
-_ctp.CThostFtdcTradingAccountPasswordField_swigregister(CThostFtdcTradingAccountPasswordField)
+_ctp.CThostFtdcTradingAccountPasswordField_swigregister(
+    CThostFtdcTradingAccountPasswordField
+)
 
 
 class CThostFtdcTradingAccountPasswordUpdateV1Field:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -439,7 +452,7 @@ _ctp.CThostFtdcTradingAccountPasswordUpdateV1Field_swigregister(
 
 class CThostFtdcTradingAccountPasswordUpdateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -479,7 +492,7 @@ _ctp.CThostFtdcTradingAccountPasswordUpdateField_swigregister(
 
 class CThostFtdcTradingAccountReserveField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -508,12 +521,14 @@ class CThostFtdcTradingAccountReserveField:
 
 
 # Register CThostFtdcTradingAccountReserveField in _ctp:
-_ctp.CThostFtdcTradingAccountReserveField_swigregister(CThostFtdcTradingAccountReserveField)
+_ctp.CThostFtdcTradingAccountReserveField_swigregister(
+    CThostFtdcTradingAccountReserveField
+)
 
 
 class CThostFtdcSyncDelaySwapFrozenField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     DelaySwapSeqNo = property(
@@ -553,13 +568,13 @@ class CThostFtdcSyncDelaySwapFrozenField:
 _ctp.CThostFtdcSyncDelaySwapFrozenField_swigregister(CThostFtdcSyncDelaySwapFrozenField)
 
 __all__ = [
-    "CThostFtdcTradingAccountField",
-    "CThostFtdcSyncDepositField",
-    "CThostFtdcSyncFundMortgageField",
-    "CThostFtdcSyncDelaySwapField",
-    "CThostFtdcTradingAccountPasswordField",
-    "CThostFtdcTradingAccountPasswordUpdateV1Field",
-    "CThostFtdcTradingAccountPasswordUpdateField",
-    "CThostFtdcTradingAccountReserveField",
-    "CThostFtdcSyncDelaySwapFrozenField",
+    'CThostFtdcTradingAccountField',
+    'CThostFtdcSyncDepositField',
+    'CThostFtdcSyncFundMortgageField',
+    'CThostFtdcSyncDelaySwapField',
+    'CThostFtdcTradingAccountPasswordField',
+    'CThostFtdcTradingAccountPasswordUpdateV1Field',
+    'CThostFtdcTradingAccountPasswordUpdateField',
+    'CThostFtdcTradingAccountReserveField',
+    'CThostFtdcSyncDelaySwapFrozenField',
 ]

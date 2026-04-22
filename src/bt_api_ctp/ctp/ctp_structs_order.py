@@ -8,30 +8,36 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcInputOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcInputOrderField_BrokerID_get, _ctp.CThostFtdcInputOrderField_BrokerID_set
+        _ctp.CThostFtdcInputOrderField_BrokerID_get,
+        _ctp.CThostFtdcInputOrderField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcInputOrderField_InvestorID_get, _ctp.CThostFtdcInputOrderField_InvestorID_set
+        _ctp.CThostFtdcInputOrderField_InvestorID_get,
+        _ctp.CThostFtdcInputOrderField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcInputOrderField_reserve1_get, _ctp.CThostFtdcInputOrderField_reserve1_set
+        _ctp.CThostFtdcInputOrderField_reserve1_get,
+        _ctp.CThostFtdcInputOrderField_reserve1_set,
     )
     OrderRef = property(
-        _ctp.CThostFtdcInputOrderField_OrderRef_get, _ctp.CThostFtdcInputOrderField_OrderRef_set
+        _ctp.CThostFtdcInputOrderField_OrderRef_get,
+        _ctp.CThostFtdcInputOrderField_OrderRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcInputOrderField_UserID_get, _ctp.CThostFtdcInputOrderField_UserID_set
+        _ctp.CThostFtdcInputOrderField_UserID_get,
+        _ctp.CThostFtdcInputOrderField_UserID_set,
     )
     OrderPriceType = property(
         _ctp.CThostFtdcInputOrderField_OrderPriceType_get,
         _ctp.CThostFtdcInputOrderField_OrderPriceType_set,
     )
     Direction = property(
-        _ctp.CThostFtdcInputOrderField_Direction_get, _ctp.CThostFtdcInputOrderField_Direction_set
+        _ctp.CThostFtdcInputOrderField_Direction_get,
+        _ctp.CThostFtdcInputOrderField_Direction_set,
     )
     CombOffsetFlag = property(
         _ctp.CThostFtdcInputOrderField_CombOffsetFlag_get,
@@ -42,7 +48,8 @@ class CThostFtdcInputOrderField:
         _ctp.CThostFtdcInputOrderField_CombHedgeFlag_set,
     )
     LimitPrice = property(
-        _ctp.CThostFtdcInputOrderField_LimitPrice_get, _ctp.CThostFtdcInputOrderField_LimitPrice_set
+        _ctp.CThostFtdcInputOrderField_LimitPrice_get,
+        _ctp.CThostFtdcInputOrderField_LimitPrice_set,
     )
     VolumeTotalOriginal = property(
         _ctp.CThostFtdcInputOrderField_VolumeTotalOriginal_get,
@@ -53,21 +60,24 @@ class CThostFtdcInputOrderField:
         _ctp.CThostFtdcInputOrderField_TimeCondition_set,
     )
     GTDDate = property(
-        _ctp.CThostFtdcInputOrderField_GTDDate_get, _ctp.CThostFtdcInputOrderField_GTDDate_set
+        _ctp.CThostFtdcInputOrderField_GTDDate_get,
+        _ctp.CThostFtdcInputOrderField_GTDDate_set,
     )
     VolumeCondition = property(
         _ctp.CThostFtdcInputOrderField_VolumeCondition_get,
         _ctp.CThostFtdcInputOrderField_VolumeCondition_set,
     )
     MinVolume = property(
-        _ctp.CThostFtdcInputOrderField_MinVolume_get, _ctp.CThostFtdcInputOrderField_MinVolume_set
+        _ctp.CThostFtdcInputOrderField_MinVolume_get,
+        _ctp.CThostFtdcInputOrderField_MinVolume_set,
     )
     ContingentCondition = property(
         _ctp.CThostFtdcInputOrderField_ContingentCondition_get,
         _ctp.CThostFtdcInputOrderField_ContingentCondition_set,
     )
     StopPrice = property(
-        _ctp.CThostFtdcInputOrderField_StopPrice_get, _ctp.CThostFtdcInputOrderField_StopPrice_set
+        _ctp.CThostFtdcInputOrderField_StopPrice_get,
+        _ctp.CThostFtdcInputOrderField_StopPrice_set,
     )
     ForceCloseReason = property(
         _ctp.CThostFtdcInputOrderField_ForceCloseReason_get,
@@ -82,7 +92,8 @@ class CThostFtdcInputOrderField:
         _ctp.CThostFtdcInputOrderField_BusinessUnit_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcInputOrderField_RequestID_get, _ctp.CThostFtdcInputOrderField_RequestID_set
+        _ctp.CThostFtdcInputOrderField_RequestID_get,
+        _ctp.CThostFtdcInputOrderField_RequestID_set,
     )
     UserForceClose = property(
         _ctp.CThostFtdcInputOrderField_UserForceClose_get,
@@ -93,36 +104,44 @@ class CThostFtdcInputOrderField:
         _ctp.CThostFtdcInputOrderField_IsSwapOrder_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcInputOrderField_ExchangeID_get, _ctp.CThostFtdcInputOrderField_ExchangeID_set
+        _ctp.CThostFtdcInputOrderField_ExchangeID_get,
+        _ctp.CThostFtdcInputOrderField_ExchangeID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcInputOrderField_InvestUnitID_get,
         _ctp.CThostFtdcInputOrderField_InvestUnitID_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcInputOrderField_AccountID_get, _ctp.CThostFtdcInputOrderField_AccountID_set
+        _ctp.CThostFtdcInputOrderField_AccountID_get,
+        _ctp.CThostFtdcInputOrderField_AccountID_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcInputOrderField_CurrencyID_get, _ctp.CThostFtdcInputOrderField_CurrencyID_set
+        _ctp.CThostFtdcInputOrderField_CurrencyID_get,
+        _ctp.CThostFtdcInputOrderField_CurrencyID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcInputOrderField_ClientID_get, _ctp.CThostFtdcInputOrderField_ClientID_set
+        _ctp.CThostFtdcInputOrderField_ClientID_get,
+        _ctp.CThostFtdcInputOrderField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcInputOrderField_reserve2_get, _ctp.CThostFtdcInputOrderField_reserve2_set
+        _ctp.CThostFtdcInputOrderField_reserve2_get,
+        _ctp.CThostFtdcInputOrderField_reserve2_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcInputOrderField_MacAddress_get, _ctp.CThostFtdcInputOrderField_MacAddress_set
+        _ctp.CThostFtdcInputOrderField_MacAddress_get,
+        _ctp.CThostFtdcInputOrderField_MacAddress_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcInputOrderField_InstrumentID_get,
         _ctp.CThostFtdcInputOrderField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcInputOrderField_IPAddress_get, _ctp.CThostFtdcInputOrderField_IPAddress_set
+        _ctp.CThostFtdcInputOrderField_IPAddress_get,
+        _ctp.CThostFtdcInputOrderField_IPAddress_set,
     )
     OrderMemo = property(
-        _ctp.CThostFtdcInputOrderField_OrderMemo_get, _ctp.CThostFtdcInputOrderField_OrderMemo_set
+        _ctp.CThostFtdcInputOrderField_OrderMemo_get,
+        _ctp.CThostFtdcInputOrderField_OrderMemo_set,
     )
     SessionReqSeq = property(
         _ctp.CThostFtdcInputOrderField_SessionReqSeq_get,
@@ -130,7 +149,9 @@ class CThostFtdcInputOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputOrderField_swiginit(self, _ctp.new_CThostFtdcInputOrderField())
+        _ctp.CThostFtdcInputOrderField_swiginit(
+            self, _ctp.new_CThostFtdcInputOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputOrderField
 
@@ -141,14 +162,15 @@ _ctp.CThostFtdcInputOrderField_swigregister(CThostFtdcInputOrderField)
 
 class CThostFtdcOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
         _ctp.CThostFtdcOrderField_BrokerID_get, _ctp.CThostFtdcOrderField_BrokerID_set
     )
     InvestorID = property(
-        _ctp.CThostFtdcOrderField_InvestorID_get, _ctp.CThostFtdcOrderField_InvestorID_set
+        _ctp.CThostFtdcOrderField_InvestorID_get,
+        _ctp.CThostFtdcOrderField_InvestorID_set,
     )
     reserve1 = property(
         _ctp.CThostFtdcOrderField_reserve1_get, _ctp.CThostFtdcOrderField_reserve1_set
@@ -156,32 +178,42 @@ class CThostFtdcOrderField:
     OrderRef = property(
         _ctp.CThostFtdcOrderField_OrderRef_get, _ctp.CThostFtdcOrderField_OrderRef_set
     )
-    UserID = property(_ctp.CThostFtdcOrderField_UserID_get, _ctp.CThostFtdcOrderField_UserID_set)
+    UserID = property(
+        _ctp.CThostFtdcOrderField_UserID_get, _ctp.CThostFtdcOrderField_UserID_set
+    )
     OrderPriceType = property(
-        _ctp.CThostFtdcOrderField_OrderPriceType_get, _ctp.CThostFtdcOrderField_OrderPriceType_set
+        _ctp.CThostFtdcOrderField_OrderPriceType_get,
+        _ctp.CThostFtdcOrderField_OrderPriceType_set,
     )
     Direction = property(
         _ctp.CThostFtdcOrderField_Direction_get, _ctp.CThostFtdcOrderField_Direction_set
     )
     CombOffsetFlag = property(
-        _ctp.CThostFtdcOrderField_CombOffsetFlag_get, _ctp.CThostFtdcOrderField_CombOffsetFlag_set
+        _ctp.CThostFtdcOrderField_CombOffsetFlag_get,
+        _ctp.CThostFtdcOrderField_CombOffsetFlag_set,
     )
     CombHedgeFlag = property(
-        _ctp.CThostFtdcOrderField_CombHedgeFlag_get, _ctp.CThostFtdcOrderField_CombHedgeFlag_set
+        _ctp.CThostFtdcOrderField_CombHedgeFlag_get,
+        _ctp.CThostFtdcOrderField_CombHedgeFlag_set,
     )
     LimitPrice = property(
-        _ctp.CThostFtdcOrderField_LimitPrice_get, _ctp.CThostFtdcOrderField_LimitPrice_set
+        _ctp.CThostFtdcOrderField_LimitPrice_get,
+        _ctp.CThostFtdcOrderField_LimitPrice_set,
     )
     VolumeTotalOriginal = property(
         _ctp.CThostFtdcOrderField_VolumeTotalOriginal_get,
         _ctp.CThostFtdcOrderField_VolumeTotalOriginal_set,
     )
     TimeCondition = property(
-        _ctp.CThostFtdcOrderField_TimeCondition_get, _ctp.CThostFtdcOrderField_TimeCondition_set
+        _ctp.CThostFtdcOrderField_TimeCondition_get,
+        _ctp.CThostFtdcOrderField_TimeCondition_set,
     )
-    GTDDate = property(_ctp.CThostFtdcOrderField_GTDDate_get, _ctp.CThostFtdcOrderField_GTDDate_set)
+    GTDDate = property(
+        _ctp.CThostFtdcOrderField_GTDDate_get, _ctp.CThostFtdcOrderField_GTDDate_set
+    )
     VolumeCondition = property(
-        _ctp.CThostFtdcOrderField_VolumeCondition_get, _ctp.CThostFtdcOrderField_VolumeCondition_set
+        _ctp.CThostFtdcOrderField_VolumeCondition_get,
+        _ctp.CThostFtdcOrderField_VolumeCondition_set,
     )
     MinVolume = property(
         _ctp.CThostFtdcOrderField_MinVolume_get, _ctp.CThostFtdcOrderField_MinVolume_set
@@ -198,22 +230,27 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_ForceCloseReason_set,
     )
     IsAutoSuspend = property(
-        _ctp.CThostFtdcOrderField_IsAutoSuspend_get, _ctp.CThostFtdcOrderField_IsAutoSuspend_set
+        _ctp.CThostFtdcOrderField_IsAutoSuspend_get,
+        _ctp.CThostFtdcOrderField_IsAutoSuspend_set,
     )
     BusinessUnit = property(
-        _ctp.CThostFtdcOrderField_BusinessUnit_get, _ctp.CThostFtdcOrderField_BusinessUnit_set
+        _ctp.CThostFtdcOrderField_BusinessUnit_get,
+        _ctp.CThostFtdcOrderField_BusinessUnit_set,
     )
     RequestID = property(
         _ctp.CThostFtdcOrderField_RequestID_get, _ctp.CThostFtdcOrderField_RequestID_set
     )
     OrderLocalID = property(
-        _ctp.CThostFtdcOrderField_OrderLocalID_get, _ctp.CThostFtdcOrderField_OrderLocalID_set
+        _ctp.CThostFtdcOrderField_OrderLocalID_get,
+        _ctp.CThostFtdcOrderField_OrderLocalID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcOrderField_ExchangeID_get, _ctp.CThostFtdcOrderField_ExchangeID_set
+        _ctp.CThostFtdcOrderField_ExchangeID_get,
+        _ctp.CThostFtdcOrderField_ExchangeID_set,
     )
     ParticipantID = property(
-        _ctp.CThostFtdcOrderField_ParticipantID_get, _ctp.CThostFtdcOrderField_ParticipantID_set
+        _ctp.CThostFtdcOrderField_ParticipantID_get,
+        _ctp.CThostFtdcOrderField_ParticipantID_set,
     )
     ClientID = property(
         _ctp.CThostFtdcOrderField_ClientID_get, _ctp.CThostFtdcOrderField_ClientID_set
@@ -232,77 +269,100 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_OrderSubmitStatus_set,
     )
     NotifySequence = property(
-        _ctp.CThostFtdcOrderField_NotifySequence_get, _ctp.CThostFtdcOrderField_NotifySequence_set
+        _ctp.CThostFtdcOrderField_NotifySequence_get,
+        _ctp.CThostFtdcOrderField_NotifySequence_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcOrderField_TradingDay_get, _ctp.CThostFtdcOrderField_TradingDay_set
+        _ctp.CThostFtdcOrderField_TradingDay_get,
+        _ctp.CThostFtdcOrderField_TradingDay_set,
     )
     SettlementID = property(
-        _ctp.CThostFtdcOrderField_SettlementID_get, _ctp.CThostFtdcOrderField_SettlementID_set
+        _ctp.CThostFtdcOrderField_SettlementID_get,
+        _ctp.CThostFtdcOrderField_SettlementID_set,
     )
     OrderSysID = property(
-        _ctp.CThostFtdcOrderField_OrderSysID_get, _ctp.CThostFtdcOrderField_OrderSysID_set
+        _ctp.CThostFtdcOrderField_OrderSysID_get,
+        _ctp.CThostFtdcOrderField_OrderSysID_set,
     )
     OrderSource = property(
-        _ctp.CThostFtdcOrderField_OrderSource_get, _ctp.CThostFtdcOrderField_OrderSource_set
+        _ctp.CThostFtdcOrderField_OrderSource_get,
+        _ctp.CThostFtdcOrderField_OrderSource_set,
     )
     OrderStatus = property(
-        _ctp.CThostFtdcOrderField_OrderStatus_get, _ctp.CThostFtdcOrderField_OrderStatus_set
+        _ctp.CThostFtdcOrderField_OrderStatus_get,
+        _ctp.CThostFtdcOrderField_OrderStatus_set,
     )
     OrderType = property(
         _ctp.CThostFtdcOrderField_OrderType_get, _ctp.CThostFtdcOrderField_OrderType_set
     )
     VolumeTraded = property(
-        _ctp.CThostFtdcOrderField_VolumeTraded_get, _ctp.CThostFtdcOrderField_VolumeTraded_set
+        _ctp.CThostFtdcOrderField_VolumeTraded_get,
+        _ctp.CThostFtdcOrderField_VolumeTraded_set,
     )
     VolumeTotal = property(
-        _ctp.CThostFtdcOrderField_VolumeTotal_get, _ctp.CThostFtdcOrderField_VolumeTotal_set
+        _ctp.CThostFtdcOrderField_VolumeTotal_get,
+        _ctp.CThostFtdcOrderField_VolumeTotal_set,
     )
     InsertDate = property(
-        _ctp.CThostFtdcOrderField_InsertDate_get, _ctp.CThostFtdcOrderField_InsertDate_set
+        _ctp.CThostFtdcOrderField_InsertDate_get,
+        _ctp.CThostFtdcOrderField_InsertDate_set,
     )
     InsertTime = property(
-        _ctp.CThostFtdcOrderField_InsertTime_get, _ctp.CThostFtdcOrderField_InsertTime_set
+        _ctp.CThostFtdcOrderField_InsertTime_get,
+        _ctp.CThostFtdcOrderField_InsertTime_set,
     )
     ActiveTime = property(
-        _ctp.CThostFtdcOrderField_ActiveTime_get, _ctp.CThostFtdcOrderField_ActiveTime_set
+        _ctp.CThostFtdcOrderField_ActiveTime_get,
+        _ctp.CThostFtdcOrderField_ActiveTime_set,
     )
     SuspendTime = property(
-        _ctp.CThostFtdcOrderField_SuspendTime_get, _ctp.CThostFtdcOrderField_SuspendTime_set
+        _ctp.CThostFtdcOrderField_SuspendTime_get,
+        _ctp.CThostFtdcOrderField_SuspendTime_set,
     )
     UpdateTime = property(
-        _ctp.CThostFtdcOrderField_UpdateTime_get, _ctp.CThostFtdcOrderField_UpdateTime_set
+        _ctp.CThostFtdcOrderField_UpdateTime_get,
+        _ctp.CThostFtdcOrderField_UpdateTime_set,
     )
     CancelTime = property(
-        _ctp.CThostFtdcOrderField_CancelTime_get, _ctp.CThostFtdcOrderField_CancelTime_set
+        _ctp.CThostFtdcOrderField_CancelTime_get,
+        _ctp.CThostFtdcOrderField_CancelTime_set,
     )
     ActiveTraderID = property(
-        _ctp.CThostFtdcOrderField_ActiveTraderID_get, _ctp.CThostFtdcOrderField_ActiveTraderID_set
+        _ctp.CThostFtdcOrderField_ActiveTraderID_get,
+        _ctp.CThostFtdcOrderField_ActiveTraderID_set,
     )
     ClearingPartID = property(
-        _ctp.CThostFtdcOrderField_ClearingPartID_get, _ctp.CThostFtdcOrderField_ClearingPartID_set
+        _ctp.CThostFtdcOrderField_ClearingPartID_get,
+        _ctp.CThostFtdcOrderField_ClearingPartID_set,
     )
     SequenceNo = property(
-        _ctp.CThostFtdcOrderField_SequenceNo_get, _ctp.CThostFtdcOrderField_SequenceNo_set
+        _ctp.CThostFtdcOrderField_SequenceNo_get,
+        _ctp.CThostFtdcOrderField_SequenceNo_set,
     )
-    FrontID = property(_ctp.CThostFtdcOrderField_FrontID_get, _ctp.CThostFtdcOrderField_FrontID_set)
+    FrontID = property(
+        _ctp.CThostFtdcOrderField_FrontID_get, _ctp.CThostFtdcOrderField_FrontID_set
+    )
     SessionID = property(
         _ctp.CThostFtdcOrderField_SessionID_get, _ctp.CThostFtdcOrderField_SessionID_set
     )
     UserProductInfo = property(
-        _ctp.CThostFtdcOrderField_UserProductInfo_get, _ctp.CThostFtdcOrderField_UserProductInfo_set
+        _ctp.CThostFtdcOrderField_UserProductInfo_get,
+        _ctp.CThostFtdcOrderField_UserProductInfo_set,
     )
     StatusMsg = property(
         _ctp.CThostFtdcOrderField_StatusMsg_get, _ctp.CThostFtdcOrderField_StatusMsg_set
     )
     UserForceClose = property(
-        _ctp.CThostFtdcOrderField_UserForceClose_get, _ctp.CThostFtdcOrderField_UserForceClose_set
+        _ctp.CThostFtdcOrderField_UserForceClose_get,
+        _ctp.CThostFtdcOrderField_UserForceClose_set,
     )
     ActiveUserID = property(
-        _ctp.CThostFtdcOrderField_ActiveUserID_get, _ctp.CThostFtdcOrderField_ActiveUserID_set
+        _ctp.CThostFtdcOrderField_ActiveUserID_get,
+        _ctp.CThostFtdcOrderField_ActiveUserID_set,
     )
     BrokerOrderSeq = property(
-        _ctp.CThostFtdcOrderField_BrokerOrderSeq_get, _ctp.CThostFtdcOrderField_BrokerOrderSeq_set
+        _ctp.CThostFtdcOrderField_BrokerOrderSeq_get,
+        _ctp.CThostFtdcOrderField_BrokerOrderSeq_set,
     )
     RelativeOrderSysID = property(
         _ctp.CThostFtdcOrderField_RelativeOrderSysID_get,
@@ -313,31 +373,37 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_ZCETotalTradedVolume_set,
     )
     IsSwapOrder = property(
-        _ctp.CThostFtdcOrderField_IsSwapOrder_get, _ctp.CThostFtdcOrderField_IsSwapOrder_set
+        _ctp.CThostFtdcOrderField_IsSwapOrder_get,
+        _ctp.CThostFtdcOrderField_IsSwapOrder_set,
     )
     BranchID = property(
         _ctp.CThostFtdcOrderField_BranchID_get, _ctp.CThostFtdcOrderField_BranchID_set
     )
     InvestUnitID = property(
-        _ctp.CThostFtdcOrderField_InvestUnitID_get, _ctp.CThostFtdcOrderField_InvestUnitID_set
+        _ctp.CThostFtdcOrderField_InvestUnitID_get,
+        _ctp.CThostFtdcOrderField_InvestUnitID_set,
     )
     AccountID = property(
         _ctp.CThostFtdcOrderField_AccountID_get, _ctp.CThostFtdcOrderField_AccountID_set
     )
     CurrencyID = property(
-        _ctp.CThostFtdcOrderField_CurrencyID_get, _ctp.CThostFtdcOrderField_CurrencyID_set
+        _ctp.CThostFtdcOrderField_CurrencyID_get,
+        _ctp.CThostFtdcOrderField_CurrencyID_set,
     )
     reserve3 = property(
         _ctp.CThostFtdcOrderField_reserve3_get, _ctp.CThostFtdcOrderField_reserve3_set
     )
     MacAddress = property(
-        _ctp.CThostFtdcOrderField_MacAddress_get, _ctp.CThostFtdcOrderField_MacAddress_set
+        _ctp.CThostFtdcOrderField_MacAddress_get,
+        _ctp.CThostFtdcOrderField_MacAddress_set,
     )
     InstrumentID = property(
-        _ctp.CThostFtdcOrderField_InstrumentID_get, _ctp.CThostFtdcOrderField_InstrumentID_set
+        _ctp.CThostFtdcOrderField_InstrumentID_get,
+        _ctp.CThostFtdcOrderField_InstrumentID_set,
     )
     ExchangeInstID = property(
-        _ctp.CThostFtdcOrderField_ExchangeInstID_get, _ctp.CThostFtdcOrderField_ExchangeInstID_set
+        _ctp.CThostFtdcOrderField_ExchangeInstID_get,
+        _ctp.CThostFtdcOrderField_ExchangeInstID_set,
     )
     IPAddress = property(
         _ctp.CThostFtdcOrderField_IPAddress_get, _ctp.CThostFtdcOrderField_IPAddress_set
@@ -346,7 +412,8 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_OrderMemo_get, _ctp.CThostFtdcOrderField_OrderMemo_set
     )
     SessionReqSeq = property(
-        _ctp.CThostFtdcOrderField_SessionReqSeq_get, _ctp.CThostFtdcOrderField_SessionReqSeq_set
+        _ctp.CThostFtdcOrderField_SessionReqSeq_get,
+        _ctp.CThostFtdcOrderField_SessionReqSeq_set,
     )
 
     def __init__(self) -> None:
@@ -361,7 +428,7 @@ _ctp.CThostFtdcOrderField_swigregister(CThostFtdcOrderField)
 
 class CThostFtdcExchangeOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     OrderPriceType = property(
@@ -393,7 +460,8 @@ class CThostFtdcExchangeOrderField:
         _ctp.CThostFtdcExchangeOrderField_TimeCondition_set,
     )
     GTDDate = property(
-        _ctp.CThostFtdcExchangeOrderField_GTDDate_get, _ctp.CThostFtdcExchangeOrderField_GTDDate_set
+        _ctp.CThostFtdcExchangeOrderField_GTDDate_get,
+        _ctp.CThostFtdcExchangeOrderField_GTDDate_set,
     )
     VolumeCondition = property(
         _ctp.CThostFtdcExchangeOrderField_VolumeCondition_get,
@@ -553,7 +621,9 @@ class CThostFtdcExchangeOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExchangeOrderField_swiginit(self, _ctp.new_CThostFtdcExchangeOrderField())
+        _ctp.CThostFtdcExchangeOrderField_swiginit(
+            self, _ctp.new_CThostFtdcExchangeOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeOrderField
 
@@ -564,7 +634,7 @@ _ctp.CThostFtdcExchangeOrderField_swigregister(CThostFtdcExchangeOrderField)
 
 class CThostFtdcExchangeOrderInsertErrorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -605,12 +675,14 @@ class CThostFtdcExchangeOrderInsertErrorField:
 
 
 # Register CThostFtdcExchangeOrderInsertErrorField in _ctp:
-_ctp.CThostFtdcExchangeOrderInsertErrorField_swigregister(CThostFtdcExchangeOrderInsertErrorField)
+_ctp.CThostFtdcExchangeOrderInsertErrorField_swigregister(
+    CThostFtdcExchangeOrderInsertErrorField
+)
 
 
 class CThostFtdcInputOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -712,11 +784,12 @@ _ctp.CThostFtdcInputOrderActionField_swigregister(CThostFtdcInputOrderActionFiel
 
 class CThostFtdcOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcOrderActionField_BrokerID_get, _ctp.CThostFtdcOrderActionField_BrokerID_set
+        _ctp.CThostFtdcOrderActionField_BrokerID_get,
+        _ctp.CThostFtdcOrderActionField_BrokerID_set,
     )
     InvestorID = property(
         _ctp.CThostFtdcOrderActionField_InvestorID_get,
@@ -727,16 +800,20 @@ class CThostFtdcOrderActionField:
         _ctp.CThostFtdcOrderActionField_OrderActionRef_set,
     )
     OrderRef = property(
-        _ctp.CThostFtdcOrderActionField_OrderRef_get, _ctp.CThostFtdcOrderActionField_OrderRef_set
+        _ctp.CThostFtdcOrderActionField_OrderRef_get,
+        _ctp.CThostFtdcOrderActionField_OrderRef_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcOrderActionField_RequestID_get, _ctp.CThostFtdcOrderActionField_RequestID_set
+        _ctp.CThostFtdcOrderActionField_RequestID_get,
+        _ctp.CThostFtdcOrderActionField_RequestID_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcOrderActionField_FrontID_get, _ctp.CThostFtdcOrderActionField_FrontID_set
+        _ctp.CThostFtdcOrderActionField_FrontID_get,
+        _ctp.CThostFtdcOrderActionField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcOrderActionField_SessionID_get, _ctp.CThostFtdcOrderActionField_SessionID_set
+        _ctp.CThostFtdcOrderActionField_SessionID_get,
+        _ctp.CThostFtdcOrderActionField_SessionID_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcOrderActionField_ExchangeID_get,
@@ -767,10 +844,12 @@ class CThostFtdcOrderActionField:
         _ctp.CThostFtdcOrderActionField_ActionTime_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcOrderActionField_TraderID_get, _ctp.CThostFtdcOrderActionField_TraderID_set
+        _ctp.CThostFtdcOrderActionField_TraderID_get,
+        _ctp.CThostFtdcOrderActionField_TraderID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcOrderActionField_InstallID_get, _ctp.CThostFtdcOrderActionField_InstallID_set
+        _ctp.CThostFtdcOrderActionField_InstallID_get,
+        _ctp.CThostFtdcOrderActionField_InstallID_set,
     )
     OrderLocalID = property(
         _ctp.CThostFtdcOrderActionField_OrderLocalID_get,
@@ -785,7 +864,8 @@ class CThostFtdcOrderActionField:
         _ctp.CThostFtdcOrderActionField_ParticipantID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcOrderActionField_ClientID_get, _ctp.CThostFtdcOrderActionField_ClientID_set
+        _ctp.CThostFtdcOrderActionField_ClientID_get,
+        _ctp.CThostFtdcOrderActionField_ClientID_set,
     )
     BusinessUnit = property(
         _ctp.CThostFtdcOrderActionField_BusinessUnit_get,
@@ -796,23 +876,28 @@ class CThostFtdcOrderActionField:
         _ctp.CThostFtdcOrderActionField_OrderActionStatus_set,
     )
     UserID = property(
-        _ctp.CThostFtdcOrderActionField_UserID_get, _ctp.CThostFtdcOrderActionField_UserID_set
+        _ctp.CThostFtdcOrderActionField_UserID_get,
+        _ctp.CThostFtdcOrderActionField_UserID_set,
     )
     StatusMsg = property(
-        _ctp.CThostFtdcOrderActionField_StatusMsg_get, _ctp.CThostFtdcOrderActionField_StatusMsg_set
+        _ctp.CThostFtdcOrderActionField_StatusMsg_get,
+        _ctp.CThostFtdcOrderActionField_StatusMsg_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcOrderActionField_reserve1_get, _ctp.CThostFtdcOrderActionField_reserve1_set
+        _ctp.CThostFtdcOrderActionField_reserve1_get,
+        _ctp.CThostFtdcOrderActionField_reserve1_set,
     )
     BranchID = property(
-        _ctp.CThostFtdcOrderActionField_BranchID_get, _ctp.CThostFtdcOrderActionField_BranchID_set
+        _ctp.CThostFtdcOrderActionField_BranchID_get,
+        _ctp.CThostFtdcOrderActionField_BranchID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcOrderActionField_InvestUnitID_get,
         _ctp.CThostFtdcOrderActionField_InvestUnitID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcOrderActionField_reserve2_get, _ctp.CThostFtdcOrderActionField_reserve2_set
+        _ctp.CThostFtdcOrderActionField_reserve2_get,
+        _ctp.CThostFtdcOrderActionField_reserve2_set,
     )
     MacAddress = property(
         _ctp.CThostFtdcOrderActionField_MacAddress_get,
@@ -823,10 +908,12 @@ class CThostFtdcOrderActionField:
         _ctp.CThostFtdcOrderActionField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcOrderActionField_IPAddress_get, _ctp.CThostFtdcOrderActionField_IPAddress_set
+        _ctp.CThostFtdcOrderActionField_IPAddress_get,
+        _ctp.CThostFtdcOrderActionField_IPAddress_set,
     )
     OrderMemo = property(
-        _ctp.CThostFtdcOrderActionField_OrderMemo_get, _ctp.CThostFtdcOrderActionField_OrderMemo_set
+        _ctp.CThostFtdcOrderActionField_OrderMemo_get,
+        _ctp.CThostFtdcOrderActionField_OrderMemo_set,
     )
     SessionReqSeq = property(
         _ctp.CThostFtdcOrderActionField_SessionReqSeq_get,
@@ -834,7 +921,9 @@ class CThostFtdcOrderActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcOrderActionField_swiginit(self, _ctp.new_CThostFtdcOrderActionField())
+        _ctp.CThostFtdcOrderActionField_swiginit(
+            self, _ctp.new_CThostFtdcOrderActionField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcOrderActionField
 
@@ -845,7 +934,7 @@ _ctp.CThostFtdcOrderActionField_swigregister(CThostFtdcOrderActionField)
 
 class CThostFtdcExchangeOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -943,7 +1032,7 @@ _ctp.CThostFtdcExchangeOrderActionField_swigregister(CThostFtdcExchangeOrderActi
 
 class CThostFtdcExchangeOrderActionErrorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -988,12 +1077,14 @@ class CThostFtdcExchangeOrderActionErrorField:
 
 
 # Register CThostFtdcExchangeOrderActionErrorField in _ctp:
-_ctp.CThostFtdcExchangeOrderActionErrorField_swigregister(CThostFtdcExchangeOrderActionErrorField)
+_ctp.CThostFtdcExchangeOrderActionErrorField_swigregister(
+    CThostFtdcExchangeOrderActionErrorField
+)
 
 
 class CThostFtdcInputExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1013,10 +1104,12 @@ class CThostFtdcInputExecOrderField:
         _ctp.CThostFtdcInputExecOrderField_ExecOrderRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcInputExecOrderField_UserID_get, _ctp.CThostFtdcInputExecOrderField_UserID_set
+        _ctp.CThostFtdcInputExecOrderField_UserID_get,
+        _ctp.CThostFtdcInputExecOrderField_UserID_set,
     )
     Volume = property(
-        _ctp.CThostFtdcInputExecOrderField_Volume_get, _ctp.CThostFtdcInputExecOrderField_Volume_set
+        _ctp.CThostFtdcInputExecOrderField_Volume_get,
+        _ctp.CThostFtdcInputExecOrderField_Volume_set,
     )
     RequestID = property(
         _ctp.CThostFtdcInputExecOrderField_RequestID_get,
@@ -1088,7 +1181,9 @@ class CThostFtdcInputExecOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputExecOrderField_swiginit(self, _ctp.new_CThostFtdcInputExecOrderField())
+        _ctp.CThostFtdcInputExecOrderField_swiginit(
+            self, _ctp.new_CThostFtdcInputExecOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputExecOrderField
 
@@ -1099,7 +1194,7 @@ _ctp.CThostFtdcInputExecOrderField_swigregister(CThostFtdcInputExecOrderField)
 
 class CThostFtdcInputExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1180,48 +1275,59 @@ class CThostFtdcInputExecOrderActionField:
 
 
 # Register CThostFtdcInputExecOrderActionField in _ctp:
-_ctp.CThostFtdcInputExecOrderActionField_swigregister(CThostFtdcInputExecOrderActionField)
+_ctp.CThostFtdcInputExecOrderActionField_swigregister(
+    CThostFtdcInputExecOrderActionField
+)
 
 
 class CThostFtdcExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcExecOrderField_BrokerID_get, _ctp.CThostFtdcExecOrderField_BrokerID_set
+        _ctp.CThostFtdcExecOrderField_BrokerID_get,
+        _ctp.CThostFtdcExecOrderField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcExecOrderField_InvestorID_get, _ctp.CThostFtdcExecOrderField_InvestorID_set
+        _ctp.CThostFtdcExecOrderField_InvestorID_get,
+        _ctp.CThostFtdcExecOrderField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcExecOrderField_reserve1_get, _ctp.CThostFtdcExecOrderField_reserve1_set
+        _ctp.CThostFtdcExecOrderField_reserve1_get,
+        _ctp.CThostFtdcExecOrderField_reserve1_set,
     )
     ExecOrderRef = property(
         _ctp.CThostFtdcExecOrderField_ExecOrderRef_get,
         _ctp.CThostFtdcExecOrderField_ExecOrderRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcExecOrderField_UserID_get, _ctp.CThostFtdcExecOrderField_UserID_set
+        _ctp.CThostFtdcExecOrderField_UserID_get,
+        _ctp.CThostFtdcExecOrderField_UserID_set,
     )
     Volume = property(
-        _ctp.CThostFtdcExecOrderField_Volume_get, _ctp.CThostFtdcExecOrderField_Volume_set
+        _ctp.CThostFtdcExecOrderField_Volume_get,
+        _ctp.CThostFtdcExecOrderField_Volume_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcExecOrderField_RequestID_get, _ctp.CThostFtdcExecOrderField_RequestID_set
+        _ctp.CThostFtdcExecOrderField_RequestID_get,
+        _ctp.CThostFtdcExecOrderField_RequestID_set,
     )
     BusinessUnit = property(
         _ctp.CThostFtdcExecOrderField_BusinessUnit_get,
         _ctp.CThostFtdcExecOrderField_BusinessUnit_set,
     )
     OffsetFlag = property(
-        _ctp.CThostFtdcExecOrderField_OffsetFlag_get, _ctp.CThostFtdcExecOrderField_OffsetFlag_set
+        _ctp.CThostFtdcExecOrderField_OffsetFlag_get,
+        _ctp.CThostFtdcExecOrderField_OffsetFlag_set,
     )
     HedgeFlag = property(
-        _ctp.CThostFtdcExecOrderField_HedgeFlag_get, _ctp.CThostFtdcExecOrderField_HedgeFlag_set
+        _ctp.CThostFtdcExecOrderField_HedgeFlag_get,
+        _ctp.CThostFtdcExecOrderField_HedgeFlag_set,
     )
     ActionType = property(
-        _ctp.CThostFtdcExecOrderField_ActionType_get, _ctp.CThostFtdcExecOrderField_ActionType_set
+        _ctp.CThostFtdcExecOrderField_ActionType_get,
+        _ctp.CThostFtdcExecOrderField_ActionType_set,
     )
     PosiDirection = property(
         _ctp.CThostFtdcExecOrderField_PosiDirection_get,
@@ -1232,30 +1338,36 @@ class CThostFtdcExecOrderField:
         _ctp.CThostFtdcExecOrderField_ReservePositionFlag_set,
     )
     CloseFlag = property(
-        _ctp.CThostFtdcExecOrderField_CloseFlag_get, _ctp.CThostFtdcExecOrderField_CloseFlag_set
+        _ctp.CThostFtdcExecOrderField_CloseFlag_get,
+        _ctp.CThostFtdcExecOrderField_CloseFlag_set,
     )
     ExecOrderLocalID = property(
         _ctp.CThostFtdcExecOrderField_ExecOrderLocalID_get,
         _ctp.CThostFtdcExecOrderField_ExecOrderLocalID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcExecOrderField_ExchangeID_get, _ctp.CThostFtdcExecOrderField_ExchangeID_set
+        _ctp.CThostFtdcExecOrderField_ExchangeID_get,
+        _ctp.CThostFtdcExecOrderField_ExchangeID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcExecOrderField_ParticipantID_get,
         _ctp.CThostFtdcExecOrderField_ParticipantID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcExecOrderField_ClientID_get, _ctp.CThostFtdcExecOrderField_ClientID_set
+        _ctp.CThostFtdcExecOrderField_ClientID_get,
+        _ctp.CThostFtdcExecOrderField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcExecOrderField_reserve2_get, _ctp.CThostFtdcExecOrderField_reserve2_set
+        _ctp.CThostFtdcExecOrderField_reserve2_get,
+        _ctp.CThostFtdcExecOrderField_reserve2_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcExecOrderField_TraderID_get, _ctp.CThostFtdcExecOrderField_TraderID_set
+        _ctp.CThostFtdcExecOrderField_TraderID_get,
+        _ctp.CThostFtdcExecOrderField_TraderID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcExecOrderField_InstallID_get, _ctp.CThostFtdcExecOrderField_InstallID_set
+        _ctp.CThostFtdcExecOrderField_InstallID_get,
+        _ctp.CThostFtdcExecOrderField_InstallID_set,
     )
     OrderSubmitStatus = property(
         _ctp.CThostFtdcExecOrderField_OrderSubmitStatus_get,
@@ -1266,7 +1378,8 @@ class CThostFtdcExecOrderField:
         _ctp.CThostFtdcExecOrderField_NotifySequence_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcExecOrderField_TradingDay_get, _ctp.CThostFtdcExecOrderField_TradingDay_set
+        _ctp.CThostFtdcExecOrderField_TradingDay_get,
+        _ctp.CThostFtdcExecOrderField_TradingDay_set,
     )
     SettlementID = property(
         _ctp.CThostFtdcExecOrderField_SettlementID_get,
@@ -1277,36 +1390,44 @@ class CThostFtdcExecOrderField:
         _ctp.CThostFtdcExecOrderField_ExecOrderSysID_set,
     )
     InsertDate = property(
-        _ctp.CThostFtdcExecOrderField_InsertDate_get, _ctp.CThostFtdcExecOrderField_InsertDate_set
+        _ctp.CThostFtdcExecOrderField_InsertDate_get,
+        _ctp.CThostFtdcExecOrderField_InsertDate_set,
     )
     InsertTime = property(
-        _ctp.CThostFtdcExecOrderField_InsertTime_get, _ctp.CThostFtdcExecOrderField_InsertTime_set
+        _ctp.CThostFtdcExecOrderField_InsertTime_get,
+        _ctp.CThostFtdcExecOrderField_InsertTime_set,
     )
     CancelTime = property(
-        _ctp.CThostFtdcExecOrderField_CancelTime_get, _ctp.CThostFtdcExecOrderField_CancelTime_set
+        _ctp.CThostFtdcExecOrderField_CancelTime_get,
+        _ctp.CThostFtdcExecOrderField_CancelTime_set,
     )
     ExecResult = property(
-        _ctp.CThostFtdcExecOrderField_ExecResult_get, _ctp.CThostFtdcExecOrderField_ExecResult_set
+        _ctp.CThostFtdcExecOrderField_ExecResult_get,
+        _ctp.CThostFtdcExecOrderField_ExecResult_set,
     )
     ClearingPartID = property(
         _ctp.CThostFtdcExecOrderField_ClearingPartID_get,
         _ctp.CThostFtdcExecOrderField_ClearingPartID_set,
     )
     SequenceNo = property(
-        _ctp.CThostFtdcExecOrderField_SequenceNo_get, _ctp.CThostFtdcExecOrderField_SequenceNo_set
+        _ctp.CThostFtdcExecOrderField_SequenceNo_get,
+        _ctp.CThostFtdcExecOrderField_SequenceNo_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcExecOrderField_FrontID_get, _ctp.CThostFtdcExecOrderField_FrontID_set
+        _ctp.CThostFtdcExecOrderField_FrontID_get,
+        _ctp.CThostFtdcExecOrderField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcExecOrderField_SessionID_get, _ctp.CThostFtdcExecOrderField_SessionID_set
+        _ctp.CThostFtdcExecOrderField_SessionID_get,
+        _ctp.CThostFtdcExecOrderField_SessionID_set,
     )
     UserProductInfo = property(
         _ctp.CThostFtdcExecOrderField_UserProductInfo_get,
         _ctp.CThostFtdcExecOrderField_UserProductInfo_set,
     )
     StatusMsg = property(
-        _ctp.CThostFtdcExecOrderField_StatusMsg_get, _ctp.CThostFtdcExecOrderField_StatusMsg_set
+        _ctp.CThostFtdcExecOrderField_StatusMsg_get,
+        _ctp.CThostFtdcExecOrderField_StatusMsg_set,
     )
     ActiveUserID = property(
         _ctp.CThostFtdcExecOrderField_ActiveUserID_get,
@@ -1317,23 +1438,28 @@ class CThostFtdcExecOrderField:
         _ctp.CThostFtdcExecOrderField_BrokerExecOrderSeq_set,
     )
     BranchID = property(
-        _ctp.CThostFtdcExecOrderField_BranchID_get, _ctp.CThostFtdcExecOrderField_BranchID_set
+        _ctp.CThostFtdcExecOrderField_BranchID_get,
+        _ctp.CThostFtdcExecOrderField_BranchID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcExecOrderField_InvestUnitID_get,
         _ctp.CThostFtdcExecOrderField_InvestUnitID_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcExecOrderField_AccountID_get, _ctp.CThostFtdcExecOrderField_AccountID_set
+        _ctp.CThostFtdcExecOrderField_AccountID_get,
+        _ctp.CThostFtdcExecOrderField_AccountID_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcExecOrderField_CurrencyID_get, _ctp.CThostFtdcExecOrderField_CurrencyID_set
+        _ctp.CThostFtdcExecOrderField_CurrencyID_get,
+        _ctp.CThostFtdcExecOrderField_CurrencyID_set,
     )
     reserve3 = property(
-        _ctp.CThostFtdcExecOrderField_reserve3_get, _ctp.CThostFtdcExecOrderField_reserve3_set
+        _ctp.CThostFtdcExecOrderField_reserve3_get,
+        _ctp.CThostFtdcExecOrderField_reserve3_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcExecOrderField_MacAddress_get, _ctp.CThostFtdcExecOrderField_MacAddress_set
+        _ctp.CThostFtdcExecOrderField_MacAddress_get,
+        _ctp.CThostFtdcExecOrderField_MacAddress_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcExecOrderField_InstrumentID_get,
@@ -1344,11 +1470,14 @@ class CThostFtdcExecOrderField:
         _ctp.CThostFtdcExecOrderField_ExchangeInstID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcExecOrderField_IPAddress_get, _ctp.CThostFtdcExecOrderField_IPAddress_set
+        _ctp.CThostFtdcExecOrderField_IPAddress_get,
+        _ctp.CThostFtdcExecOrderField_IPAddress_set,
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExecOrderField_swiginit(self, _ctp.new_CThostFtdcExecOrderField())
+        _ctp.CThostFtdcExecOrderField_swiginit(
+            self, _ctp.new_CThostFtdcExecOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExecOrderField
 
@@ -1359,7 +1488,7 @@ _ctp.CThostFtdcExecOrderField_swigregister(CThostFtdcExecOrderField)
 
 class CThostFtdcExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1497,7 +1626,7 @@ _ctp.CThostFtdcExecOrderActionField_swigregister(CThostFtdcExecOrderActionField)
 
 class CThostFtdcExchangeExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     Volume = property(
@@ -1643,7 +1772,7 @@ _ctp.CThostFtdcExchangeExecOrderField_swigregister(CThostFtdcExchangeExecOrderFi
 
 class CThostFtdcExchangeExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1744,33 +1873,39 @@ class CThostFtdcExchangeExecOrderActionField:
 
 
 # Register CThostFtdcExchangeExecOrderActionField in _ctp:
-_ctp.CThostFtdcExchangeExecOrderActionField_swigregister(CThostFtdcExchangeExecOrderActionField)
+_ctp.CThostFtdcExchangeExecOrderActionField_swigregister(
+    CThostFtdcExchangeExecOrderActionField
+)
 
 
 class CThostFtdcErrExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcErrExecOrderField_BrokerID_get, _ctp.CThostFtdcErrExecOrderField_BrokerID_set
+        _ctp.CThostFtdcErrExecOrderField_BrokerID_get,
+        _ctp.CThostFtdcErrExecOrderField_BrokerID_set,
     )
     InvestorID = property(
         _ctp.CThostFtdcErrExecOrderField_InvestorID_get,
         _ctp.CThostFtdcErrExecOrderField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcErrExecOrderField_reserve1_get, _ctp.CThostFtdcErrExecOrderField_reserve1_set
+        _ctp.CThostFtdcErrExecOrderField_reserve1_get,
+        _ctp.CThostFtdcErrExecOrderField_reserve1_set,
     )
     ExecOrderRef = property(
         _ctp.CThostFtdcErrExecOrderField_ExecOrderRef_get,
         _ctp.CThostFtdcErrExecOrderField_ExecOrderRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcErrExecOrderField_UserID_get, _ctp.CThostFtdcErrExecOrderField_UserID_set
+        _ctp.CThostFtdcErrExecOrderField_UserID_get,
+        _ctp.CThostFtdcErrExecOrderField_UserID_set,
     )
     Volume = property(
-        _ctp.CThostFtdcErrExecOrderField_Volume_get, _ctp.CThostFtdcErrExecOrderField_Volume_set
+        _ctp.CThostFtdcErrExecOrderField_Volume_get,
+        _ctp.CThostFtdcErrExecOrderField_Volume_set,
     )
     RequestID = property(
         _ctp.CThostFtdcErrExecOrderField_RequestID_get,
@@ -1821,20 +1956,24 @@ class CThostFtdcErrExecOrderField:
         _ctp.CThostFtdcErrExecOrderField_CurrencyID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcErrExecOrderField_ClientID_get, _ctp.CThostFtdcErrExecOrderField_ClientID_set
+        _ctp.CThostFtdcErrExecOrderField_ClientID_get,
+        _ctp.CThostFtdcErrExecOrderField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcErrExecOrderField_reserve2_get, _ctp.CThostFtdcErrExecOrderField_reserve2_set
+        _ctp.CThostFtdcErrExecOrderField_reserve2_get,
+        _ctp.CThostFtdcErrExecOrderField_reserve2_set,
     )
     MacAddress = property(
         _ctp.CThostFtdcErrExecOrderField_MacAddress_get,
         _ctp.CThostFtdcErrExecOrderField_MacAddress_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcErrExecOrderField_ErrorID_get, _ctp.CThostFtdcErrExecOrderField_ErrorID_set
+        _ctp.CThostFtdcErrExecOrderField_ErrorID_get,
+        _ctp.CThostFtdcErrExecOrderField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcErrExecOrderField_ErrorMsg_get, _ctp.CThostFtdcErrExecOrderField_ErrorMsg_set
+        _ctp.CThostFtdcErrExecOrderField_ErrorMsg_get,
+        _ctp.CThostFtdcErrExecOrderField_ErrorMsg_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcErrExecOrderField_InstrumentID_get,
@@ -1846,7 +1985,9 @@ class CThostFtdcErrExecOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcErrExecOrderField_swiginit(self, _ctp.new_CThostFtdcErrExecOrderField())
+        _ctp.CThostFtdcErrExecOrderField_swiginit(
+            self, _ctp.new_CThostFtdcErrExecOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcErrExecOrderField
 
@@ -1857,7 +1998,7 @@ _ctp.CThostFtdcErrExecOrderField_swigregister(CThostFtdcErrExecOrderField)
 
 class CThostFtdcErrExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1951,7 +2092,7 @@ _ctp.CThostFtdcErrExecOrderActionField_swigregister(CThostFtdcErrExecOrderAction
 
 class CThostFtdcInputForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1971,7 +2112,8 @@ class CThostFtdcInputForQuoteField:
         _ctp.CThostFtdcInputForQuoteField_ForQuoteRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcInputForQuoteField_UserID_get, _ctp.CThostFtdcInputForQuoteField_UserID_set
+        _ctp.CThostFtdcInputForQuoteField_UserID_get,
+        _ctp.CThostFtdcInputForQuoteField_UserID_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcInputForQuoteField_ExchangeID_get,
@@ -1999,7 +2141,9 @@ class CThostFtdcInputForQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputForQuoteField_swiginit(self, _ctp.new_CThostFtdcInputForQuoteField())
+        _ctp.CThostFtdcInputForQuoteField_swiginit(
+            self, _ctp.new_CThostFtdcInputForQuoteField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputForQuoteField
 
@@ -2010,20 +2154,24 @@ _ctp.CThostFtdcInputForQuoteField_swigregister(CThostFtdcInputForQuoteField)
 
 class CThostFtdcForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcForQuoteField_BrokerID_get, _ctp.CThostFtdcForQuoteField_BrokerID_set
+        _ctp.CThostFtdcForQuoteField_BrokerID_get,
+        _ctp.CThostFtdcForQuoteField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcForQuoteField_InvestorID_get, _ctp.CThostFtdcForQuoteField_InvestorID_set
+        _ctp.CThostFtdcForQuoteField_InvestorID_get,
+        _ctp.CThostFtdcForQuoteField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcForQuoteField_reserve1_get, _ctp.CThostFtdcForQuoteField_reserve1_set
+        _ctp.CThostFtdcForQuoteField_reserve1_get,
+        _ctp.CThostFtdcForQuoteField_reserve1_set,
     )
     ForQuoteRef = property(
-        _ctp.CThostFtdcForQuoteField_ForQuoteRef_get, _ctp.CThostFtdcForQuoteField_ForQuoteRef_set
+        _ctp.CThostFtdcForQuoteField_ForQuoteRef_get,
+        _ctp.CThostFtdcForQuoteField_ForQuoteRef_set,
     )
     UserID = property(
         _ctp.CThostFtdcForQuoteField_UserID_get, _ctp.CThostFtdcForQuoteField_UserID_set
@@ -2033,68 +2181,84 @@ class CThostFtdcForQuoteField:
         _ctp.CThostFtdcForQuoteField_ForQuoteLocalID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcForQuoteField_ExchangeID_get, _ctp.CThostFtdcForQuoteField_ExchangeID_set
+        _ctp.CThostFtdcForQuoteField_ExchangeID_get,
+        _ctp.CThostFtdcForQuoteField_ExchangeID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcForQuoteField_ParticipantID_get,
         _ctp.CThostFtdcForQuoteField_ParticipantID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcForQuoteField_ClientID_get, _ctp.CThostFtdcForQuoteField_ClientID_set
+        _ctp.CThostFtdcForQuoteField_ClientID_get,
+        _ctp.CThostFtdcForQuoteField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcForQuoteField_reserve2_get, _ctp.CThostFtdcForQuoteField_reserve2_set
+        _ctp.CThostFtdcForQuoteField_reserve2_get,
+        _ctp.CThostFtdcForQuoteField_reserve2_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcForQuoteField_TraderID_get, _ctp.CThostFtdcForQuoteField_TraderID_set
+        _ctp.CThostFtdcForQuoteField_TraderID_get,
+        _ctp.CThostFtdcForQuoteField_TraderID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcForQuoteField_InstallID_get, _ctp.CThostFtdcForQuoteField_InstallID_set
+        _ctp.CThostFtdcForQuoteField_InstallID_get,
+        _ctp.CThostFtdcForQuoteField_InstallID_set,
     )
     InsertDate = property(
-        _ctp.CThostFtdcForQuoteField_InsertDate_get, _ctp.CThostFtdcForQuoteField_InsertDate_set
+        _ctp.CThostFtdcForQuoteField_InsertDate_get,
+        _ctp.CThostFtdcForQuoteField_InsertDate_set,
     )
     InsertTime = property(
-        _ctp.CThostFtdcForQuoteField_InsertTime_get, _ctp.CThostFtdcForQuoteField_InsertTime_set
+        _ctp.CThostFtdcForQuoteField_InsertTime_get,
+        _ctp.CThostFtdcForQuoteField_InsertTime_set,
     )
     ForQuoteStatus = property(
         _ctp.CThostFtdcForQuoteField_ForQuoteStatus_get,
         _ctp.CThostFtdcForQuoteField_ForQuoteStatus_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcForQuoteField_FrontID_get, _ctp.CThostFtdcForQuoteField_FrontID_set
+        _ctp.CThostFtdcForQuoteField_FrontID_get,
+        _ctp.CThostFtdcForQuoteField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcForQuoteField_SessionID_get, _ctp.CThostFtdcForQuoteField_SessionID_set
+        _ctp.CThostFtdcForQuoteField_SessionID_get,
+        _ctp.CThostFtdcForQuoteField_SessionID_set,
     )
     StatusMsg = property(
-        _ctp.CThostFtdcForQuoteField_StatusMsg_get, _ctp.CThostFtdcForQuoteField_StatusMsg_set
+        _ctp.CThostFtdcForQuoteField_StatusMsg_get,
+        _ctp.CThostFtdcForQuoteField_StatusMsg_set,
     )
     ActiveUserID = property(
-        _ctp.CThostFtdcForQuoteField_ActiveUserID_get, _ctp.CThostFtdcForQuoteField_ActiveUserID_set
+        _ctp.CThostFtdcForQuoteField_ActiveUserID_get,
+        _ctp.CThostFtdcForQuoteField_ActiveUserID_set,
     )
     BrokerForQutoSeq = property(
         _ctp.CThostFtdcForQuoteField_BrokerForQutoSeq_get,
         _ctp.CThostFtdcForQuoteField_BrokerForQutoSeq_set,
     )
     InvestUnitID = property(
-        _ctp.CThostFtdcForQuoteField_InvestUnitID_get, _ctp.CThostFtdcForQuoteField_InvestUnitID_set
+        _ctp.CThostFtdcForQuoteField_InvestUnitID_get,
+        _ctp.CThostFtdcForQuoteField_InvestUnitID_set,
     )
     reserve3 = property(
-        _ctp.CThostFtdcForQuoteField_reserve3_get, _ctp.CThostFtdcForQuoteField_reserve3_set
+        _ctp.CThostFtdcForQuoteField_reserve3_get,
+        _ctp.CThostFtdcForQuoteField_reserve3_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcForQuoteField_MacAddress_get, _ctp.CThostFtdcForQuoteField_MacAddress_set
+        _ctp.CThostFtdcForQuoteField_MacAddress_get,
+        _ctp.CThostFtdcForQuoteField_MacAddress_set,
     )
     InstrumentID = property(
-        _ctp.CThostFtdcForQuoteField_InstrumentID_get, _ctp.CThostFtdcForQuoteField_InstrumentID_set
+        _ctp.CThostFtdcForQuoteField_InstrumentID_get,
+        _ctp.CThostFtdcForQuoteField_InstrumentID_set,
     )
     ExchangeInstID = property(
         _ctp.CThostFtdcForQuoteField_ExchangeInstID_get,
         _ctp.CThostFtdcForQuoteField_ExchangeInstID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcForQuoteField_IPAddress_get, _ctp.CThostFtdcForQuoteField_IPAddress_set
+        _ctp.CThostFtdcForQuoteField_IPAddress_get,
+        _ctp.CThostFtdcForQuoteField_IPAddress_set,
     )
 
     def __init__(self) -> None:
@@ -2109,7 +2273,7 @@ _ctp.CThostFtdcForQuoteField_swigregister(CThostFtdcForQuoteField)
 
 class CThostFtdcExchangeForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ForQuoteLocalID = property(
@@ -2183,38 +2347,48 @@ _ctp.CThostFtdcExchangeForQuoteField_swigregister(CThostFtdcExchangeForQuoteFiel
 
 class CThostFtdcInputQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcInputQuoteField_BrokerID_get, _ctp.CThostFtdcInputQuoteField_BrokerID_set
+        _ctp.CThostFtdcInputQuoteField_BrokerID_get,
+        _ctp.CThostFtdcInputQuoteField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcInputQuoteField_InvestorID_get, _ctp.CThostFtdcInputQuoteField_InvestorID_set
+        _ctp.CThostFtdcInputQuoteField_InvestorID_get,
+        _ctp.CThostFtdcInputQuoteField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcInputQuoteField_reserve1_get, _ctp.CThostFtdcInputQuoteField_reserve1_set
+        _ctp.CThostFtdcInputQuoteField_reserve1_get,
+        _ctp.CThostFtdcInputQuoteField_reserve1_set,
     )
     QuoteRef = property(
-        _ctp.CThostFtdcInputQuoteField_QuoteRef_get, _ctp.CThostFtdcInputQuoteField_QuoteRef_set
+        _ctp.CThostFtdcInputQuoteField_QuoteRef_get,
+        _ctp.CThostFtdcInputQuoteField_QuoteRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcInputQuoteField_UserID_get, _ctp.CThostFtdcInputQuoteField_UserID_set
+        _ctp.CThostFtdcInputQuoteField_UserID_get,
+        _ctp.CThostFtdcInputQuoteField_UserID_set,
     )
     AskPrice = property(
-        _ctp.CThostFtdcInputQuoteField_AskPrice_get, _ctp.CThostFtdcInputQuoteField_AskPrice_set
+        _ctp.CThostFtdcInputQuoteField_AskPrice_get,
+        _ctp.CThostFtdcInputQuoteField_AskPrice_set,
     )
     BidPrice = property(
-        _ctp.CThostFtdcInputQuoteField_BidPrice_get, _ctp.CThostFtdcInputQuoteField_BidPrice_set
+        _ctp.CThostFtdcInputQuoteField_BidPrice_get,
+        _ctp.CThostFtdcInputQuoteField_BidPrice_set,
     )
     AskVolume = property(
-        _ctp.CThostFtdcInputQuoteField_AskVolume_get, _ctp.CThostFtdcInputQuoteField_AskVolume_set
+        _ctp.CThostFtdcInputQuoteField_AskVolume_get,
+        _ctp.CThostFtdcInputQuoteField_AskVolume_set,
     )
     BidVolume = property(
-        _ctp.CThostFtdcInputQuoteField_BidVolume_get, _ctp.CThostFtdcInputQuoteField_BidVolume_set
+        _ctp.CThostFtdcInputQuoteField_BidVolume_get,
+        _ctp.CThostFtdcInputQuoteField_BidVolume_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcInputQuoteField_RequestID_get, _ctp.CThostFtdcInputQuoteField_RequestID_set
+        _ctp.CThostFtdcInputQuoteField_RequestID_get,
+        _ctp.CThostFtdcInputQuoteField_RequestID_set,
     )
     BusinessUnit = property(
         _ctp.CThostFtdcInputQuoteField_BusinessUnit_get,
@@ -2249,27 +2423,32 @@ class CThostFtdcInputQuoteField:
         _ctp.CThostFtdcInputQuoteField_ForQuoteSysID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcInputQuoteField_ExchangeID_get, _ctp.CThostFtdcInputQuoteField_ExchangeID_set
+        _ctp.CThostFtdcInputQuoteField_ExchangeID_get,
+        _ctp.CThostFtdcInputQuoteField_ExchangeID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcInputQuoteField_InvestUnitID_get,
         _ctp.CThostFtdcInputQuoteField_InvestUnitID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcInputQuoteField_ClientID_get, _ctp.CThostFtdcInputQuoteField_ClientID_set
+        _ctp.CThostFtdcInputQuoteField_ClientID_get,
+        _ctp.CThostFtdcInputQuoteField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcInputQuoteField_reserve2_get, _ctp.CThostFtdcInputQuoteField_reserve2_set
+        _ctp.CThostFtdcInputQuoteField_reserve2_get,
+        _ctp.CThostFtdcInputQuoteField_reserve2_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcInputQuoteField_MacAddress_get, _ctp.CThostFtdcInputQuoteField_MacAddress_set
+        _ctp.CThostFtdcInputQuoteField_MacAddress_get,
+        _ctp.CThostFtdcInputQuoteField_MacAddress_set,
     )
     InstrumentID = property(
         _ctp.CThostFtdcInputQuoteField_InstrumentID_get,
         _ctp.CThostFtdcInputQuoteField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcInputQuoteField_IPAddress_get, _ctp.CThostFtdcInputQuoteField_IPAddress_set
+        _ctp.CThostFtdcInputQuoteField_IPAddress_get,
+        _ctp.CThostFtdcInputQuoteField_IPAddress_set,
     )
     ReplaceSysID = property(
         _ctp.CThostFtdcInputQuoteField_ReplaceSysID_get,
@@ -2280,7 +2459,8 @@ class CThostFtdcInputQuoteField:
         _ctp.CThostFtdcInputQuoteField_TimeCondition_set,
     )
     OrderMemo = property(
-        _ctp.CThostFtdcInputQuoteField_OrderMemo_get, _ctp.CThostFtdcInputQuoteField_OrderMemo_set
+        _ctp.CThostFtdcInputQuoteField_OrderMemo_get,
+        _ctp.CThostFtdcInputQuoteField_OrderMemo_set,
     )
     SessionReqSeq = property(
         _ctp.CThostFtdcInputQuoteField_SessionReqSeq_get,
@@ -2288,7 +2468,9 @@ class CThostFtdcInputQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputQuoteField_swiginit(self, _ctp.new_CThostFtdcInputQuoteField())
+        _ctp.CThostFtdcInputQuoteField_swiginit(
+            self, _ctp.new_CThostFtdcInputQuoteField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputQuoteField
 
@@ -2299,7 +2481,7 @@ _ctp.CThostFtdcInputQuoteField_swigregister(CThostFtdcInputQuoteField)
 
 class CThostFtdcInputQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2397,14 +2579,15 @@ _ctp.CThostFtdcInputQuoteActionField_swigregister(CThostFtdcInputQuoteActionFiel
 
 class CThostFtdcQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
         _ctp.CThostFtdcQuoteField_BrokerID_get, _ctp.CThostFtdcQuoteField_BrokerID_set
     )
     InvestorID = property(
-        _ctp.CThostFtdcQuoteField_InvestorID_get, _ctp.CThostFtdcQuoteField_InvestorID_set
+        _ctp.CThostFtdcQuoteField_InvestorID_get,
+        _ctp.CThostFtdcQuoteField_InvestorID_set,
     )
     reserve1 = property(
         _ctp.CThostFtdcQuoteField_reserve1_get, _ctp.CThostFtdcQuoteField_reserve1_set
@@ -2412,7 +2595,9 @@ class CThostFtdcQuoteField:
     QuoteRef = property(
         _ctp.CThostFtdcQuoteField_QuoteRef_get, _ctp.CThostFtdcQuoteField_QuoteRef_set
     )
-    UserID = property(_ctp.CThostFtdcQuoteField_UserID_get, _ctp.CThostFtdcQuoteField_UserID_set)
+    UserID = property(
+        _ctp.CThostFtdcQuoteField_UserID_get, _ctp.CThostFtdcQuoteField_UserID_set
+    )
     AskPrice = property(
         _ctp.CThostFtdcQuoteField_AskPrice_get, _ctp.CThostFtdcQuoteField_AskPrice_set
     )
@@ -2429,28 +2614,36 @@ class CThostFtdcQuoteField:
         _ctp.CThostFtdcQuoteField_RequestID_get, _ctp.CThostFtdcQuoteField_RequestID_set
     )
     BusinessUnit = property(
-        _ctp.CThostFtdcQuoteField_BusinessUnit_get, _ctp.CThostFtdcQuoteField_BusinessUnit_set
+        _ctp.CThostFtdcQuoteField_BusinessUnit_get,
+        _ctp.CThostFtdcQuoteField_BusinessUnit_set,
     )
     AskOffsetFlag = property(
-        _ctp.CThostFtdcQuoteField_AskOffsetFlag_get, _ctp.CThostFtdcQuoteField_AskOffsetFlag_set
+        _ctp.CThostFtdcQuoteField_AskOffsetFlag_get,
+        _ctp.CThostFtdcQuoteField_AskOffsetFlag_set,
     )
     BidOffsetFlag = property(
-        _ctp.CThostFtdcQuoteField_BidOffsetFlag_get, _ctp.CThostFtdcQuoteField_BidOffsetFlag_set
+        _ctp.CThostFtdcQuoteField_BidOffsetFlag_get,
+        _ctp.CThostFtdcQuoteField_BidOffsetFlag_set,
     )
     AskHedgeFlag = property(
-        _ctp.CThostFtdcQuoteField_AskHedgeFlag_get, _ctp.CThostFtdcQuoteField_AskHedgeFlag_set
+        _ctp.CThostFtdcQuoteField_AskHedgeFlag_get,
+        _ctp.CThostFtdcQuoteField_AskHedgeFlag_set,
     )
     BidHedgeFlag = property(
-        _ctp.CThostFtdcQuoteField_BidHedgeFlag_get, _ctp.CThostFtdcQuoteField_BidHedgeFlag_set
+        _ctp.CThostFtdcQuoteField_BidHedgeFlag_get,
+        _ctp.CThostFtdcQuoteField_BidHedgeFlag_set,
     )
     QuoteLocalID = property(
-        _ctp.CThostFtdcQuoteField_QuoteLocalID_get, _ctp.CThostFtdcQuoteField_QuoteLocalID_set
+        _ctp.CThostFtdcQuoteField_QuoteLocalID_get,
+        _ctp.CThostFtdcQuoteField_QuoteLocalID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcQuoteField_ExchangeID_get, _ctp.CThostFtdcQuoteField_ExchangeID_set
+        _ctp.CThostFtdcQuoteField_ExchangeID_get,
+        _ctp.CThostFtdcQuoteField_ExchangeID_set,
     )
     ParticipantID = property(
-        _ctp.CThostFtdcQuoteField_ParticipantID_get, _ctp.CThostFtdcQuoteField_ParticipantID_set
+        _ctp.CThostFtdcQuoteField_ParticipantID_get,
+        _ctp.CThostFtdcQuoteField_ParticipantID_set,
     )
     ClientID = property(
         _ctp.CThostFtdcQuoteField_ClientID_get, _ctp.CThostFtdcQuoteField_ClientID_set
@@ -2465,108 +2658,136 @@ class CThostFtdcQuoteField:
         _ctp.CThostFtdcQuoteField_InstallID_get, _ctp.CThostFtdcQuoteField_InstallID_set
     )
     NotifySequence = property(
-        _ctp.CThostFtdcQuoteField_NotifySequence_get, _ctp.CThostFtdcQuoteField_NotifySequence_set
+        _ctp.CThostFtdcQuoteField_NotifySequence_get,
+        _ctp.CThostFtdcQuoteField_NotifySequence_set,
     )
     OrderSubmitStatus = property(
         _ctp.CThostFtdcQuoteField_OrderSubmitStatus_get,
         _ctp.CThostFtdcQuoteField_OrderSubmitStatus_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcQuoteField_TradingDay_get, _ctp.CThostFtdcQuoteField_TradingDay_set
+        _ctp.CThostFtdcQuoteField_TradingDay_get,
+        _ctp.CThostFtdcQuoteField_TradingDay_set,
     )
     SettlementID = property(
-        _ctp.CThostFtdcQuoteField_SettlementID_get, _ctp.CThostFtdcQuoteField_SettlementID_set
+        _ctp.CThostFtdcQuoteField_SettlementID_get,
+        _ctp.CThostFtdcQuoteField_SettlementID_set,
     )
     QuoteSysID = property(
-        _ctp.CThostFtdcQuoteField_QuoteSysID_get, _ctp.CThostFtdcQuoteField_QuoteSysID_set
+        _ctp.CThostFtdcQuoteField_QuoteSysID_get,
+        _ctp.CThostFtdcQuoteField_QuoteSysID_set,
     )
     InsertDate = property(
-        _ctp.CThostFtdcQuoteField_InsertDate_get, _ctp.CThostFtdcQuoteField_InsertDate_set
+        _ctp.CThostFtdcQuoteField_InsertDate_get,
+        _ctp.CThostFtdcQuoteField_InsertDate_set,
     )
     InsertTime = property(
-        _ctp.CThostFtdcQuoteField_InsertTime_get, _ctp.CThostFtdcQuoteField_InsertTime_set
+        _ctp.CThostFtdcQuoteField_InsertTime_get,
+        _ctp.CThostFtdcQuoteField_InsertTime_set,
     )
     CancelTime = property(
-        _ctp.CThostFtdcQuoteField_CancelTime_get, _ctp.CThostFtdcQuoteField_CancelTime_set
+        _ctp.CThostFtdcQuoteField_CancelTime_get,
+        _ctp.CThostFtdcQuoteField_CancelTime_set,
     )
     QuoteStatus = property(
-        _ctp.CThostFtdcQuoteField_QuoteStatus_get, _ctp.CThostFtdcQuoteField_QuoteStatus_set
+        _ctp.CThostFtdcQuoteField_QuoteStatus_get,
+        _ctp.CThostFtdcQuoteField_QuoteStatus_set,
     )
     ClearingPartID = property(
-        _ctp.CThostFtdcQuoteField_ClearingPartID_get, _ctp.CThostFtdcQuoteField_ClearingPartID_set
+        _ctp.CThostFtdcQuoteField_ClearingPartID_get,
+        _ctp.CThostFtdcQuoteField_ClearingPartID_set,
     )
     SequenceNo = property(
-        _ctp.CThostFtdcQuoteField_SequenceNo_get, _ctp.CThostFtdcQuoteField_SequenceNo_set
+        _ctp.CThostFtdcQuoteField_SequenceNo_get,
+        _ctp.CThostFtdcQuoteField_SequenceNo_set,
     )
     AskOrderSysID = property(
-        _ctp.CThostFtdcQuoteField_AskOrderSysID_get, _ctp.CThostFtdcQuoteField_AskOrderSysID_set
+        _ctp.CThostFtdcQuoteField_AskOrderSysID_get,
+        _ctp.CThostFtdcQuoteField_AskOrderSysID_set,
     )
     BidOrderSysID = property(
-        _ctp.CThostFtdcQuoteField_BidOrderSysID_get, _ctp.CThostFtdcQuoteField_BidOrderSysID_set
+        _ctp.CThostFtdcQuoteField_BidOrderSysID_get,
+        _ctp.CThostFtdcQuoteField_BidOrderSysID_set,
     )
-    FrontID = property(_ctp.CThostFtdcQuoteField_FrontID_get, _ctp.CThostFtdcQuoteField_FrontID_set)
+    FrontID = property(
+        _ctp.CThostFtdcQuoteField_FrontID_get, _ctp.CThostFtdcQuoteField_FrontID_set
+    )
     SessionID = property(
         _ctp.CThostFtdcQuoteField_SessionID_get, _ctp.CThostFtdcQuoteField_SessionID_set
     )
     UserProductInfo = property(
-        _ctp.CThostFtdcQuoteField_UserProductInfo_get, _ctp.CThostFtdcQuoteField_UserProductInfo_set
+        _ctp.CThostFtdcQuoteField_UserProductInfo_get,
+        _ctp.CThostFtdcQuoteField_UserProductInfo_set,
     )
     StatusMsg = property(
         _ctp.CThostFtdcQuoteField_StatusMsg_get, _ctp.CThostFtdcQuoteField_StatusMsg_set
     )
     ActiveUserID = property(
-        _ctp.CThostFtdcQuoteField_ActiveUserID_get, _ctp.CThostFtdcQuoteField_ActiveUserID_set
+        _ctp.CThostFtdcQuoteField_ActiveUserID_get,
+        _ctp.CThostFtdcQuoteField_ActiveUserID_set,
     )
     BrokerQuoteSeq = property(
-        _ctp.CThostFtdcQuoteField_BrokerQuoteSeq_get, _ctp.CThostFtdcQuoteField_BrokerQuoteSeq_set
+        _ctp.CThostFtdcQuoteField_BrokerQuoteSeq_get,
+        _ctp.CThostFtdcQuoteField_BrokerQuoteSeq_set,
     )
     AskOrderRef = property(
-        _ctp.CThostFtdcQuoteField_AskOrderRef_get, _ctp.CThostFtdcQuoteField_AskOrderRef_set
+        _ctp.CThostFtdcQuoteField_AskOrderRef_get,
+        _ctp.CThostFtdcQuoteField_AskOrderRef_set,
     )
     BidOrderRef = property(
-        _ctp.CThostFtdcQuoteField_BidOrderRef_get, _ctp.CThostFtdcQuoteField_BidOrderRef_set
+        _ctp.CThostFtdcQuoteField_BidOrderRef_get,
+        _ctp.CThostFtdcQuoteField_BidOrderRef_set,
     )
     ForQuoteSysID = property(
-        _ctp.CThostFtdcQuoteField_ForQuoteSysID_get, _ctp.CThostFtdcQuoteField_ForQuoteSysID_set
+        _ctp.CThostFtdcQuoteField_ForQuoteSysID_get,
+        _ctp.CThostFtdcQuoteField_ForQuoteSysID_set,
     )
     BranchID = property(
         _ctp.CThostFtdcQuoteField_BranchID_get, _ctp.CThostFtdcQuoteField_BranchID_set
     )
     InvestUnitID = property(
-        _ctp.CThostFtdcQuoteField_InvestUnitID_get, _ctp.CThostFtdcQuoteField_InvestUnitID_set
+        _ctp.CThostFtdcQuoteField_InvestUnitID_get,
+        _ctp.CThostFtdcQuoteField_InvestUnitID_set,
     )
     AccountID = property(
         _ctp.CThostFtdcQuoteField_AccountID_get, _ctp.CThostFtdcQuoteField_AccountID_set
     )
     CurrencyID = property(
-        _ctp.CThostFtdcQuoteField_CurrencyID_get, _ctp.CThostFtdcQuoteField_CurrencyID_set
+        _ctp.CThostFtdcQuoteField_CurrencyID_get,
+        _ctp.CThostFtdcQuoteField_CurrencyID_set,
     )
     reserve3 = property(
         _ctp.CThostFtdcQuoteField_reserve3_get, _ctp.CThostFtdcQuoteField_reserve3_set
     )
     MacAddress = property(
-        _ctp.CThostFtdcQuoteField_MacAddress_get, _ctp.CThostFtdcQuoteField_MacAddress_set
+        _ctp.CThostFtdcQuoteField_MacAddress_get,
+        _ctp.CThostFtdcQuoteField_MacAddress_set,
     )
     InstrumentID = property(
-        _ctp.CThostFtdcQuoteField_InstrumentID_get, _ctp.CThostFtdcQuoteField_InstrumentID_set
+        _ctp.CThostFtdcQuoteField_InstrumentID_get,
+        _ctp.CThostFtdcQuoteField_InstrumentID_set,
     )
     ExchangeInstID = property(
-        _ctp.CThostFtdcQuoteField_ExchangeInstID_get, _ctp.CThostFtdcQuoteField_ExchangeInstID_set
+        _ctp.CThostFtdcQuoteField_ExchangeInstID_get,
+        _ctp.CThostFtdcQuoteField_ExchangeInstID_set,
     )
     IPAddress = property(
         _ctp.CThostFtdcQuoteField_IPAddress_get, _ctp.CThostFtdcQuoteField_IPAddress_set
     )
     ReplaceSysID = property(
-        _ctp.CThostFtdcQuoteField_ReplaceSysID_get, _ctp.CThostFtdcQuoteField_ReplaceSysID_set
+        _ctp.CThostFtdcQuoteField_ReplaceSysID_get,
+        _ctp.CThostFtdcQuoteField_ReplaceSysID_set,
     )
     TimeCondition = property(
-        _ctp.CThostFtdcQuoteField_TimeCondition_get, _ctp.CThostFtdcQuoteField_TimeCondition_set
+        _ctp.CThostFtdcQuoteField_TimeCondition_get,
+        _ctp.CThostFtdcQuoteField_TimeCondition_set,
     )
     OrderMemo = property(
         _ctp.CThostFtdcQuoteField_OrderMemo_get, _ctp.CThostFtdcQuoteField_OrderMemo_set
     )
     SessionReqSeq = property(
-        _ctp.CThostFtdcQuoteField_SessionReqSeq_get, _ctp.CThostFtdcQuoteField_SessionReqSeq_set
+        _ctp.CThostFtdcQuoteField_SessionReqSeq_get,
+        _ctp.CThostFtdcQuoteField_SessionReqSeq_set,
     )
 
     def __init__(self) -> None:
@@ -2581,11 +2802,12 @@ _ctp.CThostFtdcQuoteField_swigregister(CThostFtdcQuoteField)
 
 class CThostFtdcQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcQuoteActionField_BrokerID_get, _ctp.CThostFtdcQuoteActionField_BrokerID_set
+        _ctp.CThostFtdcQuoteActionField_BrokerID_get,
+        _ctp.CThostFtdcQuoteActionField_BrokerID_set,
     )
     InvestorID = property(
         _ctp.CThostFtdcQuoteActionField_InvestorID_get,
@@ -2596,16 +2818,20 @@ class CThostFtdcQuoteActionField:
         _ctp.CThostFtdcQuoteActionField_QuoteActionRef_set,
     )
     QuoteRef = property(
-        _ctp.CThostFtdcQuoteActionField_QuoteRef_get, _ctp.CThostFtdcQuoteActionField_QuoteRef_set
+        _ctp.CThostFtdcQuoteActionField_QuoteRef_get,
+        _ctp.CThostFtdcQuoteActionField_QuoteRef_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcQuoteActionField_RequestID_get, _ctp.CThostFtdcQuoteActionField_RequestID_set
+        _ctp.CThostFtdcQuoteActionField_RequestID_get,
+        _ctp.CThostFtdcQuoteActionField_RequestID_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcQuoteActionField_FrontID_get, _ctp.CThostFtdcQuoteActionField_FrontID_set
+        _ctp.CThostFtdcQuoteActionField_FrontID_get,
+        _ctp.CThostFtdcQuoteActionField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcQuoteActionField_SessionID_get, _ctp.CThostFtdcQuoteActionField_SessionID_set
+        _ctp.CThostFtdcQuoteActionField_SessionID_get,
+        _ctp.CThostFtdcQuoteActionField_SessionID_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcQuoteActionField_ExchangeID_get,
@@ -2628,10 +2854,12 @@ class CThostFtdcQuoteActionField:
         _ctp.CThostFtdcQuoteActionField_ActionTime_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcQuoteActionField_TraderID_get, _ctp.CThostFtdcQuoteActionField_TraderID_set
+        _ctp.CThostFtdcQuoteActionField_TraderID_get,
+        _ctp.CThostFtdcQuoteActionField_TraderID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcQuoteActionField_InstallID_get, _ctp.CThostFtdcQuoteActionField_InstallID_set
+        _ctp.CThostFtdcQuoteActionField_InstallID_get,
+        _ctp.CThostFtdcQuoteActionField_InstallID_set,
     )
     QuoteLocalID = property(
         _ctp.CThostFtdcQuoteActionField_QuoteLocalID_get,
@@ -2646,7 +2874,8 @@ class CThostFtdcQuoteActionField:
         _ctp.CThostFtdcQuoteActionField_ParticipantID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcQuoteActionField_ClientID_get, _ctp.CThostFtdcQuoteActionField_ClientID_set
+        _ctp.CThostFtdcQuoteActionField_ClientID_get,
+        _ctp.CThostFtdcQuoteActionField_ClientID_set,
     )
     BusinessUnit = property(
         _ctp.CThostFtdcQuoteActionField_BusinessUnit_get,
@@ -2657,23 +2886,28 @@ class CThostFtdcQuoteActionField:
         _ctp.CThostFtdcQuoteActionField_OrderActionStatus_set,
     )
     UserID = property(
-        _ctp.CThostFtdcQuoteActionField_UserID_get, _ctp.CThostFtdcQuoteActionField_UserID_set
+        _ctp.CThostFtdcQuoteActionField_UserID_get,
+        _ctp.CThostFtdcQuoteActionField_UserID_set,
     )
     StatusMsg = property(
-        _ctp.CThostFtdcQuoteActionField_StatusMsg_get, _ctp.CThostFtdcQuoteActionField_StatusMsg_set
+        _ctp.CThostFtdcQuoteActionField_StatusMsg_get,
+        _ctp.CThostFtdcQuoteActionField_StatusMsg_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcQuoteActionField_reserve1_get, _ctp.CThostFtdcQuoteActionField_reserve1_set
+        _ctp.CThostFtdcQuoteActionField_reserve1_get,
+        _ctp.CThostFtdcQuoteActionField_reserve1_set,
     )
     BranchID = property(
-        _ctp.CThostFtdcQuoteActionField_BranchID_get, _ctp.CThostFtdcQuoteActionField_BranchID_set
+        _ctp.CThostFtdcQuoteActionField_BranchID_get,
+        _ctp.CThostFtdcQuoteActionField_BranchID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcQuoteActionField_InvestUnitID_get,
         _ctp.CThostFtdcQuoteActionField_InvestUnitID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcQuoteActionField_reserve2_get, _ctp.CThostFtdcQuoteActionField_reserve2_set
+        _ctp.CThostFtdcQuoteActionField_reserve2_get,
+        _ctp.CThostFtdcQuoteActionField_reserve2_set,
     )
     MacAddress = property(
         _ctp.CThostFtdcQuoteActionField_MacAddress_get,
@@ -2684,10 +2918,12 @@ class CThostFtdcQuoteActionField:
         _ctp.CThostFtdcQuoteActionField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcQuoteActionField_IPAddress_get, _ctp.CThostFtdcQuoteActionField_IPAddress_set
+        _ctp.CThostFtdcQuoteActionField_IPAddress_get,
+        _ctp.CThostFtdcQuoteActionField_IPAddress_set,
     )
     OrderMemo = property(
-        _ctp.CThostFtdcQuoteActionField_OrderMemo_get, _ctp.CThostFtdcQuoteActionField_OrderMemo_set
+        _ctp.CThostFtdcQuoteActionField_OrderMemo_get,
+        _ctp.CThostFtdcQuoteActionField_OrderMemo_set,
     )
     SessionReqSeq = property(
         _ctp.CThostFtdcQuoteActionField_SessionReqSeq_get,
@@ -2695,7 +2931,9 @@ class CThostFtdcQuoteActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcQuoteActionField_swiginit(self, _ctp.new_CThostFtdcQuoteActionField())
+        _ctp.CThostFtdcQuoteActionField_swiginit(
+            self, _ctp.new_CThostFtdcQuoteActionField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcQuoteActionField
 
@@ -2706,7 +2944,7 @@ _ctp.CThostFtdcQuoteActionField_swigregister(CThostFtdcQuoteActionField)
 
 class CThostFtdcExchangeQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     AskPrice = property(
@@ -2859,7 +3097,9 @@ class CThostFtdcExchangeQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExchangeQuoteField_swiginit(self, _ctp.new_CThostFtdcExchangeQuoteField())
+        _ctp.CThostFtdcExchangeQuoteField_swiginit(
+            self, _ctp.new_CThostFtdcExchangeQuoteField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeQuoteField
 
@@ -2870,7 +3110,7 @@ _ctp.CThostFtdcExchangeQuoteField_swigregister(CThostFtdcExchangeQuoteField)
 
 class CThostFtdcExchangeQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -2956,7 +3196,7 @@ _ctp.CThostFtdcExchangeQuoteActionField_swigregister(CThostFtdcExchangeQuoteActi
 
 class CThostFtdcForQuoteRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -2964,7 +3204,8 @@ class CThostFtdcForQuoteRspField:
         _ctp.CThostFtdcForQuoteRspField_TradingDay_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcForQuoteRspField_reserve1_get, _ctp.CThostFtdcForQuoteRspField_reserve1_set
+        _ctp.CThostFtdcForQuoteRspField_reserve1_get,
+        _ctp.CThostFtdcForQuoteRspField_reserve1_set,
     )
     ForQuoteSysID = property(
         _ctp.CThostFtdcForQuoteRspField_ForQuoteSysID_get,
@@ -2975,7 +3216,8 @@ class CThostFtdcForQuoteRspField:
         _ctp.CThostFtdcForQuoteRspField_ForQuoteTime_set,
     )
     ActionDay = property(
-        _ctp.CThostFtdcForQuoteRspField_ActionDay_get, _ctp.CThostFtdcForQuoteRspField_ActionDay_set
+        _ctp.CThostFtdcForQuoteRspField_ActionDay_get,
+        _ctp.CThostFtdcForQuoteRspField_ActionDay_set,
     )
     ExchangeID = property(
         _ctp.CThostFtdcForQuoteRspField_ExchangeID_get,
@@ -2987,7 +3229,9 @@ class CThostFtdcForQuoteRspField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcForQuoteRspField_swiginit(self, _ctp.new_CThostFtdcForQuoteRspField())
+        _ctp.CThostFtdcForQuoteRspField_swiginit(
+            self, _ctp.new_CThostFtdcForQuoteRspField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcForQuoteRspField
 
@@ -2998,7 +3242,7 @@ _ctp.CThostFtdcForQuoteRspField_swigregister(CThostFtdcForQuoteRspField)
 
 class CThostFtdcInputBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3059,12 +3303,14 @@ class CThostFtdcInputBatchOrderActionField:
 
 
 # Register CThostFtdcInputBatchOrderActionField in _ctp:
-_ctp.CThostFtdcInputBatchOrderActionField_swigregister(CThostFtdcInputBatchOrderActionField)
+_ctp.CThostFtdcInputBatchOrderActionField_swigregister(
+    CThostFtdcInputBatchOrderActionField
+)
 
 
 class CThostFtdcBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3170,7 +3416,7 @@ _ctp.CThostFtdcBatchOrderActionField_swigregister(CThostFtdcBatchOrderActionFiel
 
 class CThostFtdcExchangeBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -3239,12 +3485,14 @@ class CThostFtdcExchangeBatchOrderActionField:
 
 
 # Register CThostFtdcExchangeBatchOrderActionField in _ctp:
-_ctp.CThostFtdcExchangeBatchOrderActionField_swigregister(CThostFtdcExchangeBatchOrderActionField)
+_ctp.CThostFtdcExchangeBatchOrderActionField_swigregister(
+    CThostFtdcExchangeBatchOrderActionField
+)
 
 
 class CThostFtdcInputCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3330,60 +3578,72 @@ _ctp.CThostFtdcInputCombActionField_swigregister(CThostFtdcInputCombActionField)
 
 class CThostFtdcCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcCombActionField_BrokerID_get, _ctp.CThostFtdcCombActionField_BrokerID_set
+        _ctp.CThostFtdcCombActionField_BrokerID_get,
+        _ctp.CThostFtdcCombActionField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcCombActionField_InvestorID_get, _ctp.CThostFtdcCombActionField_InvestorID_set
+        _ctp.CThostFtdcCombActionField_InvestorID_get,
+        _ctp.CThostFtdcCombActionField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcCombActionField_reserve1_get, _ctp.CThostFtdcCombActionField_reserve1_set
+        _ctp.CThostFtdcCombActionField_reserve1_get,
+        _ctp.CThostFtdcCombActionField_reserve1_set,
     )
     CombActionRef = property(
         _ctp.CThostFtdcCombActionField_CombActionRef_get,
         _ctp.CThostFtdcCombActionField_CombActionRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcCombActionField_UserID_get, _ctp.CThostFtdcCombActionField_UserID_set
+        _ctp.CThostFtdcCombActionField_UserID_get,
+        _ctp.CThostFtdcCombActionField_UserID_set,
     )
     Direction = property(
-        _ctp.CThostFtdcCombActionField_Direction_get, _ctp.CThostFtdcCombActionField_Direction_set
+        _ctp.CThostFtdcCombActionField_Direction_get,
+        _ctp.CThostFtdcCombActionField_Direction_set,
     )
     Volume = property(
-        _ctp.CThostFtdcCombActionField_Volume_get, _ctp.CThostFtdcCombActionField_Volume_set
+        _ctp.CThostFtdcCombActionField_Volume_get,
+        _ctp.CThostFtdcCombActionField_Volume_set,
     )
     CombDirection = property(
         _ctp.CThostFtdcCombActionField_CombDirection_get,
         _ctp.CThostFtdcCombActionField_CombDirection_set,
     )
     HedgeFlag = property(
-        _ctp.CThostFtdcCombActionField_HedgeFlag_get, _ctp.CThostFtdcCombActionField_HedgeFlag_set
+        _ctp.CThostFtdcCombActionField_HedgeFlag_get,
+        _ctp.CThostFtdcCombActionField_HedgeFlag_set,
     )
     ActionLocalID = property(
         _ctp.CThostFtdcCombActionField_ActionLocalID_get,
         _ctp.CThostFtdcCombActionField_ActionLocalID_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcCombActionField_ExchangeID_get, _ctp.CThostFtdcCombActionField_ExchangeID_set
+        _ctp.CThostFtdcCombActionField_ExchangeID_get,
+        _ctp.CThostFtdcCombActionField_ExchangeID_set,
     )
     ParticipantID = property(
         _ctp.CThostFtdcCombActionField_ParticipantID_get,
         _ctp.CThostFtdcCombActionField_ParticipantID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcCombActionField_ClientID_get, _ctp.CThostFtdcCombActionField_ClientID_set
+        _ctp.CThostFtdcCombActionField_ClientID_get,
+        _ctp.CThostFtdcCombActionField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcCombActionField_reserve2_get, _ctp.CThostFtdcCombActionField_reserve2_set
+        _ctp.CThostFtdcCombActionField_reserve2_get,
+        _ctp.CThostFtdcCombActionField_reserve2_set,
     )
     TraderID = property(
-        _ctp.CThostFtdcCombActionField_TraderID_get, _ctp.CThostFtdcCombActionField_TraderID_set
+        _ctp.CThostFtdcCombActionField_TraderID_get,
+        _ctp.CThostFtdcCombActionField_TraderID_set,
     )
     InstallID = property(
-        _ctp.CThostFtdcCombActionField_InstallID_get, _ctp.CThostFtdcCombActionField_InstallID_set
+        _ctp.CThostFtdcCombActionField_InstallID_get,
+        _ctp.CThostFtdcCombActionField_InstallID_set,
     )
     ActionStatus = property(
         _ctp.CThostFtdcCombActionField_ActionStatus_get,
@@ -3394,39 +3654,48 @@ class CThostFtdcCombActionField:
         _ctp.CThostFtdcCombActionField_NotifySequence_set,
     )
     TradingDay = property(
-        _ctp.CThostFtdcCombActionField_TradingDay_get, _ctp.CThostFtdcCombActionField_TradingDay_set
+        _ctp.CThostFtdcCombActionField_TradingDay_get,
+        _ctp.CThostFtdcCombActionField_TradingDay_set,
     )
     SettlementID = property(
         _ctp.CThostFtdcCombActionField_SettlementID_get,
         _ctp.CThostFtdcCombActionField_SettlementID_set,
     )
     SequenceNo = property(
-        _ctp.CThostFtdcCombActionField_SequenceNo_get, _ctp.CThostFtdcCombActionField_SequenceNo_set
+        _ctp.CThostFtdcCombActionField_SequenceNo_get,
+        _ctp.CThostFtdcCombActionField_SequenceNo_set,
     )
     FrontID = property(
-        _ctp.CThostFtdcCombActionField_FrontID_get, _ctp.CThostFtdcCombActionField_FrontID_set
+        _ctp.CThostFtdcCombActionField_FrontID_get,
+        _ctp.CThostFtdcCombActionField_FrontID_set,
     )
     SessionID = property(
-        _ctp.CThostFtdcCombActionField_SessionID_get, _ctp.CThostFtdcCombActionField_SessionID_set
+        _ctp.CThostFtdcCombActionField_SessionID_get,
+        _ctp.CThostFtdcCombActionField_SessionID_set,
     )
     UserProductInfo = property(
         _ctp.CThostFtdcCombActionField_UserProductInfo_get,
         _ctp.CThostFtdcCombActionField_UserProductInfo_set,
     )
     StatusMsg = property(
-        _ctp.CThostFtdcCombActionField_StatusMsg_get, _ctp.CThostFtdcCombActionField_StatusMsg_set
+        _ctp.CThostFtdcCombActionField_StatusMsg_get,
+        _ctp.CThostFtdcCombActionField_StatusMsg_set,
     )
     reserve3 = property(
-        _ctp.CThostFtdcCombActionField_reserve3_get, _ctp.CThostFtdcCombActionField_reserve3_set
+        _ctp.CThostFtdcCombActionField_reserve3_get,
+        _ctp.CThostFtdcCombActionField_reserve3_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcCombActionField_MacAddress_get, _ctp.CThostFtdcCombActionField_MacAddress_set
+        _ctp.CThostFtdcCombActionField_MacAddress_get,
+        _ctp.CThostFtdcCombActionField_MacAddress_set,
     )
     ComTradeID = property(
-        _ctp.CThostFtdcCombActionField_ComTradeID_get, _ctp.CThostFtdcCombActionField_ComTradeID_set
+        _ctp.CThostFtdcCombActionField_ComTradeID_get,
+        _ctp.CThostFtdcCombActionField_ComTradeID_set,
     )
     BranchID = property(
-        _ctp.CThostFtdcCombActionField_BranchID_get, _ctp.CThostFtdcCombActionField_BranchID_set
+        _ctp.CThostFtdcCombActionField_BranchID_get,
+        _ctp.CThostFtdcCombActionField_BranchID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcCombActionField_InvestUnitID_get,
@@ -3441,11 +3710,14 @@ class CThostFtdcCombActionField:
         _ctp.CThostFtdcCombActionField_ExchangeInstID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcCombActionField_IPAddress_get, _ctp.CThostFtdcCombActionField_IPAddress_set
+        _ctp.CThostFtdcCombActionField_IPAddress_get,
+        _ctp.CThostFtdcCombActionField_IPAddress_set,
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcCombActionField_swiginit(self, _ctp.new_CThostFtdcCombActionField())
+        _ctp.CThostFtdcCombActionField_swiginit(
+            self, _ctp.new_CThostFtdcCombActionField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCombActionField
 
@@ -3456,7 +3728,7 @@ _ctp.CThostFtdcCombActionField_swigregister(CThostFtdcCombActionField)
 
 class CThostFtdcExchangeCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     Direction = property(
@@ -3562,7 +3834,7 @@ _ctp.CThostFtdcExchangeCombActionField_swigregister(CThostFtdcExchangeCombAction
 
 class CThostFtdcForQuoteParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3591,7 +3863,9 @@ class CThostFtdcForQuoteParamField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcForQuoteParamField_swiginit(self, _ctp.new_CThostFtdcForQuoteParamField())
+        _ctp.CThostFtdcForQuoteParamField_swiginit(
+            self, _ctp.new_CThostFtdcForQuoteParamField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcForQuoteParamField
 
@@ -3602,7 +3876,7 @@ _ctp.CThostFtdcForQuoteParamField_swigregister(CThostFtdcForQuoteParamField)
 
 class CThostFtdcInputOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3691,12 +3965,14 @@ class CThostFtdcInputOptionSelfCloseField:
 
 
 # Register CThostFtdcInputOptionSelfCloseField in _ctp:
-_ctp.CThostFtdcInputOptionSelfCloseField_swigregister(CThostFtdcInputOptionSelfCloseField)
+_ctp.CThostFtdcInputOptionSelfCloseField_swigregister(
+    CThostFtdcInputOptionSelfCloseField
+)
 
 
 class CThostFtdcInputOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3784,7 +4060,7 @@ _ctp.CThostFtdcInputOptionSelfCloseActionField_swigregister(
 
 class CThostFtdcOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3974,7 +4250,7 @@ _ctp.CThostFtdcOptionSelfCloseField_swigregister(CThostFtdcOptionSelfCloseField)
 
 class CThostFtdcOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4103,12 +4379,14 @@ class CThostFtdcOptionSelfCloseActionField:
 
 
 # Register CThostFtdcOptionSelfCloseActionField in _ctp:
-_ctp.CThostFtdcOptionSelfCloseActionField_swigregister(CThostFtdcOptionSelfCloseActionField)
+_ctp.CThostFtdcOptionSelfCloseActionField_swigregister(
+    CThostFtdcOptionSelfCloseActionField
+)
 
 
 class CThostFtdcExchangeOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     Volume = property(
@@ -4233,12 +4511,14 @@ class CThostFtdcExchangeOptionSelfCloseField:
 
 
 # Register CThostFtdcExchangeOptionSelfCloseField in _ctp:
-_ctp.CThostFtdcExchangeOptionSelfCloseField_swigregister(CThostFtdcExchangeOptionSelfCloseField)
+_ctp.CThostFtdcExchangeOptionSelfCloseField_swigregister(
+    CThostFtdcExchangeOptionSelfCloseField
+)
 
 
 class CThostFtdcExchangeOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4342,31 +4622,36 @@ _ctp.CThostFtdcExchangeOptionSelfCloseActionField_swigregister(
 
 class CThostFtdcParkedOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcParkedOrderField_BrokerID_get, _ctp.CThostFtdcParkedOrderField_BrokerID_set
+        _ctp.CThostFtdcParkedOrderField_BrokerID_get,
+        _ctp.CThostFtdcParkedOrderField_BrokerID_set,
     )
     InvestorID = property(
         _ctp.CThostFtdcParkedOrderField_InvestorID_get,
         _ctp.CThostFtdcParkedOrderField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcParkedOrderField_reserve1_get, _ctp.CThostFtdcParkedOrderField_reserve1_set
+        _ctp.CThostFtdcParkedOrderField_reserve1_get,
+        _ctp.CThostFtdcParkedOrderField_reserve1_set,
     )
     OrderRef = property(
-        _ctp.CThostFtdcParkedOrderField_OrderRef_get, _ctp.CThostFtdcParkedOrderField_OrderRef_set
+        _ctp.CThostFtdcParkedOrderField_OrderRef_get,
+        _ctp.CThostFtdcParkedOrderField_OrderRef_set,
     )
     UserID = property(
-        _ctp.CThostFtdcParkedOrderField_UserID_get, _ctp.CThostFtdcParkedOrderField_UserID_set
+        _ctp.CThostFtdcParkedOrderField_UserID_get,
+        _ctp.CThostFtdcParkedOrderField_UserID_set,
     )
     OrderPriceType = property(
         _ctp.CThostFtdcParkedOrderField_OrderPriceType_get,
         _ctp.CThostFtdcParkedOrderField_OrderPriceType_set,
     )
     Direction = property(
-        _ctp.CThostFtdcParkedOrderField_Direction_get, _ctp.CThostFtdcParkedOrderField_Direction_set
+        _ctp.CThostFtdcParkedOrderField_Direction_get,
+        _ctp.CThostFtdcParkedOrderField_Direction_set,
     )
     CombOffsetFlag = property(
         _ctp.CThostFtdcParkedOrderField_CombOffsetFlag_get,
@@ -4389,21 +4674,24 @@ class CThostFtdcParkedOrderField:
         _ctp.CThostFtdcParkedOrderField_TimeCondition_set,
     )
     GTDDate = property(
-        _ctp.CThostFtdcParkedOrderField_GTDDate_get, _ctp.CThostFtdcParkedOrderField_GTDDate_set
+        _ctp.CThostFtdcParkedOrderField_GTDDate_get,
+        _ctp.CThostFtdcParkedOrderField_GTDDate_set,
     )
     VolumeCondition = property(
         _ctp.CThostFtdcParkedOrderField_VolumeCondition_get,
         _ctp.CThostFtdcParkedOrderField_VolumeCondition_set,
     )
     MinVolume = property(
-        _ctp.CThostFtdcParkedOrderField_MinVolume_get, _ctp.CThostFtdcParkedOrderField_MinVolume_set
+        _ctp.CThostFtdcParkedOrderField_MinVolume_get,
+        _ctp.CThostFtdcParkedOrderField_MinVolume_set,
     )
     ContingentCondition = property(
         _ctp.CThostFtdcParkedOrderField_ContingentCondition_get,
         _ctp.CThostFtdcParkedOrderField_ContingentCondition_set,
     )
     StopPrice = property(
-        _ctp.CThostFtdcParkedOrderField_StopPrice_get, _ctp.CThostFtdcParkedOrderField_StopPrice_set
+        _ctp.CThostFtdcParkedOrderField_StopPrice_get,
+        _ctp.CThostFtdcParkedOrderField_StopPrice_set,
     )
     ForceCloseReason = property(
         _ctp.CThostFtdcParkedOrderField_ForceCloseReason_get,
@@ -4418,7 +4706,8 @@ class CThostFtdcParkedOrderField:
         _ctp.CThostFtdcParkedOrderField_BusinessUnit_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcParkedOrderField_RequestID_get, _ctp.CThostFtdcParkedOrderField_RequestID_set
+        _ctp.CThostFtdcParkedOrderField_RequestID_get,
+        _ctp.CThostFtdcParkedOrderField_RequestID_set,
     )
     UserForceClose = property(
         _ctp.CThostFtdcParkedOrderField_UserForceClose_get,
@@ -4433,37 +4722,44 @@ class CThostFtdcParkedOrderField:
         _ctp.CThostFtdcParkedOrderField_ParkedOrderID_set,
     )
     UserType = property(
-        _ctp.CThostFtdcParkedOrderField_UserType_get, _ctp.CThostFtdcParkedOrderField_UserType_set
+        _ctp.CThostFtdcParkedOrderField_UserType_get,
+        _ctp.CThostFtdcParkedOrderField_UserType_set,
     )
     Status = property(
-        _ctp.CThostFtdcParkedOrderField_Status_get, _ctp.CThostFtdcParkedOrderField_Status_set
+        _ctp.CThostFtdcParkedOrderField_Status_get,
+        _ctp.CThostFtdcParkedOrderField_Status_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcParkedOrderField_ErrorID_get, _ctp.CThostFtdcParkedOrderField_ErrorID_set
+        _ctp.CThostFtdcParkedOrderField_ErrorID_get,
+        _ctp.CThostFtdcParkedOrderField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcParkedOrderField_ErrorMsg_get, _ctp.CThostFtdcParkedOrderField_ErrorMsg_set
+        _ctp.CThostFtdcParkedOrderField_ErrorMsg_get,
+        _ctp.CThostFtdcParkedOrderField_ErrorMsg_set,
     )
     IsSwapOrder = property(
         _ctp.CThostFtdcParkedOrderField_IsSwapOrder_get,
         _ctp.CThostFtdcParkedOrderField_IsSwapOrder_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcParkedOrderField_AccountID_get, _ctp.CThostFtdcParkedOrderField_AccountID_set
+        _ctp.CThostFtdcParkedOrderField_AccountID_get,
+        _ctp.CThostFtdcParkedOrderField_AccountID_set,
     )
     CurrencyID = property(
         _ctp.CThostFtdcParkedOrderField_CurrencyID_get,
         _ctp.CThostFtdcParkedOrderField_CurrencyID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcParkedOrderField_ClientID_get, _ctp.CThostFtdcParkedOrderField_ClientID_set
+        _ctp.CThostFtdcParkedOrderField_ClientID_get,
+        _ctp.CThostFtdcParkedOrderField_ClientID_set,
     )
     InvestUnitID = property(
         _ctp.CThostFtdcParkedOrderField_InvestUnitID_get,
         _ctp.CThostFtdcParkedOrderField_InvestUnitID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcParkedOrderField_reserve2_get, _ctp.CThostFtdcParkedOrderField_reserve2_set
+        _ctp.CThostFtdcParkedOrderField_reserve2_get,
+        _ctp.CThostFtdcParkedOrderField_reserve2_set,
     )
     MacAddress = property(
         _ctp.CThostFtdcParkedOrderField_MacAddress_get,
@@ -4474,11 +4770,14 @@ class CThostFtdcParkedOrderField:
         _ctp.CThostFtdcParkedOrderField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcParkedOrderField_IPAddress_get, _ctp.CThostFtdcParkedOrderField_IPAddress_set
+        _ctp.CThostFtdcParkedOrderField_IPAddress_get,
+        _ctp.CThostFtdcParkedOrderField_IPAddress_set,
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcParkedOrderField_swiginit(self, _ctp.new_CThostFtdcParkedOrderField())
+        _ctp.CThostFtdcParkedOrderField_swiginit(
+            self, _ctp.new_CThostFtdcParkedOrderField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcParkedOrderField
 
@@ -4489,7 +4788,7 @@ _ctp.CThostFtdcParkedOrderField_swigregister(CThostFtdcParkedOrderField)
 
 class CThostFtdcParkedOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4603,7 +4902,7 @@ _ctp.CThostFtdcParkedOrderActionField_swigregister(CThostFtdcParkedOrderActionFi
 
 class CThostFtdcRemoveParkedOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4637,7 +4936,7 @@ _ctp.CThostFtdcRemoveParkedOrderField_swigregister(CThostFtdcRemoveParkedOrderFi
 
 class CThostFtdcRemoveParkedOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4666,25 +4965,31 @@ class CThostFtdcRemoveParkedOrderActionField:
 
 
 # Register CThostFtdcRemoveParkedOrderActionField in _ctp:
-_ctp.CThostFtdcRemoveParkedOrderActionField_swigregister(CThostFtdcRemoveParkedOrderActionField)
+_ctp.CThostFtdcRemoveParkedOrderActionField_swigregister(
+    CThostFtdcRemoveParkedOrderActionField
+)
 
 
 class CThostFtdcErrOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
-        _ctp.CThostFtdcErrOrderField_BrokerID_get, _ctp.CThostFtdcErrOrderField_BrokerID_set
+        _ctp.CThostFtdcErrOrderField_BrokerID_get,
+        _ctp.CThostFtdcErrOrderField_BrokerID_set,
     )
     InvestorID = property(
-        _ctp.CThostFtdcErrOrderField_InvestorID_get, _ctp.CThostFtdcErrOrderField_InvestorID_set
+        _ctp.CThostFtdcErrOrderField_InvestorID_get,
+        _ctp.CThostFtdcErrOrderField_InvestorID_set,
     )
     reserve1 = property(
-        _ctp.CThostFtdcErrOrderField_reserve1_get, _ctp.CThostFtdcErrOrderField_reserve1_set
+        _ctp.CThostFtdcErrOrderField_reserve1_get,
+        _ctp.CThostFtdcErrOrderField_reserve1_set,
     )
     OrderRef = property(
-        _ctp.CThostFtdcErrOrderField_OrderRef_get, _ctp.CThostFtdcErrOrderField_OrderRef_set
+        _ctp.CThostFtdcErrOrderField_OrderRef_get,
+        _ctp.CThostFtdcErrOrderField_OrderRef_set,
     )
     UserID = property(
         _ctp.CThostFtdcErrOrderField_UserID_get, _ctp.CThostFtdcErrOrderField_UserID_set
@@ -4694,7 +4999,8 @@ class CThostFtdcErrOrderField:
         _ctp.CThostFtdcErrOrderField_OrderPriceType_set,
     )
     Direction = property(
-        _ctp.CThostFtdcErrOrderField_Direction_get, _ctp.CThostFtdcErrOrderField_Direction_set
+        _ctp.CThostFtdcErrOrderField_Direction_get,
+        _ctp.CThostFtdcErrOrderField_Direction_set,
     )
     CombOffsetFlag = property(
         _ctp.CThostFtdcErrOrderField_CombOffsetFlag_get,
@@ -4705,7 +5011,8 @@ class CThostFtdcErrOrderField:
         _ctp.CThostFtdcErrOrderField_CombHedgeFlag_set,
     )
     LimitPrice = property(
-        _ctp.CThostFtdcErrOrderField_LimitPrice_get, _ctp.CThostFtdcErrOrderField_LimitPrice_set
+        _ctp.CThostFtdcErrOrderField_LimitPrice_get,
+        _ctp.CThostFtdcErrOrderField_LimitPrice_set,
     )
     VolumeTotalOriginal = property(
         _ctp.CThostFtdcErrOrderField_VolumeTotalOriginal_get,
@@ -4716,21 +5023,24 @@ class CThostFtdcErrOrderField:
         _ctp.CThostFtdcErrOrderField_TimeCondition_set,
     )
     GTDDate = property(
-        _ctp.CThostFtdcErrOrderField_GTDDate_get, _ctp.CThostFtdcErrOrderField_GTDDate_set
+        _ctp.CThostFtdcErrOrderField_GTDDate_get,
+        _ctp.CThostFtdcErrOrderField_GTDDate_set,
     )
     VolumeCondition = property(
         _ctp.CThostFtdcErrOrderField_VolumeCondition_get,
         _ctp.CThostFtdcErrOrderField_VolumeCondition_set,
     )
     MinVolume = property(
-        _ctp.CThostFtdcErrOrderField_MinVolume_get, _ctp.CThostFtdcErrOrderField_MinVolume_set
+        _ctp.CThostFtdcErrOrderField_MinVolume_get,
+        _ctp.CThostFtdcErrOrderField_MinVolume_set,
     )
     ContingentCondition = property(
         _ctp.CThostFtdcErrOrderField_ContingentCondition_get,
         _ctp.CThostFtdcErrOrderField_ContingentCondition_set,
     )
     StopPrice = property(
-        _ctp.CThostFtdcErrOrderField_StopPrice_get, _ctp.CThostFtdcErrOrderField_StopPrice_set
+        _ctp.CThostFtdcErrOrderField_StopPrice_get,
+        _ctp.CThostFtdcErrOrderField_StopPrice_set,
     )
     ForceCloseReason = property(
         _ctp.CThostFtdcErrOrderField_ForceCloseReason_get,
@@ -4741,53 +5051,68 @@ class CThostFtdcErrOrderField:
         _ctp.CThostFtdcErrOrderField_IsAutoSuspend_set,
     )
     BusinessUnit = property(
-        _ctp.CThostFtdcErrOrderField_BusinessUnit_get, _ctp.CThostFtdcErrOrderField_BusinessUnit_set
+        _ctp.CThostFtdcErrOrderField_BusinessUnit_get,
+        _ctp.CThostFtdcErrOrderField_BusinessUnit_set,
     )
     RequestID = property(
-        _ctp.CThostFtdcErrOrderField_RequestID_get, _ctp.CThostFtdcErrOrderField_RequestID_set
+        _ctp.CThostFtdcErrOrderField_RequestID_get,
+        _ctp.CThostFtdcErrOrderField_RequestID_set,
     )
     UserForceClose = property(
         _ctp.CThostFtdcErrOrderField_UserForceClose_get,
         _ctp.CThostFtdcErrOrderField_UserForceClose_set,
     )
     ErrorID = property(
-        _ctp.CThostFtdcErrOrderField_ErrorID_get, _ctp.CThostFtdcErrOrderField_ErrorID_set
+        _ctp.CThostFtdcErrOrderField_ErrorID_get,
+        _ctp.CThostFtdcErrOrderField_ErrorID_set,
     )
     ErrorMsg = property(
-        _ctp.CThostFtdcErrOrderField_ErrorMsg_get, _ctp.CThostFtdcErrOrderField_ErrorMsg_set
+        _ctp.CThostFtdcErrOrderField_ErrorMsg_get,
+        _ctp.CThostFtdcErrOrderField_ErrorMsg_set,
     )
     IsSwapOrder = property(
-        _ctp.CThostFtdcErrOrderField_IsSwapOrder_get, _ctp.CThostFtdcErrOrderField_IsSwapOrder_set
+        _ctp.CThostFtdcErrOrderField_IsSwapOrder_get,
+        _ctp.CThostFtdcErrOrderField_IsSwapOrder_set,
     )
     ExchangeID = property(
-        _ctp.CThostFtdcErrOrderField_ExchangeID_get, _ctp.CThostFtdcErrOrderField_ExchangeID_set
+        _ctp.CThostFtdcErrOrderField_ExchangeID_get,
+        _ctp.CThostFtdcErrOrderField_ExchangeID_set,
     )
     InvestUnitID = property(
-        _ctp.CThostFtdcErrOrderField_InvestUnitID_get, _ctp.CThostFtdcErrOrderField_InvestUnitID_set
+        _ctp.CThostFtdcErrOrderField_InvestUnitID_get,
+        _ctp.CThostFtdcErrOrderField_InvestUnitID_set,
     )
     AccountID = property(
-        _ctp.CThostFtdcErrOrderField_AccountID_get, _ctp.CThostFtdcErrOrderField_AccountID_set
+        _ctp.CThostFtdcErrOrderField_AccountID_get,
+        _ctp.CThostFtdcErrOrderField_AccountID_set,
     )
     CurrencyID = property(
-        _ctp.CThostFtdcErrOrderField_CurrencyID_get, _ctp.CThostFtdcErrOrderField_CurrencyID_set
+        _ctp.CThostFtdcErrOrderField_CurrencyID_get,
+        _ctp.CThostFtdcErrOrderField_CurrencyID_set,
     )
     ClientID = property(
-        _ctp.CThostFtdcErrOrderField_ClientID_get, _ctp.CThostFtdcErrOrderField_ClientID_set
+        _ctp.CThostFtdcErrOrderField_ClientID_get,
+        _ctp.CThostFtdcErrOrderField_ClientID_set,
     )
     reserve2 = property(
-        _ctp.CThostFtdcErrOrderField_reserve2_get, _ctp.CThostFtdcErrOrderField_reserve2_set
+        _ctp.CThostFtdcErrOrderField_reserve2_get,
+        _ctp.CThostFtdcErrOrderField_reserve2_set,
     )
     MacAddress = property(
-        _ctp.CThostFtdcErrOrderField_MacAddress_get, _ctp.CThostFtdcErrOrderField_MacAddress_set
+        _ctp.CThostFtdcErrOrderField_MacAddress_get,
+        _ctp.CThostFtdcErrOrderField_MacAddress_set,
     )
     InstrumentID = property(
-        _ctp.CThostFtdcErrOrderField_InstrumentID_get, _ctp.CThostFtdcErrOrderField_InstrumentID_set
+        _ctp.CThostFtdcErrOrderField_InstrumentID_get,
+        _ctp.CThostFtdcErrOrderField_InstrumentID_set,
     )
     IPAddress = property(
-        _ctp.CThostFtdcErrOrderField_IPAddress_get, _ctp.CThostFtdcErrOrderField_IPAddress_set
+        _ctp.CThostFtdcErrOrderField_IPAddress_get,
+        _ctp.CThostFtdcErrOrderField_IPAddress_set,
     )
     OrderMemo = property(
-        _ctp.CThostFtdcErrOrderField_OrderMemo_get, _ctp.CThostFtdcErrOrderField_OrderMemo_set
+        _ctp.CThostFtdcErrOrderField_OrderMemo_get,
+        _ctp.CThostFtdcErrOrderField_OrderMemo_set,
     )
     SessionReqSeq = property(
         _ctp.CThostFtdcErrOrderField_SessionReqSeq_get,
@@ -4806,7 +5131,7 @@ _ctp.CThostFtdcErrOrderField_swigregister(CThostFtdcErrOrderField)
 
 class CThostFtdcErrorConditionalOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -5091,12 +5416,14 @@ class CThostFtdcErrorConditionalOrderField:
 
 
 # Register CThostFtdcErrorConditionalOrderField in _ctp:
-_ctp.CThostFtdcErrorConditionalOrderField_swigregister(CThostFtdcErrorConditionalOrderField)
+_ctp.CThostFtdcErrorConditionalOrderField_swigregister(
+    CThostFtdcErrorConditionalOrderField
+)
 
 
 class CThostFtdcErrOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -5188,7 +5515,8 @@ class CThostFtdcErrOrderActionField:
         _ctp.CThostFtdcErrOrderActionField_OrderActionStatus_set,
     )
     UserID = property(
-        _ctp.CThostFtdcErrOrderActionField_UserID_get, _ctp.CThostFtdcErrOrderActionField_UserID_set
+        _ctp.CThostFtdcErrOrderActionField_UserID_get,
+        _ctp.CThostFtdcErrOrderActionField_UserID_set,
     )
     StatusMsg = property(
         _ctp.CThostFtdcErrOrderActionField_StatusMsg_get,
@@ -5240,7 +5568,9 @@ class CThostFtdcErrOrderActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcErrOrderActionField_swiginit(self, _ctp.new_CThostFtdcErrOrderActionField())
+        _ctp.CThostFtdcErrOrderActionField_swiginit(
+            self, _ctp.new_CThostFtdcErrOrderActionField()
+        )
 
     __swig_destroy__ = _ctp.delete_CThostFtdcErrOrderActionField
 
@@ -5249,50 +5579,50 @@ class CThostFtdcErrOrderActionField:
 _ctp.CThostFtdcErrOrderActionField_swigregister(CThostFtdcErrOrderActionField)
 
 __all__ = [
-    "CThostFtdcInputOrderField",
-    "CThostFtdcOrderField",
-    "CThostFtdcExchangeOrderField",
-    "CThostFtdcExchangeOrderInsertErrorField",
-    "CThostFtdcInputOrderActionField",
-    "CThostFtdcOrderActionField",
-    "CThostFtdcExchangeOrderActionField",
-    "CThostFtdcExchangeOrderActionErrorField",
-    "CThostFtdcInputExecOrderField",
-    "CThostFtdcInputExecOrderActionField",
-    "CThostFtdcExecOrderField",
-    "CThostFtdcExecOrderActionField",
-    "CThostFtdcExchangeExecOrderField",
-    "CThostFtdcExchangeExecOrderActionField",
-    "CThostFtdcErrExecOrderField",
-    "CThostFtdcErrExecOrderActionField",
-    "CThostFtdcInputForQuoteField",
-    "CThostFtdcForQuoteField",
-    "CThostFtdcExchangeForQuoteField",
-    "CThostFtdcInputQuoteField",
-    "CThostFtdcInputQuoteActionField",
-    "CThostFtdcQuoteField",
-    "CThostFtdcQuoteActionField",
-    "CThostFtdcExchangeQuoteField",
-    "CThostFtdcExchangeQuoteActionField",
-    "CThostFtdcForQuoteRspField",
-    "CThostFtdcInputBatchOrderActionField",
-    "CThostFtdcBatchOrderActionField",
-    "CThostFtdcExchangeBatchOrderActionField",
-    "CThostFtdcInputCombActionField",
-    "CThostFtdcCombActionField",
-    "CThostFtdcExchangeCombActionField",
-    "CThostFtdcForQuoteParamField",
-    "CThostFtdcInputOptionSelfCloseField",
-    "CThostFtdcInputOptionSelfCloseActionField",
-    "CThostFtdcOptionSelfCloseField",
-    "CThostFtdcOptionSelfCloseActionField",
-    "CThostFtdcExchangeOptionSelfCloseField",
-    "CThostFtdcExchangeOptionSelfCloseActionField",
-    "CThostFtdcParkedOrderField",
-    "CThostFtdcParkedOrderActionField",
-    "CThostFtdcRemoveParkedOrderField",
-    "CThostFtdcRemoveParkedOrderActionField",
-    "CThostFtdcErrOrderField",
-    "CThostFtdcErrorConditionalOrderField",
-    "CThostFtdcErrOrderActionField",
+    'CThostFtdcInputOrderField',
+    'CThostFtdcOrderField',
+    'CThostFtdcExchangeOrderField',
+    'CThostFtdcExchangeOrderInsertErrorField',
+    'CThostFtdcInputOrderActionField',
+    'CThostFtdcOrderActionField',
+    'CThostFtdcExchangeOrderActionField',
+    'CThostFtdcExchangeOrderActionErrorField',
+    'CThostFtdcInputExecOrderField',
+    'CThostFtdcInputExecOrderActionField',
+    'CThostFtdcExecOrderField',
+    'CThostFtdcExecOrderActionField',
+    'CThostFtdcExchangeExecOrderField',
+    'CThostFtdcExchangeExecOrderActionField',
+    'CThostFtdcErrExecOrderField',
+    'CThostFtdcErrExecOrderActionField',
+    'CThostFtdcInputForQuoteField',
+    'CThostFtdcForQuoteField',
+    'CThostFtdcExchangeForQuoteField',
+    'CThostFtdcInputQuoteField',
+    'CThostFtdcInputQuoteActionField',
+    'CThostFtdcQuoteField',
+    'CThostFtdcQuoteActionField',
+    'CThostFtdcExchangeQuoteField',
+    'CThostFtdcExchangeQuoteActionField',
+    'CThostFtdcForQuoteRspField',
+    'CThostFtdcInputBatchOrderActionField',
+    'CThostFtdcBatchOrderActionField',
+    'CThostFtdcExchangeBatchOrderActionField',
+    'CThostFtdcInputCombActionField',
+    'CThostFtdcCombActionField',
+    'CThostFtdcExchangeCombActionField',
+    'CThostFtdcForQuoteParamField',
+    'CThostFtdcInputOptionSelfCloseField',
+    'CThostFtdcInputOptionSelfCloseActionField',
+    'CThostFtdcOptionSelfCloseField',
+    'CThostFtdcOptionSelfCloseActionField',
+    'CThostFtdcExchangeOptionSelfCloseField',
+    'CThostFtdcExchangeOptionSelfCloseActionField',
+    'CThostFtdcParkedOrderField',
+    'CThostFtdcParkedOrderActionField',
+    'CThostFtdcRemoveParkedOrderField',
+    'CThostFtdcRemoveParkedOrderActionField',
+    'CThostFtdcErrOrderField',
+    'CThostFtdcErrorConditionalOrderField',
+    'CThostFtdcErrOrderActionField',
 ]
