@@ -90,7 +90,7 @@ class TestCtpImports:
 
     def test_btapi_includes_ctp(self):
         """验证 BtApi 可用交易所列表包含 CTP"""
-        from bt_api_py.bt_api import BtApi
+        from bt_api_ctp.bt_api import BtApi
 
         available = BtApi.list_available_exchanges()
         if "CTP___FUTURE" not in available:

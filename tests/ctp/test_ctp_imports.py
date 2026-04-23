@@ -14,7 +14,7 @@ class TestCtpModule:
     def test_ctp_constants_import(self):
         """Test ctp_constants can be imported."""
         try:
-            from bt_api_py.ctp import ctp_constants
+            from bt_api_ctp.ctp import ctp_constants
 
             assert ctp_constants is not None
         except ImportError:
@@ -23,7 +23,7 @@ class TestCtpModule:
     def test_ctp_structs_common_import(self):
         """Test ctp_structs_common can be imported."""
         try:
-            from bt_api_py.ctp import ctp_structs_common
+            from bt_api_ctp.ctp import ctp_structs_common
 
             assert ctp_structs_common is not None
         except ImportError:

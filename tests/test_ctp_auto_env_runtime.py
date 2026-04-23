@@ -20,7 +20,7 @@ _CTP_ATEXIT_REGISTERED = False
 def _check_ctp_available() -> bool:
     """Check if CTP native extension is available."""
     try:
-        from bt_api_py.ctp._ctp_base import is_ctp_native_loaded
+        from bt_api_ctp.ctp._ctp_base import is_ctp_native_loaded
 
         return is_ctp_native_loaded()
     except ImportError:
@@ -67,7 +67,7 @@ def _check_ctp_service(front: str, timeout: float = 3.0) -> str:
 
 
 def _runtime_config() -> tuple[dict[str, str], str, str, str]:
-    from bt_api_py.ctp_env_selector import apply_ctp_env
+    from bt_api_ctp.ctp_env_selector import apply_ctp_env
 
     td_front, md_front, env_name = apply_ctp_env()
     broker_id = os.environ.get("CTP_BROKER_ID") or os.environ.get("SIMNOW_BROKER_ID") or "9999"
@@ -119,7 +119,7 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 @pytest.mark.ctp
 def test_btapi_ctp_feed_uses_auto_env_fronts_and_connects() -> None:
     _ensure_ctp_atexit()
-    from bt_api_py.bt_api import BtApi
+    from bt_api_ctp.bt_api import BtApi
 
     config, expected_td, expected_md, env_name = _runtime_config()
     svc_status = _check_ctp_service(expected_td)

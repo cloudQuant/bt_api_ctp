@@ -14,7 +14,7 @@ class TestCtpClient:
     def test_module_import(self):
         """Test client module can be imported."""
         try:
-            from bt_api_py.ctp import client
+            from bt_api_ctp.ctp import client
 
             assert client is not None
         except ImportError:

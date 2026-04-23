@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from bt_api_py.ctp_env_selector import apply_ctp_env, get_ctp_fronts
+from bt_api_ctp.ctp_env_selector import apply_ctp_env, get_ctp_fronts
 
 
 def test_get_ctp_fronts_prefers_set1_during_weekday_session(monkeypatch) -> None:

@@ -14,7 +14,7 @@ class TestCtpApi:
     def test_ctp_md_api_import(self):
         """Test MD API can be imported."""
         try:
-            from bt_api_py.ctp import ctp_md_api
+            from bt_api_ctp.ctp import ctp_md_api
 
             assert ctp_md_api is not None
         except ImportError:
@@ -23,7 +23,7 @@ class TestCtpApi:
     def test_ctp_trader_api_import(self):
         """Test trader API can be imported."""
         try:
-            from bt_api_py.ctp import ctp_trader_api
+            from bt_api_ctp.ctp import ctp_trader_api
 
             assert ctp_trader_api is not None
         except ImportError:
