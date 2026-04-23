@@ -60,10 +60,10 @@ class CtpBarData(BarData):
         return self.asset_type or ''
 
     def get_server_time(self):
-        return None
+        return self.close_time or ''
 
     def get_open_time(self):
-        return 0
+        return self.open_time or ''
 
     def get_open_price(self):
         return float(self.open_price or 0.0)
@@ -84,7 +84,7 @@ class CtpBarData(BarData):
         return float(self.amount_val or 0.0)
 
     def get_close_time(self):
-        return 0
+        return self.close_time or ''
 
     def get_bar_status(self):
         return True

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from bt_api_base.containers.orders.order import OrderStatus
+
 from bt_api_ctp.containers.ctp.ctp_order import (
     CTP_DIRECTION_MAP,
     CTP_OFFSET_MAP,
     CTP_ORDER_STATUS_MAP,
     CtpOrderData,
 )
-from bt_api_base.containers.orders.order import OrderStatus
 
 
 class TestCtpOrderData:

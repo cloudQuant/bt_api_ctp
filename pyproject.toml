@@ -6,7 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "bt_api_ctp"
 version = "2.0.0"
 description = "CTP exchange plugin for bt_api"
+license = {text = "MIT"}
 readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+]
 requires-python = ">=3.9"
 dependencies = [
     "bt_api_base>=0.15,<1.0",
@@ -22,6 +36,8 @@ where = ["src"]
 src = ["src"]
 fix = true
 show-fixes = true
+target-version = "py39"
+line-length = 100
 
 [tool.ruff.lint]
 select = ["I", "UP", "E", "F", "W"]
@@ -37,7 +53,19 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S106", "S105", "S311", "E402", "PERF401", "N806", "S108"]
+"examples/**" = ["S106", "S105", "S311", "E402", "PERF401", "N806", "S108"]
+"scripts/**" = ["S106", "S105", "S311", "E402", "PERF401", "N806", "S108"]
 "src/bt_api_ctp/ctp/__init__.py" = ["F401"]
 
 [tool.ruff.format]
-quote-style = "single"
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "ctp: CTP related tests",
+    "network: Tests requiring network access",
+    "unit: Unit tests (fast, no external dependencies)",
+    "integration: Integration tests (may require external services)",
+]
