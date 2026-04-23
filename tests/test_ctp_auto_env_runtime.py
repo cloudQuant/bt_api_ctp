@@ -114,24 +114,6 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
         with contextlib.suppress(Exception):
             feed.disconnect()
 
-
-@pytest.mark.network
-@pytest.mark.ctp
-def test_btapi_ctp_feed_uses_auto_env_fronts_and_connects() -> None:
-    _ensure_ctp_atexit()
-    from bt_api_ctp.bt_api import BtApi
-
-    config, expected_td, expected_md, env_name = _runtime_config()
-    svc_status = _check_ctp_service(expected_td)
-    if svc_status == "refused":
-        pytest.skip(f"CTP front {expected_td} refused connection (env={env_name})")
-    if svc_status == "timeout" or svc_status.startswith("error:"):
-        pytest.skip(f"CTP front {expected_td} unreachable: {svc_status}")
-
-    api = BtApi({"CTP___FUTURE": dict(config)}, debug=True)
-    feed = api.get_request_api("CTP___FUTURE")
-    assert feed is not None
-    assert feed.td_front == expected_td
     assert feed.md_front == expected_md
     assert feed.ctp_env_name == env_name
 

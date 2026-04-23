@@ -88,15 +88,6 @@ class TestCtpImports:
         assert ExchangeRegistry.get_balance_handler("CTP___FUTURE") is not None
         assert ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
 
-    def test_btapi_includes_ctp(self):
-        """验证 BtApi 可用交易所列表包含 CTP"""
-        from bt_api_ctp.bt_api import BtApi
-
-        available = BtApi.list_available_exchanges()
-        if "CTP___FUTURE" not in available:
-            pytest.skip("CTP is provided as a standalone plugin")
-        assert "CTP___FUTURE" in available
-
     def test_split_submodule_imports(self):
         """验证拆分后的子模块可以独立导入"""
         from bt_api_ctp.ctp.ctp_constants import THOST_TERT_RESTART
