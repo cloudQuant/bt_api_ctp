@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcInstrumentMarginRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -73,14 +73,12 @@ class CThostFtdcInstrumentMarginRateField:
 
 
 # Register CThostFtdcInstrumentMarginRateField in _ctp:
-_ctp.CThostFtdcInstrumentMarginRateField_swigregister(
-    CThostFtdcInstrumentMarginRateField
-)
+_ctp.CThostFtdcInstrumentMarginRateField_swigregister(CThostFtdcInstrumentMarginRateField)
 
 
 class CThostFtdcInstrumentCommissionRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -149,14 +147,12 @@ class CThostFtdcInstrumentCommissionRateField:
 
 
 # Register CThostFtdcInstrumentCommissionRateField in _ctp:
-_ctp.CThostFtdcInstrumentCommissionRateField_swigregister(
-    CThostFtdcInstrumentCommissionRateField
-)
+_ctp.CThostFtdcInstrumentCommissionRateField_swigregister(CThostFtdcInstrumentCommissionRateField)
 
 
 class CThostFtdcInstrumentTradingRightField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -193,14 +189,12 @@ class CThostFtdcInstrumentTradingRightField:
 
 
 # Register CThostFtdcInstrumentTradingRightField in _ctp:
-_ctp.CThostFtdcInstrumentTradingRightField_swigregister(
-    CThostFtdcInstrumentTradingRightField
-)
+_ctp.CThostFtdcInstrumentTradingRightField_swigregister(CThostFtdcInstrumentTradingRightField)
 
 
 class CThostFtdcInstrumentMarginRateAdjustField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -264,7 +258,7 @@ _ctp.CThostFtdcInstrumentMarginRateAdjustField_swigregister(
 
 class CThostFtdcExchangeMarginRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -318,7 +312,7 @@ _ctp.CThostFtdcExchangeMarginRateField_swigregister(CThostFtdcExchangeMarginRate
 
 class CThostFtdcExchangeMarginRateAdjustField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -395,14 +389,12 @@ class CThostFtdcExchangeMarginRateAdjustField:
 
 
 # Register CThostFtdcExchangeMarginRateAdjustField in _ctp:
-_ctp.CThostFtdcExchangeMarginRateAdjustField_swigregister(
-    CThostFtdcExchangeMarginRateAdjustField
-)
+_ctp.CThostFtdcExchangeMarginRateAdjustField_swigregister(CThostFtdcExchangeMarginRateAdjustField)
 
 
 class CThostFtdcSyncingInvestorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InvestorID = property(
@@ -480,7 +472,7 @@ _ctp.CThostFtdcSyncingInvestorField_swigregister(CThostFtdcSyncingInvestorField)
 
 class CThostFtdcSyncingTradingCodeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InvestorID = property(
@@ -522,7 +514,7 @@ _ctp.CThostFtdcSyncingTradingCodeField_swigregister(CThostFtdcSyncingTradingCode
 
 class CThostFtdcSyncingInvestorGroupField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -547,14 +539,12 @@ class CThostFtdcSyncingInvestorGroupField:
 
 
 # Register CThostFtdcSyncingInvestorGroupField in _ctp:
-_ctp.CThostFtdcSyncingInvestorGroupField_swigregister(
-    CThostFtdcSyncingInvestorGroupField
-)
+_ctp.CThostFtdcSyncingInvestorGroupField_swigregister(CThostFtdcSyncingInvestorGroupField)
 
 
 class CThostFtdcSyncingTradingAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -759,14 +749,12 @@ class CThostFtdcSyncingTradingAccountField:
 
 
 # Register CThostFtdcSyncingTradingAccountField in _ctp:
-_ctp.CThostFtdcSyncingTradingAccountField_swigregister(
-    CThostFtdcSyncingTradingAccountField
-)
+_ctp.CThostFtdcSyncingTradingAccountField_swigregister(CThostFtdcSyncingTradingAccountField)
 
 
 class CThostFtdcSyncingInvestorPositionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -979,14 +967,12 @@ class CThostFtdcSyncingInvestorPositionField:
 
 
 # Register CThostFtdcSyncingInvestorPositionField in _ctp:
-_ctp.CThostFtdcSyncingInvestorPositionField_swigregister(
-    CThostFtdcSyncingInvestorPositionField
-)
+_ctp.CThostFtdcSyncingInvestorPositionField_swigregister(CThostFtdcSyncingInvestorPositionField)
 
 
 class CThostFtdcSyncingInstrumentMarginRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1050,7 +1036,7 @@ _ctp.CThostFtdcSyncingInstrumentMarginRateField_swigregister(
 
 class CThostFtdcSyncingInstrumentCommissionRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1114,7 +1100,7 @@ _ctp.CThostFtdcSyncingInstrumentCommissionRateField_swigregister(
 
 class CThostFtdcSyncingInstrumentTradingRightField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1158,7 +1144,7 @@ _ctp.CThostFtdcSyncingInstrumentTradingRightField_swigregister(
 
 class CThostFtdcOptionInstrMiniMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1203,14 +1189,12 @@ class CThostFtdcOptionInstrMiniMarginField:
 
 
 # Register CThostFtdcOptionInstrMiniMarginField in _ctp:
-_ctp.CThostFtdcOptionInstrMiniMarginField_swigregister(
-    CThostFtdcOptionInstrMiniMarginField
-)
+_ctp.CThostFtdcOptionInstrMiniMarginField_swigregister(CThostFtdcOptionInstrMiniMarginField)
 
 
 class CThostFtdcOptionInstrMarginAdjustField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1279,14 +1263,12 @@ class CThostFtdcOptionInstrMarginAdjustField:
 
 
 # Register CThostFtdcOptionInstrMarginAdjustField in _ctp:
-_ctp.CThostFtdcOptionInstrMarginAdjustField_swigregister(
-    CThostFtdcOptionInstrMarginAdjustField
-)
+_ctp.CThostFtdcOptionInstrMarginAdjustField_swigregister(CThostFtdcOptionInstrMarginAdjustField)
 
 
 class CThostFtdcOptionInstrCommRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1364,7 +1346,7 @@ _ctp.CThostFtdcOptionInstrCommRateField_swigregister(CThostFtdcOptionInstrCommRa
 
 class CThostFtdcOptionInstrTradeCostField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1425,14 +1407,12 @@ class CThostFtdcOptionInstrTradeCostField:
 
 
 # Register CThostFtdcOptionInstrTradeCostField in _ctp:
-_ctp.CThostFtdcOptionInstrTradeCostField_swigregister(
-    CThostFtdcOptionInstrTradeCostField
-)
+_ctp.CThostFtdcOptionInstrTradeCostField_swigregister(CThostFtdcOptionInstrTradeCostField)
 
 
 class CThostFtdcOptionInstrTradingRightField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1473,14 +1453,12 @@ class CThostFtdcOptionInstrTradingRightField:
 
 
 # Register CThostFtdcOptionInstrTradingRightField in _ctp:
-_ctp.CThostFtdcOptionInstrTradingRightField_swigregister(
-    CThostFtdcOptionInstrTradingRightField
-)
+_ctp.CThostFtdcOptionInstrTradingRightField_swigregister(CThostFtdcOptionInstrTradingRightField)
 
 
 class CThostFtdcOptionInstrDeltaField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1522,7 +1500,7 @@ _ctp.CThostFtdcOptionInstrDeltaField_swigregister(CThostFtdcOptionInstrDeltaFiel
 
 class CThostFtdcStrikeOffsetField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1555,9 +1533,7 @@ class CThostFtdcStrikeOffsetField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcStrikeOffsetField_swiginit(
-            self, _ctp.new_CThostFtdcStrikeOffsetField()
-        )
+        _ctp.CThostFtdcStrikeOffsetField_swiginit(self, _ctp.new_CThostFtdcStrikeOffsetField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcStrikeOffsetField
 
@@ -1568,7 +1544,7 @@ _ctp.CThostFtdcStrikeOffsetField_swigregister(CThostFtdcStrikeOffsetField)
 
 class CThostFtdcMMOptionInstrCommRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1633,14 +1609,12 @@ class CThostFtdcMMOptionInstrCommRateField:
 
 
 # Register CThostFtdcMMOptionInstrCommRateField in _ctp:
-_ctp.CThostFtdcMMOptionInstrCommRateField_swigregister(
-    CThostFtdcMMOptionInstrCommRateField
-)
+_ctp.CThostFtdcMMOptionInstrCommRateField_swigregister(CThostFtdcMMOptionInstrCommRateField)
 
 
 class CThostFtdcMMInstrumentCommissionRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1704,7 +1678,7 @@ _ctp.CThostFtdcMMInstrumentCommissionRateField_swigregister(
 
 class CThostFtdcInstrumentMarginRateULField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1757,14 +1731,12 @@ class CThostFtdcInstrumentMarginRateULField:
 
 
 # Register CThostFtdcInstrumentMarginRateULField in _ctp:
-_ctp.CThostFtdcInstrumentMarginRateULField_swigregister(
-    CThostFtdcInstrumentMarginRateULField
-)
+_ctp.CThostFtdcInstrumentMarginRateULField_swigregister(CThostFtdcInstrumentMarginRateULField)
 
 
 class CThostFtdcMarginModelField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1781,9 +1753,7 @@ class CThostFtdcMarginModelField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcMarginModelField_swiginit(
-            self, _ctp.new_CThostFtdcMarginModelField()
-        )
+        _ctp.CThostFtdcMarginModelField_swiginit(self, _ctp.new_CThostFtdcMarginModelField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMarginModelField
 
@@ -1794,7 +1764,7 @@ _ctp.CThostFtdcMarginModelField_swigregister(CThostFtdcMarginModelField)
 
 class CThostFtdcEWarrantOffsetField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -1839,9 +1809,7 @@ class CThostFtdcEWarrantOffsetField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcEWarrantOffsetField_swiginit(
-            self, _ctp.new_CThostFtdcEWarrantOffsetField()
-        )
+        _ctp.CThostFtdcEWarrantOffsetField_swiginit(self, _ctp.new_CThostFtdcEWarrantOffsetField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcEWarrantOffsetField
 
@@ -1852,7 +1820,7 @@ _ctp.CThostFtdcEWarrantOffsetField_swigregister(CThostFtdcEWarrantOffsetField)
 
 class CThostFtdcInvestorProductGroupMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     reserve1 = property(
@@ -1992,7 +1960,7 @@ _ctp.CThostFtdcInvestorProductGroupMarginField_swigregister(
 
 class CThostFtdcRiskSettleInvstPositionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -2201,14 +2169,12 @@ class CThostFtdcRiskSettleInvstPositionField:
 
 
 # Register CThostFtdcRiskSettleInvstPositionField in _ctp:
-_ctp.CThostFtdcRiskSettleInvstPositionField_swigregister(
-    CThostFtdcRiskSettleInvstPositionField
-)
+_ctp.CThostFtdcRiskSettleInvstPositionField_swigregister(CThostFtdcRiskSettleInvstPositionField)
 
 
 class CThostFtdcRiskSettleProductStatusField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -2233,14 +2199,12 @@ class CThostFtdcRiskSettleProductStatusField:
 
 
 # Register CThostFtdcRiskSettleProductStatusField in _ctp:
-_ctp.CThostFtdcRiskSettleProductStatusField_swigregister(
-    CThostFtdcRiskSettleProductStatusField
-)
+_ctp.CThostFtdcRiskSettleProductStatusField_swigregister(CThostFtdcRiskSettleProductStatusField)
 
 
 class CThostFtdcSyncDeltaInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     SyncDeltaSequenceNo = property(
@@ -2261,9 +2225,7 @@ class CThostFtdcSyncDeltaInfoField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSyncDeltaInfoField_swiginit(
-            self, _ctp.new_CThostFtdcSyncDeltaInfoField()
-        )
+        _ctp.CThostFtdcSyncDeltaInfoField_swiginit(self, _ctp.new_CThostFtdcSyncDeltaInfoField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncDeltaInfoField
 
@@ -2274,7 +2236,7 @@ _ctp.CThostFtdcSyncDeltaInfoField_swigregister(CThostFtdcSyncDeltaInfoField)
 
 class CThostFtdcSyncDeltaProductStatusField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     SyncDeltaSequenceNo = property(
@@ -2303,14 +2265,12 @@ class CThostFtdcSyncDeltaProductStatusField:
 
 
 # Register CThostFtdcSyncDeltaProductStatusField in _ctp:
-_ctp.CThostFtdcSyncDeltaProductStatusField_swigregister(
-    CThostFtdcSyncDeltaProductStatusField
-)
+_ctp.CThostFtdcSyncDeltaProductStatusField_swigregister(CThostFtdcSyncDeltaProductStatusField)
 
 
 class CThostFtdcSyncDeltaInvstPosDtlField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -2443,14 +2403,12 @@ class CThostFtdcSyncDeltaInvstPosDtlField:
 
 
 # Register CThostFtdcSyncDeltaInvstPosDtlField in _ctp:
-_ctp.CThostFtdcSyncDeltaInvstPosDtlField_swigregister(
-    CThostFtdcSyncDeltaInvstPosDtlField
-)
+_ctp.CThostFtdcSyncDeltaInvstPosDtlField_swigregister(CThostFtdcSyncDeltaInvstPosDtlField)
 
 
 class CThostFtdcSyncDeltaInvstPosCombDtlField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -2547,14 +2505,12 @@ class CThostFtdcSyncDeltaInvstPosCombDtlField:
 
 
 # Register CThostFtdcSyncDeltaInvstPosCombDtlField in _ctp:
-_ctp.CThostFtdcSyncDeltaInvstPosCombDtlField_swigregister(
-    CThostFtdcSyncDeltaInvstPosCombDtlField
-)
+_ctp.CThostFtdcSyncDeltaInvstPosCombDtlField_swigregister(CThostFtdcSyncDeltaInvstPosCombDtlField)
 
 
 class CThostFtdcSyncDeltaTradingAccountField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2763,14 +2719,12 @@ class CThostFtdcSyncDeltaTradingAccountField:
 
 
 # Register CThostFtdcSyncDeltaTradingAccountField in _ctp:
-_ctp.CThostFtdcSyncDeltaTradingAccountField_swigregister(
-    CThostFtdcSyncDeltaTradingAccountField
-)
+_ctp.CThostFtdcSyncDeltaTradingAccountField_swigregister(CThostFtdcSyncDeltaTradingAccountField)
 
 
 class CThostFtdcSyncDeltaInitInvstMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2843,14 +2797,12 @@ class CThostFtdcSyncDeltaInitInvstMarginField:
 
 
 # Register CThostFtdcSyncDeltaInitInvstMarginField in _ctp:
-_ctp.CThostFtdcSyncDeltaInitInvstMarginField_swigregister(
-    CThostFtdcSyncDeltaInitInvstMarginField
-)
+_ctp.CThostFtdcSyncDeltaInitInvstMarginField_swigregister(CThostFtdcSyncDeltaInitInvstMarginField)
 
 
 class CThostFtdcSyncDeltaDceCombInstrumentField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     CombInstrumentID = property(
@@ -2914,7 +2866,7 @@ _ctp.CThostFtdcSyncDeltaDceCombInstrumentField_swigregister(
 
 class CThostFtdcSyncDeltaInvstMarginRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -2975,14 +2927,12 @@ class CThostFtdcSyncDeltaInvstMarginRateField:
 
 
 # Register CThostFtdcSyncDeltaInvstMarginRateField in _ctp:
-_ctp.CThostFtdcSyncDeltaInvstMarginRateField_swigregister(
-    CThostFtdcSyncDeltaInvstMarginRateField
-)
+_ctp.CThostFtdcSyncDeltaInvstMarginRateField_swigregister(CThostFtdcSyncDeltaInvstMarginRateField)
 
 
 class CThostFtdcSyncDeltaExchMarginRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3031,14 +2981,12 @@ class CThostFtdcSyncDeltaExchMarginRateField:
 
 
 # Register CThostFtdcSyncDeltaExchMarginRateField in _ctp:
-_ctp.CThostFtdcSyncDeltaExchMarginRateField_swigregister(
-    CThostFtdcSyncDeltaExchMarginRateField
-)
+_ctp.CThostFtdcSyncDeltaExchMarginRateField_swigregister(CThostFtdcSyncDeltaExchMarginRateField)
 
 
 class CThostFtdcSyncDeltaOptExchMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3099,14 +3047,12 @@ class CThostFtdcSyncDeltaOptExchMarginField:
 
 
 # Register CThostFtdcSyncDeltaOptExchMarginField in _ctp:
-_ctp.CThostFtdcSyncDeltaOptExchMarginField_swigregister(
-    CThostFtdcSyncDeltaOptExchMarginField
-)
+_ctp.CThostFtdcSyncDeltaOptExchMarginField_swigregister(CThostFtdcSyncDeltaOptExchMarginField)
 
 
 class CThostFtdcSyncDeltaOptInvstMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -3179,14 +3125,12 @@ class CThostFtdcSyncDeltaOptInvstMarginField:
 
 
 # Register CThostFtdcSyncDeltaOptInvstMarginField in _ctp:
-_ctp.CThostFtdcSyncDeltaOptInvstMarginField_swigregister(
-    CThostFtdcSyncDeltaOptInvstMarginField
-)
+_ctp.CThostFtdcSyncDeltaOptInvstMarginField_swigregister(CThostFtdcSyncDeltaOptInvstMarginField)
 
 
 class CThostFtdcSyncDeltaInvstMarginRateULField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -3250,7 +3194,7 @@ _ctp.CThostFtdcSyncDeltaInvstMarginRateULField_swigregister(
 
 class CThostFtdcSyncDeltaOptInvstCommRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -3319,14 +3263,12 @@ class CThostFtdcSyncDeltaOptInvstCommRateField:
 
 
 # Register CThostFtdcSyncDeltaOptInvstCommRateField in _ctp:
-_ctp.CThostFtdcSyncDeltaOptInvstCommRateField_swigregister(
-    CThostFtdcSyncDeltaOptInvstCommRateField
-)
+_ctp.CThostFtdcSyncDeltaOptInvstCommRateField_swigregister(CThostFtdcSyncDeltaOptInvstCommRateField)
 
 
 class CThostFtdcSyncDeltaInvstCommRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InstrumentID = property(
@@ -3387,14 +3329,12 @@ class CThostFtdcSyncDeltaInvstCommRateField:
 
 
 # Register CThostFtdcSyncDeltaInvstCommRateField in _ctp:
-_ctp.CThostFtdcSyncDeltaInvstCommRateField_swigregister(
-    CThostFtdcSyncDeltaInvstCommRateField
-)
+_ctp.CThostFtdcSyncDeltaInvstCommRateField_swigregister(CThostFtdcSyncDeltaInvstCommRateField)
 
 
 class CThostFtdcSyncDeltaProductExchRateField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ProductID = property(
@@ -3427,14 +3367,12 @@ class CThostFtdcSyncDeltaProductExchRateField:
 
 
 # Register CThostFtdcSyncDeltaProductExchRateField in _ctp:
-_ctp.CThostFtdcSyncDeltaProductExchRateField_swigregister(
-    CThostFtdcSyncDeltaProductExchRateField
-)
+_ctp.CThostFtdcSyncDeltaProductExchRateField_swigregister(CThostFtdcSyncDeltaProductExchRateField)
 
 
 class CThostFtdcSyncDeltaDepthMarketDataField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3639,14 +3577,12 @@ class CThostFtdcSyncDeltaDepthMarketDataField:
 
 
 # Register CThostFtdcSyncDeltaDepthMarketDataField in _ctp:
-_ctp.CThostFtdcSyncDeltaDepthMarketDataField_swigregister(
-    CThostFtdcSyncDeltaDepthMarketDataField
-)
+_ctp.CThostFtdcSyncDeltaDepthMarketDataField_swigregister(CThostFtdcSyncDeltaDepthMarketDataField)
 
 
 class CThostFtdcSyncDeltaIndexPriceField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3684,7 +3620,7 @@ _ctp.CThostFtdcSyncDeltaIndexPriceField_swigregister(CThostFtdcSyncDeltaIndexPri
 
 class CThostFtdcSyncDeltaEWarrantOffsetField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3737,14 +3673,12 @@ class CThostFtdcSyncDeltaEWarrantOffsetField:
 
 
 # Register CThostFtdcSyncDeltaEWarrantOffsetField in _ctp:
-_ctp.CThostFtdcSyncDeltaEWarrantOffsetField_swigregister(
-    CThostFtdcSyncDeltaEWarrantOffsetField
-)
+_ctp.CThostFtdcSyncDeltaEWarrantOffsetField_swigregister(CThostFtdcSyncDeltaEWarrantOffsetField)
 
 
 class CThostFtdcSPBMFutureParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3806,7 +3740,7 @@ _ctp.CThostFtdcSPBMFutureParameterField_swigregister(CThostFtdcSPBMFutureParamet
 
 class CThostFtdcSPBMOptionParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3860,7 +3794,7 @@ _ctp.CThostFtdcSPBMOptionParameterField_swigregister(CThostFtdcSPBMOptionParamet
 
 class CThostFtdcSPBMIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3898,7 +3832,7 @@ _ctp.CThostFtdcSPBMIntraParameterField_swigregister(CThostFtdcSPBMIntraParameter
 
 class CThostFtdcSPBMInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3940,7 +3874,7 @@ _ctp.CThostFtdcSPBMInterParameterField_swigregister(CThostFtdcSPBMInterParameter
 
 class CThostFtdcSyncSPBMParameterEndField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3957,14 +3891,12 @@ class CThostFtdcSyncSPBMParameterEndField:
 
 
 # Register CThostFtdcSyncSPBMParameterEndField in _ctp:
-_ctp.CThostFtdcSyncSPBMParameterEndField_swigregister(
-    CThostFtdcSyncSPBMParameterEndField
-)
+_ctp.CThostFtdcSyncSPBMParameterEndField_swigregister(CThostFtdcSyncSPBMParameterEndField)
 
 
 class CThostFtdcSPBMPortfDefinitionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -3998,7 +3930,7 @@ _ctp.CThostFtdcSPBMPortfDefinitionField_swigregister(CThostFtdcSPBMPortfDefiniti
 
 class CThostFtdcSPBMInvestorPortfDefField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4027,14 +3959,12 @@ class CThostFtdcSPBMInvestorPortfDefField:
 
 
 # Register CThostFtdcSPBMInvestorPortfDefField in _ctp:
-_ctp.CThostFtdcSPBMInvestorPortfDefField_swigregister(
-    CThostFtdcSPBMInvestorPortfDefField
-)
+_ctp.CThostFtdcSPBMInvestorPortfDefField_swigregister(CThostFtdcSPBMInvestorPortfDefField)
 
 
 class CThostFtdcInvestorPortfMarginRatioField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     InvestorRange = property(
@@ -4071,14 +4001,12 @@ class CThostFtdcInvestorPortfMarginRatioField:
 
 
 # Register CThostFtdcInvestorPortfMarginRatioField in _ctp:
-_ctp.CThostFtdcInvestorPortfMarginRatioField_swigregister(
-    CThostFtdcInvestorPortfMarginRatioField
-)
+_ctp.CThostFtdcInvestorPortfMarginRatioField_swigregister(CThostFtdcInvestorPortfMarginRatioField)
 
 
 class CThostFtdcInvestorTradingRightField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4103,14 +4031,12 @@ class CThostFtdcInvestorTradingRightField:
 
 
 # Register CThostFtdcInvestorTradingRightField in _ctp:
-_ctp.CThostFtdcInvestorTradingRightField_swigregister(
-    CThostFtdcInvestorTradingRightField
-)
+_ctp.CThostFtdcInvestorTradingRightField_swigregister(CThostFtdcInvestorTradingRightField)
 
 
 class CThostFtdcWithDrawParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4131,9 +4057,7 @@ class CThostFtdcWithDrawParamField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcWithDrawParamField_swiginit(
-            self, _ctp.new_CThostFtdcWithDrawParamField()
-        )
+        _ctp.CThostFtdcWithDrawParamField_swiginit(self, _ctp.new_CThostFtdcWithDrawParamField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcWithDrawParamField
 
@@ -4144,7 +4068,7 @@ _ctp.CThostFtdcWithDrawParamField_swigregister(CThostFtdcWithDrawParamField)
 
 class CThostFtdcSPBMAddOnInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4181,14 +4105,12 @@ class CThostFtdcSPBMAddOnInterParameterField:
 
 
 # Register CThostFtdcSPBMAddOnInterParameterField in _ctp:
-_ctp.CThostFtdcSPBMAddOnInterParameterField_swigregister(
-    CThostFtdcSPBMAddOnInterParameterField
-)
+_ctp.CThostFtdcSPBMAddOnInterParameterField_swigregister(CThostFtdcSPBMAddOnInterParameterField)
 
 
 class CThostFtdcInvestorCommoditySPMMMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4300,7 +4222,7 @@ _ctp.CThostFtdcInvestorCommoditySPMMMarginField_swigregister(
 
 class CThostFtdcInvestorCommodityGroupSPMMMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4404,7 +4326,7 @@ _ctp.CThostFtdcInvestorCommodityGroupSPMMMarginField_swigregister(
 
 class CThostFtdcSPMMInstParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4429,9 +4351,7 @@ class CThostFtdcSPMMInstParamField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcSPMMInstParamField_swiginit(
-            self, _ctp.new_CThostFtdcSPMMInstParamField()
-        )
+        _ctp.CThostFtdcSPMMInstParamField_swiginit(self, _ctp.new_CThostFtdcSPMMInstParamField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSPMMInstParamField
 
@@ -4442,7 +4362,7 @@ _ctp.CThostFtdcSPMMInstParamField_swigregister(CThostFtdcSPMMInstParamField)
 
 class CThostFtdcSPMMProductParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4476,7 +4396,7 @@ _ctp.CThostFtdcSPMMProductParamField_swigregister(CThostFtdcSPMMProductParamFiel
 
 class CThostFtdcRCAMSCombProductInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4509,14 +4429,12 @@ class CThostFtdcRCAMSCombProductInfoField:
 
 
 # Register CThostFtdcRCAMSCombProductInfoField in _ctp:
-_ctp.CThostFtdcRCAMSCombProductInfoField_swigregister(
-    CThostFtdcRCAMSCombProductInfoField
-)
+_ctp.CThostFtdcRCAMSCombProductInfoField_swigregister(CThostFtdcRCAMSCombProductInfoField)
 
 
 class CThostFtdcRCAMSInstrParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4550,7 +4468,7 @@ _ctp.CThostFtdcRCAMSInstrParameterField_swigregister(CThostFtdcRCAMSInstrParamet
 
 class CThostFtdcRCAMSIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4584,7 +4502,7 @@ _ctp.CThostFtdcRCAMSIntraParameterField_swigregister(CThostFtdcRCAMSIntraParamet
 
 class CThostFtdcRCAMSInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4630,7 +4548,7 @@ _ctp.CThostFtdcRCAMSInterParameterField_swigregister(CThostFtdcRCAMSInterParamet
 
 class CThostFtdcRCAMSShortOptAdjustParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4663,14 +4581,12 @@ class CThostFtdcRCAMSShortOptAdjustParamField:
 
 
 # Register CThostFtdcRCAMSShortOptAdjustParamField in _ctp:
-_ctp.CThostFtdcRCAMSShortOptAdjustParamField_swigregister(
-    CThostFtdcRCAMSShortOptAdjustParamField
-)
+_ctp.CThostFtdcRCAMSShortOptAdjustParamField_swigregister(CThostFtdcRCAMSShortOptAdjustParamField)
 
 
 class CThostFtdcRCAMSInvestorCombPositionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4731,14 +4647,12 @@ class CThostFtdcRCAMSInvestorCombPositionField:
 
 
 # Register CThostFtdcRCAMSInvestorCombPositionField in _ctp:
-_ctp.CThostFtdcRCAMSInvestorCombPositionField_swigregister(
-    CThostFtdcRCAMSInvestorCombPositionField
-)
+_ctp.CThostFtdcRCAMSInvestorCombPositionField_swigregister(CThostFtdcRCAMSInvestorCombPositionField)
 
 
 class CThostFtdcInvestorProdRCAMSMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4859,14 +4773,12 @@ class CThostFtdcInvestorProdRCAMSMarginField:
 
 
 # Register CThostFtdcInvestorProdRCAMSMarginField in _ctp:
-_ctp.CThostFtdcInvestorProdRCAMSMarginField_swigregister(
-    CThostFtdcInvestorProdRCAMSMarginField
-)
+_ctp.CThostFtdcInvestorProdRCAMSMarginField_swigregister(CThostFtdcInvestorProdRCAMSMarginField)
 
 
 class CThostFtdcRULEInstrParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4932,7 +4844,7 @@ _ctp.CThostFtdcRULEInstrParameterField_swigregister(CThostFtdcRULEInstrParameter
 
 class CThostFtdcRULEIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -4978,7 +4890,7 @@ _ctp.CThostFtdcRULEIntraParameterField_swigregister(CThostFtdcRULEIntraParameter
 
 class CThostFtdcRULEInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5036,7 +4948,7 @@ _ctp.CThostFtdcRULEInterParameterField_swigregister(CThostFtdcRULEInterParameter
 
 class CThostFtdcInvestorProdRULEMarginField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5157,14 +5069,12 @@ class CThostFtdcInvestorProdRULEMarginField:
 
 
 # Register CThostFtdcInvestorProdRULEMarginField in _ctp:
-_ctp.CThostFtdcInvestorProdRULEMarginField_swigregister(
-    CThostFtdcInvestorProdRULEMarginField
-)
+_ctp.CThostFtdcInvestorProdRULEMarginField_swigregister(CThostFtdcInvestorProdRULEMarginField)
 
 
 class CThostFtdcSyncDeltaSPBMPortfDefinitionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5208,7 +5118,7 @@ _ctp.CThostFtdcSyncDeltaSPBMPortfDefinitionField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMInvstPortfDefField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5252,7 +5162,7 @@ _ctp.CThostFtdcSyncDeltaSPBMInvstPortfDefField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMFutureParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5324,7 +5234,7 @@ _ctp.CThostFtdcSyncDeltaSPBMFutureParameterField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMOptionParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5388,7 +5298,7 @@ _ctp.CThostFtdcSyncDeltaSPBMOptionParameterField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5436,7 +5346,7 @@ _ctp.CThostFtdcSyncDeltaSPBMIntraParameterField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5488,7 +5398,7 @@ _ctp.CThostFtdcSyncDeltaSPBMInterParameterField_swigregister(
 
 class CThostFtdcSyncDeltaSPBMAddOnInterParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5540,7 +5450,7 @@ _ctp.CThostFtdcSyncDeltaSPBMAddOnInterParamField_swigregister(
 
 class CThostFtdcSyncDeltaSPMMInstParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5581,14 +5491,12 @@ class CThostFtdcSyncDeltaSPMMInstParamField:
 
 
 # Register CThostFtdcSyncDeltaSPMMInstParamField in _ctp:
-_ctp.CThostFtdcSyncDeltaSPMMInstParamField_swigregister(
-    CThostFtdcSyncDeltaSPMMInstParamField
-)
+_ctp.CThostFtdcSyncDeltaSPMMInstParamField_swigregister(CThostFtdcSyncDeltaSPMMInstParamField)
 
 
 class CThostFtdcSyncDeltaSPMMProductParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5625,14 +5533,12 @@ class CThostFtdcSyncDeltaSPMMProductParamField:
 
 
 # Register CThostFtdcSyncDeltaSPMMProductParamField in _ctp:
-_ctp.CThostFtdcSyncDeltaSPMMProductParamField_swigregister(
-    CThostFtdcSyncDeltaSPMMProductParamField
-)
+_ctp.CThostFtdcSyncDeltaSPMMProductParamField_swigregister(CThostFtdcSyncDeltaSPMMProductParamField)
 
 
 class CThostFtdcSyncDeltaInvestorSPMMModelField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5676,7 +5582,7 @@ _ctp.CThostFtdcSyncDeltaInvestorSPMMModelField_swigregister(
 
 class CThostFtdcSyncDeltaSPMMModelParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -5725,14 +5631,12 @@ class CThostFtdcSyncDeltaSPMMModelParamField:
 
 
 # Register CThostFtdcSyncDeltaSPMMModelParamField in _ctp:
-_ctp.CThostFtdcSyncDeltaSPMMModelParamField_swigregister(
-    CThostFtdcSyncDeltaSPMMModelParamField
-)
+_ctp.CThostFtdcSyncDeltaSPMMModelParamField_swigregister(CThostFtdcSyncDeltaSPMMModelParamField)
 
 
 class CThostFtdcSyncDeltaRCAMSCombProdInfoField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5780,7 +5684,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSCombProdInfoField_swigregister(
 
 class CThostFtdcSyncDeltaRCAMSInstrParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5824,7 +5728,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSInstrParameterField_swigregister(
 
 class CThostFtdcSyncDeltaRCAMSIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5868,7 +5772,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSIntraParameterField_swigregister(
 
 class CThostFtdcSyncDeltaRCAMSInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5924,7 +5828,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSInterParameterField_swigregister(
 
 class CThostFtdcSyncDeltaRCAMSSOptAdjParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -5972,7 +5876,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSSOptAdjParamField_swigregister(
 
 class CThostFtdcSyncDeltaRCAMSCombRuleDtlField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -6041,14 +5945,12 @@ class CThostFtdcSyncDeltaRCAMSCombRuleDtlField:
 
 
 # Register CThostFtdcSyncDeltaRCAMSCombRuleDtlField in _ctp:
-_ctp.CThostFtdcSyncDeltaRCAMSCombRuleDtlField_swigregister(
-    CThostFtdcSyncDeltaRCAMSCombRuleDtlField
-)
+_ctp.CThostFtdcSyncDeltaRCAMSCombRuleDtlField_swigregister(CThostFtdcSyncDeltaRCAMSCombRuleDtlField)
 
 
 class CThostFtdcSyncDeltaRCAMSInvstCombPosField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -6124,7 +6026,7 @@ _ctp.CThostFtdcSyncDeltaRCAMSInvstCombPosField_swigregister(
 
 class CThostFtdcSyncDeltaRULEInstrParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -6200,7 +6102,7 @@ _ctp.CThostFtdcSyncDeltaRULEInstrParameterField_swigregister(
 
 class CThostFtdcSyncDeltaRULEIntraParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -6256,7 +6158,7 @@ _ctp.CThostFtdcSyncDeltaRULEIntraParameterField_swigregister(
 
 class CThostFtdcSyncDeltaRULEInterParameterField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -6324,7 +6226,7 @@ _ctp.CThostFtdcSyncDeltaRULEInterParameterField_swigregister(
 
 class CThostFtdcInvestorPortfMarginModelField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -6349,104 +6251,102 @@ class CThostFtdcInvestorPortfMarginModelField:
 
 
 # Register CThostFtdcInvestorPortfMarginModelField in _ctp:
-_ctp.CThostFtdcInvestorPortfMarginModelField_swigregister(
-    CThostFtdcInvestorPortfMarginModelField
-)
+_ctp.CThostFtdcInvestorPortfMarginModelField_swigregister(CThostFtdcInvestorPortfMarginModelField)
 
 __all__ = [
-    'CThostFtdcInstrumentMarginRateField',
-    'CThostFtdcInstrumentCommissionRateField',
-    'CThostFtdcInstrumentTradingRightField',
-    'CThostFtdcInstrumentMarginRateAdjustField',
-    'CThostFtdcExchangeMarginRateField',
-    'CThostFtdcExchangeMarginRateAdjustField',
-    'CThostFtdcSyncingInvestorField',
-    'CThostFtdcSyncingTradingCodeField',
-    'CThostFtdcSyncingInvestorGroupField',
-    'CThostFtdcSyncingTradingAccountField',
-    'CThostFtdcSyncingInvestorPositionField',
-    'CThostFtdcSyncingInstrumentMarginRateField',
-    'CThostFtdcSyncingInstrumentCommissionRateField',
-    'CThostFtdcSyncingInstrumentTradingRightField',
-    'CThostFtdcOptionInstrMiniMarginField',
-    'CThostFtdcOptionInstrMarginAdjustField',
-    'CThostFtdcOptionInstrCommRateField',
-    'CThostFtdcOptionInstrTradeCostField',
-    'CThostFtdcOptionInstrTradingRightField',
-    'CThostFtdcOptionInstrDeltaField',
-    'CThostFtdcStrikeOffsetField',
-    'CThostFtdcMMOptionInstrCommRateField',
-    'CThostFtdcMMInstrumentCommissionRateField',
-    'CThostFtdcInstrumentMarginRateULField',
-    'CThostFtdcMarginModelField',
-    'CThostFtdcEWarrantOffsetField',
-    'CThostFtdcInvestorProductGroupMarginField',
-    'CThostFtdcRiskSettleInvstPositionField',
-    'CThostFtdcRiskSettleProductStatusField',
-    'CThostFtdcSyncDeltaInfoField',
-    'CThostFtdcSyncDeltaProductStatusField',
-    'CThostFtdcSyncDeltaInvstPosDtlField',
-    'CThostFtdcSyncDeltaInvstPosCombDtlField',
-    'CThostFtdcSyncDeltaTradingAccountField',
-    'CThostFtdcSyncDeltaInitInvstMarginField',
-    'CThostFtdcSyncDeltaDceCombInstrumentField',
-    'CThostFtdcSyncDeltaInvstMarginRateField',
-    'CThostFtdcSyncDeltaExchMarginRateField',
-    'CThostFtdcSyncDeltaOptExchMarginField',
-    'CThostFtdcSyncDeltaOptInvstMarginField',
-    'CThostFtdcSyncDeltaInvstMarginRateULField',
-    'CThostFtdcSyncDeltaOptInvstCommRateField',
-    'CThostFtdcSyncDeltaInvstCommRateField',
-    'CThostFtdcSyncDeltaProductExchRateField',
-    'CThostFtdcSyncDeltaDepthMarketDataField',
-    'CThostFtdcSyncDeltaIndexPriceField',
-    'CThostFtdcSyncDeltaEWarrantOffsetField',
-    'CThostFtdcSPBMFutureParameterField',
-    'CThostFtdcSPBMOptionParameterField',
-    'CThostFtdcSPBMIntraParameterField',
-    'CThostFtdcSPBMInterParameterField',
-    'CThostFtdcSyncSPBMParameterEndField',
-    'CThostFtdcSPBMPortfDefinitionField',
-    'CThostFtdcSPBMInvestorPortfDefField',
-    'CThostFtdcInvestorPortfMarginRatioField',
-    'CThostFtdcInvestorTradingRightField',
-    'CThostFtdcWithDrawParamField',
-    'CThostFtdcSPBMAddOnInterParameterField',
-    'CThostFtdcInvestorCommoditySPMMMarginField',
-    'CThostFtdcInvestorCommodityGroupSPMMMarginField',
-    'CThostFtdcSPMMInstParamField',
-    'CThostFtdcSPMMProductParamField',
-    'CThostFtdcRCAMSCombProductInfoField',
-    'CThostFtdcRCAMSInstrParameterField',
-    'CThostFtdcRCAMSIntraParameterField',
-    'CThostFtdcRCAMSInterParameterField',
-    'CThostFtdcRCAMSShortOptAdjustParamField',
-    'CThostFtdcRCAMSInvestorCombPositionField',
-    'CThostFtdcInvestorProdRCAMSMarginField',
-    'CThostFtdcRULEInstrParameterField',
-    'CThostFtdcRULEIntraParameterField',
-    'CThostFtdcRULEInterParameterField',
-    'CThostFtdcInvestorProdRULEMarginField',
-    'CThostFtdcSyncDeltaSPBMPortfDefinitionField',
-    'CThostFtdcSyncDeltaSPBMInvstPortfDefField',
-    'CThostFtdcSyncDeltaSPBMFutureParameterField',
-    'CThostFtdcSyncDeltaSPBMOptionParameterField',
-    'CThostFtdcSyncDeltaSPBMIntraParameterField',
-    'CThostFtdcSyncDeltaSPBMInterParameterField',
-    'CThostFtdcSyncDeltaSPBMAddOnInterParamField',
-    'CThostFtdcSyncDeltaSPMMInstParamField',
-    'CThostFtdcSyncDeltaSPMMProductParamField',
-    'CThostFtdcSyncDeltaInvestorSPMMModelField',
-    'CThostFtdcSyncDeltaSPMMModelParamField',
-    'CThostFtdcSyncDeltaRCAMSCombProdInfoField',
-    'CThostFtdcSyncDeltaRCAMSInstrParameterField',
-    'CThostFtdcSyncDeltaRCAMSIntraParameterField',
-    'CThostFtdcSyncDeltaRCAMSInterParameterField',
-    'CThostFtdcSyncDeltaRCAMSSOptAdjParamField',
-    'CThostFtdcSyncDeltaRCAMSCombRuleDtlField',
-    'CThostFtdcSyncDeltaRCAMSInvstCombPosField',
-    'CThostFtdcSyncDeltaRULEInstrParameterField',
-    'CThostFtdcSyncDeltaRULEIntraParameterField',
-    'CThostFtdcSyncDeltaRULEInterParameterField',
-    'CThostFtdcInvestorPortfMarginModelField',
+    "CThostFtdcInstrumentMarginRateField",
+    "CThostFtdcInstrumentCommissionRateField",
+    "CThostFtdcInstrumentTradingRightField",
+    "CThostFtdcInstrumentMarginRateAdjustField",
+    "CThostFtdcExchangeMarginRateField",
+    "CThostFtdcExchangeMarginRateAdjustField",
+    "CThostFtdcSyncingInvestorField",
+    "CThostFtdcSyncingTradingCodeField",
+    "CThostFtdcSyncingInvestorGroupField",
+    "CThostFtdcSyncingTradingAccountField",
+    "CThostFtdcSyncingInvestorPositionField",
+    "CThostFtdcSyncingInstrumentMarginRateField",
+    "CThostFtdcSyncingInstrumentCommissionRateField",
+    "CThostFtdcSyncingInstrumentTradingRightField",
+    "CThostFtdcOptionInstrMiniMarginField",
+    "CThostFtdcOptionInstrMarginAdjustField",
+    "CThostFtdcOptionInstrCommRateField",
+    "CThostFtdcOptionInstrTradeCostField",
+    "CThostFtdcOptionInstrTradingRightField",
+    "CThostFtdcOptionInstrDeltaField",
+    "CThostFtdcStrikeOffsetField",
+    "CThostFtdcMMOptionInstrCommRateField",
+    "CThostFtdcMMInstrumentCommissionRateField",
+    "CThostFtdcInstrumentMarginRateULField",
+    "CThostFtdcMarginModelField",
+    "CThostFtdcEWarrantOffsetField",
+    "CThostFtdcInvestorProductGroupMarginField",
+    "CThostFtdcRiskSettleInvstPositionField",
+    "CThostFtdcRiskSettleProductStatusField",
+    "CThostFtdcSyncDeltaInfoField",
+    "CThostFtdcSyncDeltaProductStatusField",
+    "CThostFtdcSyncDeltaInvstPosDtlField",
+    "CThostFtdcSyncDeltaInvstPosCombDtlField",
+    "CThostFtdcSyncDeltaTradingAccountField",
+    "CThostFtdcSyncDeltaInitInvstMarginField",
+    "CThostFtdcSyncDeltaDceCombInstrumentField",
+    "CThostFtdcSyncDeltaInvstMarginRateField",
+    "CThostFtdcSyncDeltaExchMarginRateField",
+    "CThostFtdcSyncDeltaOptExchMarginField",
+    "CThostFtdcSyncDeltaOptInvstMarginField",
+    "CThostFtdcSyncDeltaInvstMarginRateULField",
+    "CThostFtdcSyncDeltaOptInvstCommRateField",
+    "CThostFtdcSyncDeltaInvstCommRateField",
+    "CThostFtdcSyncDeltaProductExchRateField",
+    "CThostFtdcSyncDeltaDepthMarketDataField",
+    "CThostFtdcSyncDeltaIndexPriceField",
+    "CThostFtdcSyncDeltaEWarrantOffsetField",
+    "CThostFtdcSPBMFutureParameterField",
+    "CThostFtdcSPBMOptionParameterField",
+    "CThostFtdcSPBMIntraParameterField",
+    "CThostFtdcSPBMInterParameterField",
+    "CThostFtdcSyncSPBMParameterEndField",
+    "CThostFtdcSPBMPortfDefinitionField",
+    "CThostFtdcSPBMInvestorPortfDefField",
+    "CThostFtdcInvestorPortfMarginRatioField",
+    "CThostFtdcInvestorTradingRightField",
+    "CThostFtdcWithDrawParamField",
+    "CThostFtdcSPBMAddOnInterParameterField",
+    "CThostFtdcInvestorCommoditySPMMMarginField",
+    "CThostFtdcInvestorCommodityGroupSPMMMarginField",
+    "CThostFtdcSPMMInstParamField",
+    "CThostFtdcSPMMProductParamField",
+    "CThostFtdcRCAMSCombProductInfoField",
+    "CThostFtdcRCAMSInstrParameterField",
+    "CThostFtdcRCAMSIntraParameterField",
+    "CThostFtdcRCAMSInterParameterField",
+    "CThostFtdcRCAMSShortOptAdjustParamField",
+    "CThostFtdcRCAMSInvestorCombPositionField",
+    "CThostFtdcInvestorProdRCAMSMarginField",
+    "CThostFtdcRULEInstrParameterField",
+    "CThostFtdcRULEIntraParameterField",
+    "CThostFtdcRULEInterParameterField",
+    "CThostFtdcInvestorProdRULEMarginField",
+    "CThostFtdcSyncDeltaSPBMPortfDefinitionField",
+    "CThostFtdcSyncDeltaSPBMInvstPortfDefField",
+    "CThostFtdcSyncDeltaSPBMFutureParameterField",
+    "CThostFtdcSyncDeltaSPBMOptionParameterField",
+    "CThostFtdcSyncDeltaSPBMIntraParameterField",
+    "CThostFtdcSyncDeltaSPBMInterParameterField",
+    "CThostFtdcSyncDeltaSPBMAddOnInterParamField",
+    "CThostFtdcSyncDeltaSPMMInstParamField",
+    "CThostFtdcSyncDeltaSPMMProductParamField",
+    "CThostFtdcSyncDeltaInvestorSPMMModelField",
+    "CThostFtdcSyncDeltaSPMMModelParamField",
+    "CThostFtdcSyncDeltaRCAMSCombProdInfoField",
+    "CThostFtdcSyncDeltaRCAMSInstrParameterField",
+    "CThostFtdcSyncDeltaRCAMSIntraParameterField",
+    "CThostFtdcSyncDeltaRCAMSInterParameterField",
+    "CThostFtdcSyncDeltaRCAMSSOptAdjParamField",
+    "CThostFtdcSyncDeltaRCAMSCombRuleDtlField",
+    "CThostFtdcSyncDeltaRCAMSInvstCombPosField",
+    "CThostFtdcSyncDeltaRULEInstrParameterField",
+    "CThostFtdcSyncDeltaRULEIntraParameterField",
+    "CThostFtdcSyncDeltaRULEInterParameterField",
+    "CThostFtdcInvestorPortfMarginModelField",
 ]

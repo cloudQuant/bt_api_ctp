@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr, print_exception, stderr, weakref
 
 class CThostFtdcTraderSpi:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
 
@@ -36,9 +36,7 @@ class CThostFtdcTraderSpi:
             self, pUserLogout, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspUserPasswordUpdate(
-        self, pUserPasswordUpdate, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspUserPasswordUpdate(self, pUserPasswordUpdate, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspUserPasswordUpdate(
             self, pUserPasswordUpdate, pRspInfo, nRequestID, bIsLast
         )
@@ -90,9 +88,7 @@ class CThostFtdcTraderSpi:
             self, pQryMaxOrderVolume, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspSettlementInfoConfirm(
-        self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspSettlementInfoConfirm(
             self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
         )
@@ -102,9 +98,7 @@ class CThostFtdcTraderSpi:
             self, pRemoveParkedOrder, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspRemoveParkedOrderAction(
-        self, pRemoveParkedOrderAction, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspRemoveParkedOrderAction(self, pRemoveParkedOrderAction, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspRemoveParkedOrderAction(
             self, pRemoveParkedOrderAction, pRspInfo, nRequestID, bIsLast
         )
@@ -114,9 +108,7 @@ class CThostFtdcTraderSpi:
             self, pInputExecOrder, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspExecOrderAction(
-        self, pInputExecOrderAction, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspExecOrderAction(self, pInputExecOrderAction, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspExecOrderAction(
             self, pInputExecOrderAction, pRspInfo, nRequestID, bIsLast
         )
@@ -136,16 +128,12 @@ class CThostFtdcTraderSpi:
             self, pInputQuoteAction, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspBatchOrderAction(
-        self, pInputBatchOrderAction, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspBatchOrderAction(self, pInputBatchOrderAction, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspBatchOrderAction(
             self, pInputBatchOrderAction, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspOptionSelfCloseInsert(
-        self, pInputOptionSelfClose, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspOptionSelfCloseInsert(self, pInputOptionSelfClose, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspOptionSelfCloseInsert(
             self, pInputOptionSelfClose, pRspInfo, nRequestID, bIsLast
         )
@@ -163,18 +151,12 @@ class CThostFtdcTraderSpi:
         )
 
     def OnRspQryOrder(self, pOrder, pRspInfo, nRequestID, bIsLast):
-        return _ctp.CThostFtdcTraderSpi_OnRspQryOrder(
-            self, pOrder, pRspInfo, nRequestID, bIsLast
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRspQryOrder(self, pOrder, pRspInfo, nRequestID, bIsLast)
 
     def OnRspQryTrade(self, pTrade, pRspInfo, nRequestID, bIsLast):
-        return _ctp.CThostFtdcTraderSpi_OnRspQryTrade(
-            self, pTrade, pRspInfo, nRequestID, bIsLast
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRspQryTrade(self, pTrade, pRspInfo, nRequestID, bIsLast)
 
-    def OnRspQryInvestorPosition(
-        self, pInvestorPosition, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryInvestorPosition(self, pInvestorPosition, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryInvestorPosition(
             self, pInvestorPosition, pRspInfo, nRequestID, bIsLast
         )
@@ -194,9 +176,7 @@ class CThostFtdcTraderSpi:
             self, pTradingCode, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryInstrumentMarginRate(
-        self, pInstrumentMarginRate, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryInstrumentMarginRate(self, pInstrumentMarginRate, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryInstrumentMarginRate(
             self, pInstrumentMarginRate, pRspInfo, nRequestID, bIsLast
         )
@@ -251,13 +231,9 @@ class CThostFtdcTraderSpi:
         )
 
     def OnRspQryNotice(self, pNotice, pRspInfo, nRequestID, bIsLast):
-        return _ctp.CThostFtdcTraderSpi_OnRspQryNotice(
-            self, pNotice, pRspInfo, nRequestID, bIsLast
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRspQryNotice(self, pNotice, pRspInfo, nRequestID, bIsLast)
 
-    def OnRspQrySettlementInfoConfirm(
-        self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySettlementInfoConfirm(
             self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
         )
@@ -288,9 +264,7 @@ class CThostFtdcTraderSpi:
             self, pInvestorProductGroupMargin, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryExchangeMarginRate(
-        self, pExchangeMarginRate, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryExchangeMarginRate(self, pExchangeMarginRate, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryExchangeMarginRate(
             self, pExchangeMarginRate, pRspInfo, nRequestID, bIsLast
         )
@@ -329,9 +303,7 @@ class CThostFtdcTraderSpi:
             self, pMMInstrumentCommissionRate, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryMMOptionInstrCommRate(
-        self, pMMOptionInstrCommRate, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryMMOptionInstrCommRate(self, pMMOptionInstrCommRate, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryMMOptionInstrCommRate(
             self, pMMOptionInstrCommRate, pRspInfo, nRequestID, bIsLast
         )
@@ -343,37 +315,27 @@ class CThostFtdcTraderSpi:
             self, pInstrumentOrderCommRate, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySecAgentTradingAccount(
-        self, pTradingAccount, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySecAgentTradingAccount(self, pTradingAccount, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySecAgentTradingAccount(
             self, pTradingAccount, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySecAgentCheckMode(
-        self, pSecAgentCheckMode, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySecAgentCheckMode(self, pSecAgentCheckMode, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySecAgentCheckMode(
             self, pSecAgentCheckMode, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySecAgentTradeInfo(
-        self, pSecAgentTradeInfo, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySecAgentTradeInfo(self, pSecAgentTradeInfo, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySecAgentTradeInfo(
             self, pSecAgentTradeInfo, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryOptionInstrTradeCost(
-        self, pOptionInstrTradeCost, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryOptionInstrTradeCost(self, pOptionInstrTradeCost, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryOptionInstrTradeCost(
             self, pOptionInstrTradeCost, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryOptionInstrCommRate(
-        self, pOptionInstrCommRate, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryOptionInstrCommRate(self, pOptionInstrCommRate, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryOptionInstrCommRate(
             self, pOptionInstrCommRate, pRspInfo, nRequestID, bIsLast
         )
@@ -389,9 +351,7 @@ class CThostFtdcTraderSpi:
         )
 
     def OnRspQryQuote(self, pQuote, pRspInfo, nRequestID, bIsLast):
-        return _ctp.CThostFtdcTraderSpi_OnRspQryQuote(
-            self, pQuote, pRspInfo, nRequestID, bIsLast
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRspQryQuote(self, pQuote, pRspInfo, nRequestID, bIsLast)
 
     def OnRspQryOptionSelfClose(self, pOptionSelfClose, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryOptionSelfClose(
@@ -403,9 +363,7 @@ class CThostFtdcTraderSpi:
             self, pInvestUnit, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryCombInstrumentGuard(
-        self, pCombInstrumentGuard, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryCombInstrumentGuard(self, pCombInstrumentGuard, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryCombInstrumentGuard(
             self, pCombInstrumentGuard, pRspInfo, nRequestID, bIsLast
         )
@@ -438,9 +396,7 @@ class CThostFtdcTraderSpi:
         return _ctp.CThostFtdcTraderSpi_OnErrRtnOrderInsert(self, pInputOrder, pRspInfo)
 
     def OnErrRtnOrderAction(self, pOrderAction, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnOrderAction(
-            self, pOrderAction, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnOrderAction(self, pOrderAction, pRspInfo)
 
     def OnRtnInstrumentStatus(self, pInstrumentStatus):
         return _ctp.CThostFtdcTraderSpi_OnRtnInstrumentStatus(self, pInstrumentStatus)
@@ -452,27 +408,19 @@ class CThostFtdcTraderSpi:
         return _ctp.CThostFtdcTraderSpi_OnRtnTradingNotice(self, pTradingNoticeInfo)
 
     def OnRtnErrorConditionalOrder(self, pErrorConditionalOrder):
-        return _ctp.CThostFtdcTraderSpi_OnRtnErrorConditionalOrder(
-            self, pErrorConditionalOrder
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnErrorConditionalOrder(self, pErrorConditionalOrder)
 
     def OnRtnExecOrder(self, pExecOrder):
         return _ctp.CThostFtdcTraderSpi_OnRtnExecOrder(self, pExecOrder)
 
     def OnErrRtnExecOrderInsert(self, pInputExecOrder, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnExecOrderInsert(
-            self, pInputExecOrder, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnExecOrderInsert(self, pInputExecOrder, pRspInfo)
 
     def OnErrRtnExecOrderAction(self, pExecOrderAction, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnExecOrderAction(
-            self, pExecOrderAction, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnExecOrderAction(self, pExecOrderAction, pRspInfo)
 
     def OnErrRtnForQuoteInsert(self, pInputForQuote, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnForQuoteInsert(
-            self, pInputForQuote, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnForQuoteInsert(self, pInputForQuote, pRspInfo)
 
     def OnRtnQuote(self, pQuote):
         return _ctp.CThostFtdcTraderSpi_OnRtnQuote(self, pQuote)
@@ -481,9 +429,7 @@ class CThostFtdcTraderSpi:
         return _ctp.CThostFtdcTraderSpi_OnErrRtnQuoteInsert(self, pInputQuote, pRspInfo)
 
     def OnErrRtnQuoteAction(self, pQuoteAction, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnQuoteAction(
-            self, pQuoteAction, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnQuoteAction(self, pQuoteAction, pRspInfo)
 
     def OnRtnForQuoteRsp(self, pForQuoteRsp):
         return _ctp.CThostFtdcTraderSpi_OnRtnForQuoteRsp(self, pForQuoteRsp)
@@ -494,9 +440,7 @@ class CThostFtdcTraderSpi:
         )
 
     def OnErrRtnBatchOrderAction(self, pBatchOrderAction, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnBatchOrderAction(
-            self, pBatchOrderAction, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnBatchOrderAction(self, pBatchOrderAction, pRspInfo)
 
     def OnRtnOptionSelfClose(self, pOptionSelfClose):
         return _ctp.CThostFtdcTraderSpi_OnRtnOptionSelfClose(self, pOptionSelfClose)
@@ -515,9 +459,7 @@ class CThostFtdcTraderSpi:
         return _ctp.CThostFtdcTraderSpi_OnRtnCombAction(self, pCombAction)
 
     def OnErrRtnCombActionInsert(self, pInputCombAction, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnCombActionInsert(
-            self, pInputCombAction, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnCombActionInsert(self, pInputCombAction, pRspInfo)
 
     def OnRspQryContractBank(self, pContractBank, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryContractBank(
@@ -529,9 +471,7 @@ class CThostFtdcTraderSpi:
             self, pParkedOrder, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryParkedOrderAction(
-        self, pParkedOrderAction, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryParkedOrderAction(self, pParkedOrderAction, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryParkedOrderAction(
             self, pParkedOrderAction, pRspInfo, nRequestID, bIsLast
         )
@@ -541,16 +481,12 @@ class CThostFtdcTraderSpi:
             self, pTradingNotice, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryBrokerTradingParams(
-        self, pBrokerTradingParams, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryBrokerTradingParams(self, pBrokerTradingParams, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryBrokerTradingParams(
             self, pBrokerTradingParams, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryBrokerTradingAlgos(
-        self, pBrokerTradingAlgos, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryBrokerTradingAlgos(self, pBrokerTradingAlgos, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryBrokerTradingAlgos(
             self, pBrokerTradingAlgos, pRspInfo, nRequestID, bIsLast
         )
@@ -569,49 +505,31 @@ class CThostFtdcTraderSpi:
         return _ctp.CThostFtdcTraderSpi_OnRtnFromFutureToBankByBank(self, pRspTransfer)
 
     def OnRtnRepealFromBankToFutureByBank(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByBank(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByBank(self, pRspRepeal)
 
     def OnRtnRepealFromFutureToBankByBank(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByBank(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByBank(self, pRspRepeal)
 
     def OnRtnFromBankToFutureByFuture(self, pRspTransfer):
-        return _ctp.CThostFtdcTraderSpi_OnRtnFromBankToFutureByFuture(
-            self, pRspTransfer
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnFromBankToFutureByFuture(self, pRspTransfer)
 
     def OnRtnFromFutureToBankByFuture(self, pRspTransfer):
-        return _ctp.CThostFtdcTraderSpi_OnRtnFromFutureToBankByFuture(
-            self, pRspTransfer
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnFromFutureToBankByFuture(self, pRspTransfer)
 
     def OnRtnRepealFromBankToFutureByFutureManual(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByFutureManual(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByFutureManual(self, pRspRepeal)
 
     def OnRtnRepealFromFutureToBankByFutureManual(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByFutureManual(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByFutureManual(self, pRspRepeal)
 
     def OnRtnQueryBankBalanceByFuture(self, pNotifyQueryAccount):
-        return _ctp.CThostFtdcTraderSpi_OnRtnQueryBankBalanceByFuture(
-            self, pNotifyQueryAccount
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnQueryBankBalanceByFuture(self, pNotifyQueryAccount)
 
     def OnErrRtnBankToFutureByFuture(self, pReqTransfer, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnBankToFutureByFuture(
-            self, pReqTransfer, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnBankToFutureByFuture(self, pReqTransfer, pRspInfo)
 
     def OnErrRtnFutureToBankByFuture(self, pReqTransfer, pRspInfo):
-        return _ctp.CThostFtdcTraderSpi_OnErrRtnFutureToBankByFuture(
-            self, pReqTransfer, pRspInfo
-        )
+        return _ctp.CThostFtdcTraderSpi_OnErrRtnFutureToBankByFuture(self, pReqTransfer, pRspInfo)
 
     def OnErrRtnRepealBankToFutureByFutureManual(self, pReqRepeal, pRspInfo):
         return _ctp.CThostFtdcTraderSpi_OnErrRtnRepealBankToFutureByFutureManual(
@@ -629,32 +547,22 @@ class CThostFtdcTraderSpi:
         )
 
     def OnRtnRepealFromBankToFutureByFuture(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByFuture(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromBankToFutureByFuture(self, pRspRepeal)
 
     def OnRtnRepealFromFutureToBankByFuture(self, pRspRepeal):
-        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByFuture(
-            self, pRspRepeal
-        )
+        return _ctp.CThostFtdcTraderSpi_OnRtnRepealFromFutureToBankByFuture(self, pRspRepeal)
 
-    def OnRspFromBankToFutureByFuture(
-        self, pReqTransfer, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspFromBankToFutureByFuture(self, pReqTransfer, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspFromBankToFutureByFuture(
             self, pReqTransfer, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspFromFutureToBankByFuture(
-        self, pReqTransfer, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspFromFutureToBankByFuture(self, pReqTransfer, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspFromFutureToBankByFuture(
             self, pReqTransfer, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQueryBankAccountMoneyByFuture(
-        self, pReqQueryAccount, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQueryBankAccountMoneyByFuture(self, pReqQueryAccount, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQueryBankAccountMoneyByFuture(
             self, pReqQueryAccount, pRspInfo, nRequestID, bIsLast
         )
@@ -673,9 +581,7 @@ class CThostFtdcTraderSpi:
             self, pInstrument, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryCombPromotionParam(
-        self, pCombPromotionParam, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryCombPromotionParam(self, pCombPromotionParam, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryCombPromotionParam(
             self, pCombPromotionParam, pRspInfo, nRequestID, bIsLast
         )
@@ -694,44 +600,32 @@ class CThostFtdcTraderSpi:
             self, pRiskSettleProductStatus, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMFutureParameter(
-        self, pSPBMFutureParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMFutureParameter(self, pSPBMFutureParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMFutureParameter(
             self, pSPBMFutureParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMOptionParameter(
-        self, pSPBMOptionParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMOptionParameter(self, pSPBMOptionParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMOptionParameter(
             self, pSPBMOptionParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMIntraParameter(
-        self, pSPBMIntraParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMIntraParameter(self, pSPBMIntraParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMIntraParameter(
             self, pSPBMIntraParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMInterParameter(
-        self, pSPBMInterParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMInterParameter(self, pSPBMInterParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMInterParameter(
             self, pSPBMInterParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMPortfDefinition(
-        self, pSPBMPortfDefinition, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMPortfDefinition(self, pSPBMPortfDefinition, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMPortfDefinition(
             self, pSPBMPortfDefinition, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPBMInvestorPortfDef(
-        self, pSPBMInvestorPortfDef, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPBMInvestorPortfDef(self, pSPBMInvestorPortfDef, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPBMInvestorPortfDef(
             self, pSPBMInvestorPortfDef, pRspInfo, nRequestID, bIsLast
         )
@@ -769,9 +663,7 @@ class CThostFtdcTraderSpi:
             self, pSPMMInstParam, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQrySPMMProductParam(
-        self, pSPMMProductParam, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQrySPMMProductParam(self, pSPMMProductParam, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQrySPMMProductParam(
             self, pSPMMProductParam, pRspInfo, nRequestID, bIsLast
         )
@@ -783,30 +675,22 @@ class CThostFtdcTraderSpi:
             self, pSPBMAddOnInterParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRCAMSCombProductInfo(
-        self, pRCAMSCombProductInfo, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRCAMSCombProductInfo(self, pRCAMSCombProductInfo, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRCAMSCombProductInfo(
             self, pRCAMSCombProductInfo, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRCAMSInstrParameter(
-        self, pRCAMSInstrParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRCAMSInstrParameter(self, pRCAMSInstrParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRCAMSInstrParameter(
             self, pRCAMSInstrParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRCAMSIntraParameter(
-        self, pRCAMSIntraParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRCAMSIntraParameter(self, pRCAMSIntraParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRCAMSIntraParameter(
             self, pRCAMSIntraParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRCAMSInterParameter(
-        self, pRCAMSInterParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRCAMSInterParameter(self, pRCAMSInterParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRCAMSInterParameter(
             self, pRCAMSInterParameter, pRspInfo, nRequestID, bIsLast
         )
@@ -832,23 +716,17 @@ class CThostFtdcTraderSpi:
             self, pInvestorProdRCAMSMargin, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRULEInstrParameter(
-        self, pRULEInstrParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRULEInstrParameter(self, pRULEInstrParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRULEInstrParameter(
             self, pRULEInstrParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRULEIntraParameter(
-        self, pRULEIntraParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRULEIntraParameter(self, pRULEIntraParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRULEIntraParameter(
             self, pRULEIntraParameter, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryRULEInterParameter(
-        self, pRULEInterParameter, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryRULEInterParameter(self, pRULEInterParameter, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryRULEInterParameter(
             self, pRULEInterParameter, pRspInfo, nRequestID, bIsLast
         )
@@ -860,9 +738,7 @@ class CThostFtdcTraderSpi:
             self, pInvestorProdRULEMargin, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryInvestorPortfSetting(
-        self, pInvestorPortfSetting, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryInvestorPortfSetting(self, pInvestorPortfSetting, pRspInfo, nRequestID, bIsLast):
         return _ctp.CThostFtdcTraderSpi_OnRspQryInvestorPortfSetting(
             self, pInvestorPortfSetting, pRspInfo, nRequestID, bIsLast
         )
@@ -872,7 +748,7 @@ class CThostFtdcTraderSpi:
 
         Arguments are those provided by sys.exc_info()
         """
-        stderr.write('Exception thrown during method dispatch:\n')
+        stderr.write("Exception thrown during method dispatch:\n")
         print_exception(type, value, traceback)
 
     def __init__(self):
@@ -898,11 +774,11 @@ _ctp.CThostFtdcTraderSpi_swigregister(CThostFtdcTraderSpi)
 
 class CThostFtdcTraderApi:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
 
     def __init__(self, *args, **kwargs):
-        raise AttributeError('No constructor defined - class is abstract')
+        raise AttributeError("No constructor defined - class is abstract")
 
     __repr__ = _swig_repr
 
@@ -948,9 +824,7 @@ class CThostFtdcTraderApi:
         return _ctp.CThostFtdcTraderApi_SubscribePublicTopic(self, nResumeType)
 
     def ReqAuthenticate(self, pReqAuthenticateField, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqAuthenticate(
-            self, pReqAuthenticateField, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqAuthenticate(self, pReqAuthenticateField, nRequestID)
 
     def RegisterUserSystemInfo(self, pUserSystemInfo):
         return _ctp.CThostFtdcTraderApi_RegisterUserSystemInfo(self, pUserSystemInfo)
@@ -959,39 +833,27 @@ class CThostFtdcTraderApi:
         return _ctp.CThostFtdcTraderApi_SubmitUserSystemInfo(self, pUserSystemInfo)
 
     def ReqUserLogin(self, pReqUserLoginField, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqUserLogin(
-            self, pReqUserLoginField, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqUserLogin(self, pReqUserLoginField, nRequestID)
 
     def ReqUserLogout(self, pUserLogout, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqUserLogout(self, pUserLogout, nRequestID)
 
     def ReqUserPasswordUpdate(self, pUserPasswordUpdate, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqUserPasswordUpdate(
-            self, pUserPasswordUpdate, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqUserPasswordUpdate(self, pUserPasswordUpdate, nRequestID)
 
-    def ReqTradingAccountPasswordUpdate(
-        self, pTradingAccountPasswordUpdate, nRequestID
-    ):
+    def ReqTradingAccountPasswordUpdate(self, pTradingAccountPasswordUpdate, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqTradingAccountPasswordUpdate(
             self, pTradingAccountPasswordUpdate, nRequestID
         )
 
     def ReqUserAuthMethod(self, pReqUserAuthMethod, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqUserAuthMethod(
-            self, pReqUserAuthMethod, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqUserAuthMethod(self, pReqUserAuthMethod, nRequestID)
 
     def ReqGenUserCaptcha(self, pReqGenUserCaptcha, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqGenUserCaptcha(
-            self, pReqGenUserCaptcha, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqGenUserCaptcha(self, pReqGenUserCaptcha, nRequestID)
 
     def ReqGenUserText(self, pReqGenUserText, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqGenUserText(
-            self, pReqGenUserText, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqGenUserText(self, pReqGenUserText, nRequestID)
 
     def ReqUserLoginWithCaptcha(self, pReqUserLoginWithCaptcha, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqUserLoginWithCaptcha(
@@ -1004,32 +866,22 @@ class CThostFtdcTraderApi:
         )
 
     def ReqUserLoginWithOTP(self, pReqUserLoginWithOTP, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqUserLoginWithOTP(
-            self, pReqUserLoginWithOTP, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqUserLoginWithOTP(self, pReqUserLoginWithOTP, nRequestID)
 
     def ReqOrderInsert(self, pInputOrder, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqOrderInsert(self, pInputOrder, nRequestID)
 
     def ReqParkedOrderInsert(self, pParkedOrder, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqParkedOrderInsert(
-            self, pParkedOrder, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqParkedOrderInsert(self, pParkedOrder, nRequestID)
 
     def ReqParkedOrderAction(self, pParkedOrderAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqParkedOrderAction(
-            self, pParkedOrderAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqParkedOrderAction(self, pParkedOrderAction, nRequestID)
 
     def ReqOrderAction(self, pInputOrderAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqOrderAction(
-            self, pInputOrderAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqOrderAction(self, pInputOrderAction, nRequestID)
 
     def ReqQryMaxOrderVolume(self, pQryMaxOrderVolume, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryMaxOrderVolume(
-            self, pQryMaxOrderVolume, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryMaxOrderVolume(self, pQryMaxOrderVolume, nRequestID)
 
     def ReqSettlementInfoConfirm(self, pSettlementInfoConfirm, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqSettlementInfoConfirm(
@@ -1037,9 +889,7 @@ class CThostFtdcTraderApi:
         )
 
     def ReqRemoveParkedOrder(self, pRemoveParkedOrder, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqRemoveParkedOrder(
-            self, pRemoveParkedOrder, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqRemoveParkedOrder(self, pRemoveParkedOrder, nRequestID)
 
     def ReqRemoveParkedOrderAction(self, pRemoveParkedOrderAction, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqRemoveParkedOrderAction(
@@ -1047,27 +897,19 @@ class CThostFtdcTraderApi:
         )
 
     def ReqExecOrderInsert(self, pInputExecOrder, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqExecOrderInsert(
-            self, pInputExecOrder, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqExecOrderInsert(self, pInputExecOrder, nRequestID)
 
     def ReqExecOrderAction(self, pInputExecOrderAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqExecOrderAction(
-            self, pInputExecOrderAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqExecOrderAction(self, pInputExecOrderAction, nRequestID)
 
     def ReqForQuoteInsert(self, pInputForQuote, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqForQuoteInsert(
-            self, pInputForQuote, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqForQuoteInsert(self, pInputForQuote, nRequestID)
 
     def ReqQuoteInsert(self, pInputQuote, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQuoteInsert(self, pInputQuote, nRequestID)
 
     def ReqQuoteAction(self, pInputQuoteAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQuoteAction(
-            self, pInputQuoteAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQuoteAction(self, pInputQuoteAction, nRequestID)
 
     def ReqBatchOrderAction(self, pInputBatchOrderAction, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqBatchOrderAction(
@@ -1085,9 +927,7 @@ class CThostFtdcTraderApi:
         )
 
     def ReqCombActionInsert(self, pInputCombAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqCombActionInsert(
-            self, pInputCombAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqCombActionInsert(self, pInputCombAction, nRequestID)
 
     def ReqQryOrder(self, pQryOrder, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryOrder(self, pQryOrder, nRequestID)
@@ -1101,17 +941,13 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQryTradingAccount(self, pQryTradingAccount, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTradingAccount(
-            self, pQryTradingAccount, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTradingAccount(self, pQryTradingAccount, nRequestID)
 
     def ReqQryInvestor(self, pQryInvestor, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInvestor(self, pQryInvestor, nRequestID)
 
     def ReqQryTradingCode(self, pQryTradingCode, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTradingCode(
-            self, pQryTradingCode, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTradingCode(self, pQryTradingCode, nRequestID)
 
     def ReqQryInstrumentMarginRate(self, pQryInstrumentMarginRate, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInstrumentMarginRate(
@@ -1130,29 +966,19 @@ class CThostFtdcTraderApi:
         return _ctp.CThostFtdcTraderApi_ReqQryProduct(self, pQryProduct, nRequestID)
 
     def ReqQryInstrument(self, pQryInstrument, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryInstrument(
-            self, pQryInstrument, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryInstrument(self, pQryInstrument, nRequestID)
 
     def ReqQryDepthMarketData(self, pQryDepthMarketData, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryDepthMarketData(
-            self, pQryDepthMarketData, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryDepthMarketData(self, pQryDepthMarketData, nRequestID)
 
     def ReqQryTraderOffer(self, pQryTraderOffer, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTraderOffer(
-            self, pQryTraderOffer, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTraderOffer(self, pQryTraderOffer, nRequestID)
 
     def ReqQrySettlementInfo(self, pQrySettlementInfo, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQrySettlementInfo(
-            self, pQrySettlementInfo, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQrySettlementInfo(self, pQrySettlementInfo, nRequestID)
 
     def ReqQryTransferBank(self, pQryTransferBank, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTransferBank(
-            self, pQryTransferBank, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTransferBank(self, pQryTransferBank, nRequestID)
 
     def ReqQryInvestorPositionDetail(self, pQryInvestorPositionDetail, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInvestorPositionDetail(
@@ -1167,9 +993,7 @@ class CThostFtdcTraderApi:
             self, pQrySettlementInfoConfirm, nRequestID
         )
 
-    def ReqQryInvestorPositionCombineDetail(
-        self, pQryInvestorPositionCombineDetail, nRequestID
-    ):
+    def ReqQryInvestorPositionCombineDetail(self, pQryInvestorPositionCombineDetail, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInvestorPositionCombineDetail(
             self, pQryInvestorPositionCombineDetail, nRequestID
         )
@@ -1180,13 +1004,9 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQryEWarrantOffset(self, pQryEWarrantOffset, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryEWarrantOffset(
-            self, pQryEWarrantOffset, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryEWarrantOffset(self, pQryEWarrantOffset, nRequestID)
 
-    def ReqQryInvestorProductGroupMargin(
-        self, pQryInvestorProductGroupMargin, nRequestID
-    ):
+    def ReqQryInvestorProductGroupMargin(self, pQryInvestorProductGroupMargin, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInvestorProductGroupMargin(
             self, pQryInvestorProductGroupMargin, nRequestID
         )
@@ -1202,28 +1022,18 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQryExchangeRate(self, pQryExchangeRate, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryExchangeRate(
-            self, pQryExchangeRate, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryExchangeRate(self, pQryExchangeRate, nRequestID)
 
     def ReqQrySecAgentACIDMap(self, pQrySecAgentACIDMap, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQrySecAgentACIDMap(
-            self, pQrySecAgentACIDMap, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQrySecAgentACIDMap(self, pQrySecAgentACIDMap, nRequestID)
 
     def ReqQryProductExchRate(self, pQryProductExchRate, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryProductExchRate(
-            self, pQryProductExchRate, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryProductExchRate(self, pQryProductExchRate, nRequestID)
 
     def ReqQryProductGroup(self, pQryProductGroup, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryProductGroup(
-            self, pQryProductGroup, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryProductGroup(self, pQryProductGroup, nRequestID)
 
-    def ReqQryMMInstrumentCommissionRate(
-        self, pQryMMInstrumentCommissionRate, nRequestID
-    ):
+    def ReqQryMMInstrumentCommissionRate(self, pQryMMInstrumentCommissionRate, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryMMInstrumentCommissionRate(
             self, pQryMMInstrumentCommissionRate, nRequestID
         )
@@ -1273,14 +1083,10 @@ class CThostFtdcTraderApi:
         return _ctp.CThostFtdcTraderApi_ReqQryQuote(self, pQryQuote, nRequestID)
 
     def ReqQryOptionSelfClose(self, pQryOptionSelfClose, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryOptionSelfClose(
-            self, pQryOptionSelfClose, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryOptionSelfClose(self, pQryOptionSelfClose, nRequestID)
 
     def ReqQryInvestUnit(self, pQryInvestUnit, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryInvestUnit(
-            self, pQryInvestUnit, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryInvestUnit(self, pQryInvestUnit, nRequestID)
 
     def ReqQryCombInstrumentGuard(self, pQryCombInstrumentGuard, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryCombInstrumentGuard(
@@ -1288,29 +1094,19 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQryCombAction(self, pQryCombAction, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryCombAction(
-            self, pQryCombAction, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryCombAction(self, pQryCombAction, nRequestID)
 
     def ReqQryTransferSerial(self, pQryTransferSerial, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTransferSerial(
-            self, pQryTransferSerial, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTransferSerial(self, pQryTransferSerial, nRequestID)
 
     def ReqQryAccountregister(self, pQryAccountregister, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryAccountregister(
-            self, pQryAccountregister, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryAccountregister(self, pQryAccountregister, nRequestID)
 
     def ReqQryContractBank(self, pQryContractBank, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryContractBank(
-            self, pQryContractBank, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryContractBank(self, pQryContractBank, nRequestID)
 
     def ReqQryParkedOrder(self, pQryParkedOrder, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryParkedOrder(
-            self, pQryParkedOrder, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryParkedOrder(self, pQryParkedOrder, nRequestID)
 
     def ReqQryParkedOrderAction(self, pQryParkedOrderAction, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryParkedOrderAction(
@@ -1318,9 +1114,7 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQryTradingNotice(self, pQryTradingNotice, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQryTradingNotice(
-            self, pQryTradingNotice, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQryTradingNotice(self, pQryTradingNotice, nRequestID)
 
     def ReqQryBrokerTradingParams(self, pQryBrokerTradingParams, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryBrokerTradingParams(
@@ -1332,22 +1126,16 @@ class CThostFtdcTraderApi:
             self, pQryBrokerTradingAlgos, nRequestID
         )
 
-    def ReqQueryCFMMCTradingAccountToken(
-        self, pQueryCFMMCTradingAccountToken, nRequestID
-    ):
+    def ReqQueryCFMMCTradingAccountToken(self, pQueryCFMMCTradingAccountToken, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQueryCFMMCTradingAccountToken(
             self, pQueryCFMMCTradingAccountToken, nRequestID
         )
 
     def ReqFromBankToFutureByFuture(self, pReqTransfer, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqFromBankToFutureByFuture(
-            self, pReqTransfer, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqFromBankToFutureByFuture(self, pReqTransfer, nRequestID)
 
     def ReqFromFutureToBankByFuture(self, pReqTransfer, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqFromFutureToBankByFuture(
-            self, pReqTransfer, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqFromFutureToBankByFuture(self, pReqTransfer, nRequestID)
 
     def ReqQueryBankAccountMoneyByFuture(self, pReqQueryAccount, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQueryBankAccountMoneyByFuture(
@@ -1414,9 +1202,7 @@ class CThostFtdcTraderApi:
             self, pQryInvestorProdSPBMDetail, nRequestID
         )
 
-    def ReqQryInvestorCommoditySPMMMargin(
-        self, pQryInvestorCommoditySPMMMargin, nRequestID
-    ):
+    def ReqQryInvestorCommoditySPMMMargin(self, pQryInvestorCommoditySPMMMargin, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryInvestorCommoditySPMMMargin(
             self, pQryInvestorCommoditySPMMMargin, nRequestID
         )
@@ -1429,9 +1215,7 @@ class CThostFtdcTraderApi:
         )
 
     def ReqQrySPMMInstParam(self, pQrySPMMInstParam, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqQrySPMMInstParam(
-            self, pQrySPMMInstParam, nRequestID
-        )
+        return _ctp.CThostFtdcTraderApi_ReqQrySPMMInstParam(self, pQrySPMMInstParam, nRequestID)
 
     def ReqQrySPMMProductParam(self, pQrySPMMProductParam, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQrySPMMProductParam(
@@ -1468,9 +1252,7 @@ class CThostFtdcTraderApi:
             self, pQryRCAMSShortOptAdjustParam, nRequestID
         )
 
-    def ReqQryRCAMSInvestorCombPosition(
-        self, pQryRCAMSInvestorCombPosition, nRequestID
-    ):
+    def ReqQryRCAMSInvestorCombPosition(self, pQryRCAMSInvestorCombPosition, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqQryRCAMSInvestorCombPosition(
             self, pQryRCAMSInvestorCombPosition, nRequestID
         )
@@ -1511,6 +1293,6 @@ _ctp.CThostFtdcTraderApi_swigregister(CThostFtdcTraderApi)
 
 
 __all__ = [
-    'CThostFtdcTraderSpi',
-    'CThostFtdcTraderApi',
+    "CThostFtdcTraderSpi",
+    "CThostFtdcTraderApi",
 ]

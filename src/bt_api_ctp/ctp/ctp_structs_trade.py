@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcTradeField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -24,16 +24,12 @@ class CThostFtdcTradeField:
     OrderRef = property(
         _ctp.CThostFtdcTradeField_OrderRef_get, _ctp.CThostFtdcTradeField_OrderRef_set
     )
-    UserID = property(
-        _ctp.CThostFtdcTradeField_UserID_get, _ctp.CThostFtdcTradeField_UserID_set
-    )
+    UserID = property(_ctp.CThostFtdcTradeField_UserID_get, _ctp.CThostFtdcTradeField_UserID_set)
     ExchangeID = property(
         _ctp.CThostFtdcTradeField_ExchangeID_get,
         _ctp.CThostFtdcTradeField_ExchangeID_set,
     )
-    TradeID = property(
-        _ctp.CThostFtdcTradeField_TradeID_get, _ctp.CThostFtdcTradeField_TradeID_set
-    )
+    TradeID = property(_ctp.CThostFtdcTradeField_TradeID_get, _ctp.CThostFtdcTradeField_TradeID_set)
     Direction = property(
         _ctp.CThostFtdcTradeField_Direction_get, _ctp.CThostFtdcTradeField_Direction_set
     )
@@ -62,12 +58,8 @@ class CThostFtdcTradeField:
     HedgeFlag = property(
         _ctp.CThostFtdcTradeField_HedgeFlag_get, _ctp.CThostFtdcTradeField_HedgeFlag_set
     )
-    Price = property(
-        _ctp.CThostFtdcTradeField_Price_get, _ctp.CThostFtdcTradeField_Price_set
-    )
-    Volume = property(
-        _ctp.CThostFtdcTradeField_Volume_get, _ctp.CThostFtdcTradeField_Volume_set
-    )
+    Price = property(_ctp.CThostFtdcTradeField_Price_get, _ctp.CThostFtdcTradeField_Price_set)
+    Volume = property(_ctp.CThostFtdcTradeField_Volume_get, _ctp.CThostFtdcTradeField_Volume_set)
     TradeDate = property(
         _ctp.CThostFtdcTradeField_TradeDate_get, _ctp.CThostFtdcTradeField_TradeDate_set
     )
@@ -141,7 +133,7 @@ _ctp.CThostFtdcTradeField_swigregister(CThostFtdcTradeField)
 
 class CThostFtdcTradeParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -161,9 +153,7 @@ class CThostFtdcTradeParamField:
     )
 
     def __init__(self):
-        _ctp.CThostFtdcTradeParamField_swiginit(
-            self, _ctp.new_CThostFtdcTradeParamField()
-        )
+        _ctp.CThostFtdcTradeParamField_swiginit(self, _ctp.new_CThostFtdcTradeParamField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTradeParamField
 
@@ -172,6 +162,6 @@ class CThostFtdcTradeParamField:
 _ctp.CThostFtdcTradeParamField_swigregister(CThostFtdcTradeParamField)
 
 __all__ = [
-    'CThostFtdcTradeField',
-    'CThostFtdcTradeParamField',
+    "CThostFtdcTradeField",
+    "CThostFtdcTradeParamField",
 ]

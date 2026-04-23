@@ -10,25 +10,25 @@ from bt_api_base.functions.utils import (
 )
 
 CTP_ORDER_STATUS_MAP = {
-    '0': OrderStatus.COMPLETED,
-    '1': OrderStatus.PARTIAL,
-    '2': OrderStatus.PARTIAL,
-    '3': OrderStatus.ACCEPTED,
-    '4': OrderStatus.ACCEPTED,
-    '5': OrderStatus.CANCELED,
-    'a': OrderStatus.SUBMITTED,
-    'b': OrderStatus.SUBMITTED,
-    'c': OrderStatus.SUBMITTED,
+    "0": OrderStatus.COMPLETED,
+    "1": OrderStatus.PARTIAL,
+    "2": OrderStatus.PARTIAL,
+    "3": OrderStatus.ACCEPTED,
+    "4": OrderStatus.ACCEPTED,
+    "5": OrderStatus.CANCELED,
+    "a": OrderStatus.SUBMITTED,
+    "b": OrderStatus.SUBMITTED,
+    "c": OrderStatus.SUBMITTED,
 }
-CTP_DIRECTION_MAP = {'0': 'buy', '1': 'sell'}
+CTP_DIRECTION_MAP = {"0": "buy", "1": "sell"}
 CTP_OFFSET_MAP = {
-    '0': 'open',
-    '1': 'close',
-    '2': 'force_close',
-    '3': 'close_today',
-    '4': 'close_yesterday',
-    '5': 'force_close_yesterday',
-    '6': 'local_force_close',
+    "0": "open",
+    "1": "close",
+    "2": "force_close",
+    "3": "close_today",
+    "4": "close_yesterday",
+    "5": "force_close_yesterday",
+    "6": "local_force_close",
 }
 
 
@@ -37,13 +37,13 @@ class CtpOrderData(OrderData):
         self,
         order_info: Any,
         symbol_name: str | None = None,
-        asset_type: str = 'FUTURE',
+        asset_type: str = "FUTURE",
         has_been_json_encoded: bool = False,
     ) -> None:
         super().__init__(order_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
-        self.exchange_name = 'CTP'
+        self.exchange_name = "CTP"
         self._initialized = False
         self.instrument_id = None
         self.order_ref = None
@@ -67,42 +67,36 @@ class CtpOrderData(OrderData):
             return self
         info = self.order_info
         if isinstance(info, dict):
-            self.instrument_id = from_dict_get_string(info, 'InstrumentID')
-            self.order_ref = from_dict_get_string(info, 'OrderRef')
-            self.order_sys_id = from_dict_get_string(info, 'OrderSysID')
-            direction_key = from_dict_get_string(info, 'Direction', '0') or '0'
-            self.direction = CTP_DIRECTION_MAP.get(direction_key, 'buy')
-            offset_char = from_dict_get_string(info, 'CombOffsetFlag', '0') or '0'
-            self.offset = CTP_OFFSET_MAP.get(
-                offset_char[0] if offset_char else '0', 'open'
-            )
-            self.limit_price = from_dict_get_float(info, 'LimitPrice', 0.0)
-            self.volume_total_original = from_dict_get_int(
-                info, 'VolumeTotalOriginal', 0
-            )
-            self.volume_traded = from_dict_get_int(info, 'VolumeTraded', 0)
-            self.volume_total = from_dict_get_int(info, 'VolumeTotal', 0)
-            status_key = from_dict_get_string(info, 'OrderStatus', 'a') or 'a'
-            self.order_status = CTP_ORDER_STATUS_MAP.get(
-                status_key, OrderStatus.SUBMITTED
-            )
-            self.insert_time = from_dict_get_string(info, 'InsertTime')
-            self.update_time = from_dict_get_string(info, 'UpdateTime')
-            self.status_msg = from_dict_get_string(info, 'StatusMsg')
-            self.exchange_id = from_dict_get_string(info, 'ExchangeID')
-            self.front_id = from_dict_get_int(info, 'FrontID')
-            self.session_id = from_dict_get_int(info, 'SessionID')
+            self.instrument_id = from_dict_get_string(info, "InstrumentID")
+            self.order_ref = from_dict_get_string(info, "OrderRef")
+            self.order_sys_id = from_dict_get_string(info, "OrderSysID")
+            direction_key = from_dict_get_string(info, "Direction", "0") or "0"
+            self.direction = CTP_DIRECTION_MAP.get(direction_key, "buy")
+            offset_char = from_dict_get_string(info, "CombOffsetFlag", "0") or "0"
+            self.offset = CTP_OFFSET_MAP.get(offset_char[0] if offset_char else "0", "open")
+            self.limit_price = from_dict_get_float(info, "LimitPrice", 0.0)
+            self.volume_total_original = from_dict_get_int(info, "VolumeTotalOriginal", 0)
+            self.volume_traded = from_dict_get_int(info, "VolumeTraded", 0)
+            self.volume_total = from_dict_get_int(info, "VolumeTotal", 0)
+            status_key = from_dict_get_string(info, "OrderStatus", "a") or "a"
+            self.order_status = CTP_ORDER_STATUS_MAP.get(status_key, OrderStatus.SUBMITTED)
+            self.insert_time = from_dict_get_string(info, "InsertTime")
+            self.update_time = from_dict_get_string(info, "UpdateTime")
+            self.status_msg = from_dict_get_string(info, "StatusMsg")
+            self.exchange_id = from_dict_get_string(info, "ExchangeID")
+            self.front_id = from_dict_get_int(info, "FrontID")
+            self.session_id = from_dict_get_int(info, "SessionID")
         self._initialized = True
         return self
 
     def get_exchange_name(self) -> str:
-        return self.exchange_name or ''
+        return self.exchange_name or ""
 
     def get_asset_type(self) -> str:
-        return self.asset_type or ''
+        return self.asset_type or ""
 
     def get_symbol_name(self) -> str | None:
-        return self.instrument_id or self.symbol_name or ''
+        return self.instrument_id or self.symbol_name or ""
 
     def get_server_time(self) -> float | None:
         return None
@@ -123,28 +117,28 @@ class CtpOrderData(OrderData):
         return self.limit_price
 
     def get_order_side(self) -> str | None:
-        return self.direction or ''
+        return self.direction or ""
 
     def get_order_status(self) -> OrderStatus | None:
         return self.order_status if isinstance(self.order_status, OrderStatus) else None
 
     def get_order_offset(self) -> str | None:
-        return self.offset or ''
+        return self.offset or ""
 
     def get_order_exchange_id(self) -> str | None:
-        return self.exchange_id or ''
+        return self.exchange_id or ""
 
     def get_executed_qty(self) -> int | None:
         return self.volume_traded
 
     def get_order_symbol_name(self) -> str | None:
-        return self.instrument_id or self.symbol_name or ''
+        return self.instrument_id or self.symbol_name or ""
 
     def get_order_type(self) -> str:
-        return 'limit'
+        return "limit"
 
     def get_order_avg_price(self) -> float | None:
         return self.limit_price
 
     def get_order_time_in_force(self) -> str:
-        return 'GFD'
+        return "GFD"

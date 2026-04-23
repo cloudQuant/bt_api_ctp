@@ -23,40 +23,40 @@ def _ctp_future_subscribe_handler(
     topics: list[dict[str, Any]],
     bt_api: Any,
 ) -> None:
-    topic_list = [t.get('topic') for t in topics]
-    has_tick = any(t in topic_list for t in ('tick', 'ticker', 'depth'))
+    topic_list = [t.get("topic") for t in topics]
+    has_tick = any(t in topic_list for t in ("tick", "ticker", "depth"))
     if has_tick:
         market_kwargs = dict(exchange_params.items())
-        market_kwargs['stream_name'] = 'ctp_market_stream'
-        market_kwargs['topics'] = topics
+        market_kwargs["stream_name"] = "ctp_market_stream"
+        market_kwargs["topics"] = topics
         market_stream = CtpMarketStream(data_queue, **market_kwargs)
         market_stream.start()
-        bt_api.log('CTP market stream started')
+        bt_api.log("CTP market stream started")
 
-    if not bt_api._subscription_flags.get('CTP___FUTURE_account', False):
+    if not bt_api._subscription_flags.get("CTP___FUTURE_account", False):
         trade_kwargs = dict(exchange_params.items())
-        trade_kwargs['stream_name'] = 'ctp_trade_stream'
+        trade_kwargs["stream_name"] = "ctp_trade_stream"
         trade_stream = CtpTradeStream(data_queue, **trade_kwargs)
         trade_stream.start()
-        bt_api._subscription_flags['CTP___FUTURE_account'] = True
-        bt_api.log('CTP trade stream started')
+        bt_api._subscription_flags["CTP___FUTURE_account"] = True
+        bt_api.log("CTP trade stream started")
 
 
 def register_plugin(
     registry: type[ExchangeRegistry], runtime_factory: type[GatewayRuntimeRegistrar]
 ) -> PluginInfo:
-    registry.register_feed('CTP___FUTURE', CtpRequestDataFuture)
-    registry.register_exchange_data('CTP___FUTURE', CtpExchangeDataFuture)
-    registry.register_balance_handler('CTP___FUTURE', _ctp_balance_handler)
-    registry.register_stream('CTP___FUTURE', 'subscribe', _ctp_future_subscribe_handler)
-    registry.register_stream('CTP___FUTURE', 'market', CtpMarketStream)
-    registry.register_stream('CTP___FUTURE', 'account', CtpTradeStream)
-    runtime_factory.register_adapter('CTP', CtpGatewayAdapter)
+    registry.register_feed("CTP___FUTURE", CtpRequestDataFuture)
+    registry.register_exchange_data("CTP___FUTURE", CtpExchangeDataFuture)
+    registry.register_balance_handler("CTP___FUTURE", _ctp_balance_handler)
+    registry.register_stream("CTP___FUTURE", "subscribe", _ctp_future_subscribe_handler)
+    registry.register_stream("CTP___FUTURE", "market", CtpMarketStream)
+    registry.register_stream("CTP___FUTURE", "account", CtpTradeStream)
+    runtime_factory.register_adapter("CTP", CtpGatewayAdapter)
 
     return PluginInfo(
-        name='bt_api_ctp',
+        name="bt_api_ctp",
         version=__version__,
-        core_requires='>=0.15,<1.0',
-        supported_exchanges=('CTP___FUTURE',),
-        supported_asset_types=('FUTURE',),
+        core_requires=">=0.15,<1.0",
+        supported_exchanges=("CTP___FUTURE",),
+        supported_asset_types=("FUTURE",),
     )

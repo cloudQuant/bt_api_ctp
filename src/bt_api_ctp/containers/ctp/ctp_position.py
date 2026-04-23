@@ -7,7 +7,7 @@ from bt_api_base.functions.utils import (
     from_dict_get_string,
 )
 
-CTP_POS_DIRECTION_MAP = {'1': 'net', '2': 'long', '3': 'short'}
+CTP_POS_DIRECTION_MAP = {"1": "net", "2": "long", "3": "short"}
 
 
 class CtpPositionData(PositionData):
@@ -15,13 +15,13 @@ class CtpPositionData(PositionData):
         self,
         position_info,
         symbol_name=None,
-        asset_type='FUTURE',
+        asset_type="FUTURE",
         has_been_json_encoded=False,
     ):
         super().__init__(position_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
-        self.exchange_name = 'CTP'
+        self.exchange_name = "CTP"
         self._initialized = False
         self.instrument_id = None
         self.position_direction = None
@@ -41,30 +41,30 @@ class CtpPositionData(PositionData):
             return self
         info = self.position_info
         if isinstance(info, dict):
-            self.instrument_id = from_dict_get_string(info, 'InstrumentID')
-            pos_direction = from_dict_get_string(info, 'PosiDirection', '1') or '1'
-            self.position_direction = CTP_POS_DIRECTION_MAP.get(pos_direction, 'net')
-            self.position_volume = from_dict_get_int(info, 'Position', 0)
-            self.today_position = from_dict_get_int(info, 'TodayPosition', 0)
-            self.yd_position = from_dict_get_int(info, 'YdPosition', 0)
-            self.position_cost = from_dict_get_float(info, 'PositionCost', 0.0)
-            self.open_cost = from_dict_get_float(info, 'OpenCost', 0.0)
-            self.close_profit = from_dict_get_float(info, 'CloseProfit', 0.0)
-            self.use_margin = from_dict_get_float(info, 'UseMargin', 0.0)
-            self.position_profit = from_dict_get_float(info, 'PositionProfit', 0.0)
-            self.settlement_price = from_dict_get_float(info, 'SettlementPrice', 0.0)
-            self.exchange_id = from_dict_get_string(info, 'ExchangeID')
+            self.instrument_id = from_dict_get_string(info, "InstrumentID")
+            pos_direction = from_dict_get_string(info, "PosiDirection", "1") or "1"
+            self.position_direction = CTP_POS_DIRECTION_MAP.get(pos_direction, "net")
+            self.position_volume = from_dict_get_int(info, "Position", 0)
+            self.today_position = from_dict_get_int(info, "TodayPosition", 0)
+            self.yd_position = from_dict_get_int(info, "YdPosition", 0)
+            self.position_cost = from_dict_get_float(info, "PositionCost", 0.0)
+            self.open_cost = from_dict_get_float(info, "OpenCost", 0.0)
+            self.close_profit = from_dict_get_float(info, "CloseProfit", 0.0)
+            self.use_margin = from_dict_get_float(info, "UseMargin", 0.0)
+            self.position_profit = from_dict_get_float(info, "PositionProfit", 0.0)
+            self.settlement_price = from_dict_get_float(info, "SettlementPrice", 0.0)
+            self.exchange_id = from_dict_get_string(info, "ExchangeID")
         self._initialized = True
         return self
 
     def get_exchange_name(self):
-        return self.exchange_name or ''
+        return self.exchange_name or ""
 
     def get_asset_type(self):
-        return self.asset_type or ''
+        return self.asset_type or ""
 
     def get_symbol_name(self):
-        return self.instrument_id or self.symbol_name or ''
+        return self.instrument_id or self.symbol_name or ""
 
     def get_position_volume(self):
         return self.position_volume or 0
@@ -103,21 +103,21 @@ class CtpPositionData(PositionData):
 
     def get_all_data(self):
         return {
-            'exchange_name': self.exchange_name,
-            'instrument_id': self.instrument_id,
-            'symbol_name': self.symbol_name,
-            'asset_type': self.asset_type,
-            'position_direction': self.position_direction,
-            'position_volume': self.position_volume,
-            'today_position': self.today_position,
-            'yd_position': self.yd_position,
-            'position_cost': self.position_cost,
-            'open_cost': self.open_cost,
-            'close_profit': self.close_profit,
-            'use_margin': self.use_margin,
-            'position_profit': self.position_profit,
-            'settlement_price': self.settlement_price,
-            'exchange_id': self.exchange_id,
+            "exchange_name": self.exchange_name,
+            "instrument_id": self.instrument_id,
+            "symbol_name": self.symbol_name,
+            "asset_type": self.asset_type,
+            "position_direction": self.position_direction,
+            "position_volume": self.position_volume,
+            "today_position": self.today_position,
+            "yd_position": self.yd_position,
+            "position_cost": self.position_cost,
+            "open_cost": self.open_cost,
+            "close_profit": self.close_profit,
+            "use_margin": self.use_margin,
+            "position_profit": self.position_profit,
+            "settlement_price": self.settlement_price,
+            "exchange_id": self.exchange_id,
         }
 
     def __str__(self):

@@ -8,7 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcInputOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -149,9 +149,7 @@ class CThostFtdcInputOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputOrderField_swiginit(
-            self, _ctp.new_CThostFtdcInputOrderField()
-        )
+        _ctp.CThostFtdcInputOrderField_swiginit(self, _ctp.new_CThostFtdcInputOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputOrderField
 
@@ -162,7 +160,7 @@ _ctp.CThostFtdcInputOrderField_swigregister(CThostFtdcInputOrderField)
 
 class CThostFtdcOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -178,9 +176,7 @@ class CThostFtdcOrderField:
     OrderRef = property(
         _ctp.CThostFtdcOrderField_OrderRef_get, _ctp.CThostFtdcOrderField_OrderRef_set
     )
-    UserID = property(
-        _ctp.CThostFtdcOrderField_UserID_get, _ctp.CThostFtdcOrderField_UserID_set
-    )
+    UserID = property(_ctp.CThostFtdcOrderField_UserID_get, _ctp.CThostFtdcOrderField_UserID_set)
     OrderPriceType = property(
         _ctp.CThostFtdcOrderField_OrderPriceType_get,
         _ctp.CThostFtdcOrderField_OrderPriceType_set,
@@ -208,9 +204,7 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_TimeCondition_get,
         _ctp.CThostFtdcOrderField_TimeCondition_set,
     )
-    GTDDate = property(
-        _ctp.CThostFtdcOrderField_GTDDate_get, _ctp.CThostFtdcOrderField_GTDDate_set
-    )
+    GTDDate = property(_ctp.CThostFtdcOrderField_GTDDate_get, _ctp.CThostFtdcOrderField_GTDDate_set)
     VolumeCondition = property(
         _ctp.CThostFtdcOrderField_VolumeCondition_get,
         _ctp.CThostFtdcOrderField_VolumeCondition_set,
@@ -339,9 +333,7 @@ class CThostFtdcOrderField:
         _ctp.CThostFtdcOrderField_SequenceNo_get,
         _ctp.CThostFtdcOrderField_SequenceNo_set,
     )
-    FrontID = property(
-        _ctp.CThostFtdcOrderField_FrontID_get, _ctp.CThostFtdcOrderField_FrontID_set
-    )
+    FrontID = property(_ctp.CThostFtdcOrderField_FrontID_get, _ctp.CThostFtdcOrderField_FrontID_set)
     SessionID = property(
         _ctp.CThostFtdcOrderField_SessionID_get, _ctp.CThostFtdcOrderField_SessionID_set
     )
@@ -428,7 +420,7 @@ _ctp.CThostFtdcOrderField_swigregister(CThostFtdcOrderField)
 
 class CThostFtdcExchangeOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     OrderPriceType = property(
@@ -621,9 +613,7 @@ class CThostFtdcExchangeOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExchangeOrderField_swiginit(
-            self, _ctp.new_CThostFtdcExchangeOrderField()
-        )
+        _ctp.CThostFtdcExchangeOrderField_swiginit(self, _ctp.new_CThostFtdcExchangeOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeOrderField
 
@@ -634,7 +624,7 @@ _ctp.CThostFtdcExchangeOrderField_swigregister(CThostFtdcExchangeOrderField)
 
 class CThostFtdcExchangeOrderInsertErrorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -675,14 +665,12 @@ class CThostFtdcExchangeOrderInsertErrorField:
 
 
 # Register CThostFtdcExchangeOrderInsertErrorField in _ctp:
-_ctp.CThostFtdcExchangeOrderInsertErrorField_swigregister(
-    CThostFtdcExchangeOrderInsertErrorField
-)
+_ctp.CThostFtdcExchangeOrderInsertErrorField_swigregister(CThostFtdcExchangeOrderInsertErrorField)
 
 
 class CThostFtdcInputOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -784,7 +772,7 @@ _ctp.CThostFtdcInputOrderActionField_swigregister(CThostFtdcInputOrderActionFiel
 
 class CThostFtdcOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -921,9 +909,7 @@ class CThostFtdcOrderActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcOrderActionField_swiginit(
-            self, _ctp.new_CThostFtdcOrderActionField()
-        )
+        _ctp.CThostFtdcOrderActionField_swiginit(self, _ctp.new_CThostFtdcOrderActionField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcOrderActionField
 
@@ -934,7 +920,7 @@ _ctp.CThostFtdcOrderActionField_swigregister(CThostFtdcOrderActionField)
 
 class CThostFtdcExchangeOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1032,7 +1018,7 @@ _ctp.CThostFtdcExchangeOrderActionField_swigregister(CThostFtdcExchangeOrderActi
 
 class CThostFtdcExchangeOrderActionErrorField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1077,14 +1063,12 @@ class CThostFtdcExchangeOrderActionErrorField:
 
 
 # Register CThostFtdcExchangeOrderActionErrorField in _ctp:
-_ctp.CThostFtdcExchangeOrderActionErrorField_swigregister(
-    CThostFtdcExchangeOrderActionErrorField
-)
+_ctp.CThostFtdcExchangeOrderActionErrorField_swigregister(CThostFtdcExchangeOrderActionErrorField)
 
 
 class CThostFtdcInputExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1181,9 +1165,7 @@ class CThostFtdcInputExecOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputExecOrderField_swiginit(
-            self, _ctp.new_CThostFtdcInputExecOrderField()
-        )
+        _ctp.CThostFtdcInputExecOrderField_swiginit(self, _ctp.new_CThostFtdcInputExecOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputExecOrderField
 
@@ -1194,7 +1176,7 @@ _ctp.CThostFtdcInputExecOrderField_swigregister(CThostFtdcInputExecOrderField)
 
 class CThostFtdcInputExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1275,14 +1257,12 @@ class CThostFtdcInputExecOrderActionField:
 
 
 # Register CThostFtdcInputExecOrderActionField in _ctp:
-_ctp.CThostFtdcInputExecOrderActionField_swigregister(
-    CThostFtdcInputExecOrderActionField
-)
+_ctp.CThostFtdcInputExecOrderActionField_swigregister(CThostFtdcInputExecOrderActionField)
 
 
 class CThostFtdcExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1475,9 +1455,7 @@ class CThostFtdcExecOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExecOrderField_swiginit(
-            self, _ctp.new_CThostFtdcExecOrderField()
-        )
+        _ctp.CThostFtdcExecOrderField_swiginit(self, _ctp.new_CThostFtdcExecOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExecOrderField
 
@@ -1488,7 +1466,7 @@ _ctp.CThostFtdcExecOrderField_swigregister(CThostFtdcExecOrderField)
 
 class CThostFtdcExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1626,7 +1604,7 @@ _ctp.CThostFtdcExecOrderActionField_swigregister(CThostFtdcExecOrderActionField)
 
 class CThostFtdcExchangeExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     Volume = property(
@@ -1772,7 +1750,7 @@ _ctp.CThostFtdcExchangeExecOrderField_swigregister(CThostFtdcExchangeExecOrderFi
 
 class CThostFtdcExchangeExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -1873,14 +1851,12 @@ class CThostFtdcExchangeExecOrderActionField:
 
 
 # Register CThostFtdcExchangeExecOrderActionField in _ctp:
-_ctp.CThostFtdcExchangeExecOrderActionField_swigregister(
-    CThostFtdcExchangeExecOrderActionField
-)
+_ctp.CThostFtdcExchangeExecOrderActionField_swigregister(CThostFtdcExchangeExecOrderActionField)
 
 
 class CThostFtdcErrExecOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -1985,9 +1961,7 @@ class CThostFtdcErrExecOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcErrExecOrderField_swiginit(
-            self, _ctp.new_CThostFtdcErrExecOrderField()
-        )
+        _ctp.CThostFtdcErrExecOrderField_swiginit(self, _ctp.new_CThostFtdcErrExecOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcErrExecOrderField
 
@@ -1998,7 +1972,7 @@ _ctp.CThostFtdcErrExecOrderField_swigregister(CThostFtdcErrExecOrderField)
 
 class CThostFtdcErrExecOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2092,7 +2066,7 @@ _ctp.CThostFtdcErrExecOrderActionField_swigregister(CThostFtdcErrExecOrderAction
 
 class CThostFtdcInputForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2141,9 +2115,7 @@ class CThostFtdcInputForQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputForQuoteField_swiginit(
-            self, _ctp.new_CThostFtdcInputForQuoteField()
-        )
+        _ctp.CThostFtdcInputForQuoteField_swiginit(self, _ctp.new_CThostFtdcInputForQuoteField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputForQuoteField
 
@@ -2154,7 +2126,7 @@ _ctp.CThostFtdcInputForQuoteField_swigregister(CThostFtdcInputForQuoteField)
 
 class CThostFtdcForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2273,7 +2245,7 @@ _ctp.CThostFtdcForQuoteField_swigregister(CThostFtdcForQuoteField)
 
 class CThostFtdcExchangeForQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ForQuoteLocalID = property(
@@ -2347,7 +2319,7 @@ _ctp.CThostFtdcExchangeForQuoteField_swigregister(CThostFtdcExchangeForQuoteFiel
 
 class CThostFtdcInputQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2468,9 +2440,7 @@ class CThostFtdcInputQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcInputQuoteField_swiginit(
-            self, _ctp.new_CThostFtdcInputQuoteField()
-        )
+        _ctp.CThostFtdcInputQuoteField_swiginit(self, _ctp.new_CThostFtdcInputQuoteField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInputQuoteField
 
@@ -2481,7 +2451,7 @@ _ctp.CThostFtdcInputQuoteField_swigregister(CThostFtdcInputQuoteField)
 
 class CThostFtdcInputQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2579,7 +2549,7 @@ _ctp.CThostFtdcInputQuoteActionField_swigregister(CThostFtdcInputQuoteActionFiel
 
 class CThostFtdcQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2595,9 +2565,7 @@ class CThostFtdcQuoteField:
     QuoteRef = property(
         _ctp.CThostFtdcQuoteField_QuoteRef_get, _ctp.CThostFtdcQuoteField_QuoteRef_set
     )
-    UserID = property(
-        _ctp.CThostFtdcQuoteField_UserID_get, _ctp.CThostFtdcQuoteField_UserID_set
-    )
+    UserID = property(_ctp.CThostFtdcQuoteField_UserID_get, _ctp.CThostFtdcQuoteField_UserID_set)
     AskPrice = property(
         _ctp.CThostFtdcQuoteField_AskPrice_get, _ctp.CThostFtdcQuoteField_AskPrice_set
     )
@@ -2709,9 +2677,7 @@ class CThostFtdcQuoteField:
         _ctp.CThostFtdcQuoteField_BidOrderSysID_get,
         _ctp.CThostFtdcQuoteField_BidOrderSysID_set,
     )
-    FrontID = property(
-        _ctp.CThostFtdcQuoteField_FrontID_get, _ctp.CThostFtdcQuoteField_FrontID_set
-    )
+    FrontID = property(_ctp.CThostFtdcQuoteField_FrontID_get, _ctp.CThostFtdcQuoteField_FrontID_set)
     SessionID = property(
         _ctp.CThostFtdcQuoteField_SessionID_get, _ctp.CThostFtdcQuoteField_SessionID_set
     )
@@ -2802,7 +2768,7 @@ _ctp.CThostFtdcQuoteField_swigregister(CThostFtdcQuoteField)
 
 class CThostFtdcQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -2931,9 +2897,7 @@ class CThostFtdcQuoteActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcQuoteActionField_swiginit(
-            self, _ctp.new_CThostFtdcQuoteActionField()
-        )
+        _ctp.CThostFtdcQuoteActionField_swiginit(self, _ctp.new_CThostFtdcQuoteActionField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcQuoteActionField
 
@@ -2944,7 +2908,7 @@ _ctp.CThostFtdcQuoteActionField_swigregister(CThostFtdcQuoteActionField)
 
 class CThostFtdcExchangeQuoteField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     AskPrice = property(
@@ -3097,9 +3061,7 @@ class CThostFtdcExchangeQuoteField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcExchangeQuoteField_swiginit(
-            self, _ctp.new_CThostFtdcExchangeQuoteField()
-        )
+        _ctp.CThostFtdcExchangeQuoteField_swiginit(self, _ctp.new_CThostFtdcExchangeQuoteField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeQuoteField
 
@@ -3110,7 +3072,7 @@ _ctp.CThostFtdcExchangeQuoteField_swigregister(CThostFtdcExchangeQuoteField)
 
 class CThostFtdcExchangeQuoteActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -3196,7 +3158,7 @@ _ctp.CThostFtdcExchangeQuoteActionField_swigregister(CThostFtdcExchangeQuoteActi
 
 class CThostFtdcForQuoteRspField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     TradingDay = property(
@@ -3229,9 +3191,7 @@ class CThostFtdcForQuoteRspField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcForQuoteRspField_swiginit(
-            self, _ctp.new_CThostFtdcForQuoteRspField()
-        )
+        _ctp.CThostFtdcForQuoteRspField_swiginit(self, _ctp.new_CThostFtdcForQuoteRspField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcForQuoteRspField
 
@@ -3242,7 +3202,7 @@ _ctp.CThostFtdcForQuoteRspField_swigregister(CThostFtdcForQuoteRspField)
 
 class CThostFtdcInputBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3303,14 +3263,12 @@ class CThostFtdcInputBatchOrderActionField:
 
 
 # Register CThostFtdcInputBatchOrderActionField in _ctp:
-_ctp.CThostFtdcInputBatchOrderActionField_swigregister(
-    CThostFtdcInputBatchOrderActionField
-)
+_ctp.CThostFtdcInputBatchOrderActionField_swigregister(CThostFtdcInputBatchOrderActionField)
 
 
 class CThostFtdcBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3416,7 +3374,7 @@ _ctp.CThostFtdcBatchOrderActionField_swigregister(CThostFtdcBatchOrderActionFiel
 
 class CThostFtdcExchangeBatchOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -3485,14 +3443,12 @@ class CThostFtdcExchangeBatchOrderActionField:
 
 
 # Register CThostFtdcExchangeBatchOrderActionField in _ctp:
-_ctp.CThostFtdcExchangeBatchOrderActionField_swigregister(
-    CThostFtdcExchangeBatchOrderActionField
-)
+_ctp.CThostFtdcExchangeBatchOrderActionField_swigregister(CThostFtdcExchangeBatchOrderActionField)
 
 
 class CThostFtdcInputCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3578,7 +3534,7 @@ _ctp.CThostFtdcInputCombActionField_swigregister(CThostFtdcInputCombActionField)
 
 class CThostFtdcCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3715,9 +3671,7 @@ class CThostFtdcCombActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcCombActionField_swiginit(
-            self, _ctp.new_CThostFtdcCombActionField()
-        )
+        _ctp.CThostFtdcCombActionField_swiginit(self, _ctp.new_CThostFtdcCombActionField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcCombActionField
 
@@ -3728,7 +3682,7 @@ _ctp.CThostFtdcCombActionField_swigregister(CThostFtdcCombActionField)
 
 class CThostFtdcExchangeCombActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     Direction = property(
@@ -3834,7 +3788,7 @@ _ctp.CThostFtdcExchangeCombActionField_swigregister(CThostFtdcExchangeCombAction
 
 class CThostFtdcForQuoteParamField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3863,9 +3817,7 @@ class CThostFtdcForQuoteParamField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcForQuoteParamField_swiginit(
-            self, _ctp.new_CThostFtdcForQuoteParamField()
-        )
+        _ctp.CThostFtdcForQuoteParamField_swiginit(self, _ctp.new_CThostFtdcForQuoteParamField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcForQuoteParamField
 
@@ -3876,7 +3828,7 @@ _ctp.CThostFtdcForQuoteParamField_swigregister(CThostFtdcForQuoteParamField)
 
 class CThostFtdcInputOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -3965,14 +3917,12 @@ class CThostFtdcInputOptionSelfCloseField:
 
 
 # Register CThostFtdcInputOptionSelfCloseField in _ctp:
-_ctp.CThostFtdcInputOptionSelfCloseField_swigregister(
-    CThostFtdcInputOptionSelfCloseField
-)
+_ctp.CThostFtdcInputOptionSelfCloseField_swigregister(CThostFtdcInputOptionSelfCloseField)
 
 
 class CThostFtdcInputOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4060,7 +4010,7 @@ _ctp.CThostFtdcInputOptionSelfCloseActionField_swigregister(
 
 class CThostFtdcOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4250,7 +4200,7 @@ _ctp.CThostFtdcOptionSelfCloseField_swigregister(CThostFtdcOptionSelfCloseField)
 
 class CThostFtdcOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4379,14 +4329,12 @@ class CThostFtdcOptionSelfCloseActionField:
 
 
 # Register CThostFtdcOptionSelfCloseActionField in _ctp:
-_ctp.CThostFtdcOptionSelfCloseActionField_swigregister(
-    CThostFtdcOptionSelfCloseActionField
-)
+_ctp.CThostFtdcOptionSelfCloseActionField_swigregister(CThostFtdcOptionSelfCloseActionField)
 
 
 class CThostFtdcExchangeOptionSelfCloseField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     Volume = property(
@@ -4511,14 +4459,12 @@ class CThostFtdcExchangeOptionSelfCloseField:
 
 
 # Register CThostFtdcExchangeOptionSelfCloseField in _ctp:
-_ctp.CThostFtdcExchangeOptionSelfCloseField_swigregister(
-    CThostFtdcExchangeOptionSelfCloseField
-)
+_ctp.CThostFtdcExchangeOptionSelfCloseField_swigregister(CThostFtdcExchangeOptionSelfCloseField)
 
 
 class CThostFtdcExchangeOptionSelfCloseActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     ExchangeID = property(
@@ -4622,7 +4568,7 @@ _ctp.CThostFtdcExchangeOptionSelfCloseActionField_swigregister(
 
 class CThostFtdcParkedOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4775,9 +4721,7 @@ class CThostFtdcParkedOrderField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcParkedOrderField_swiginit(
-            self, _ctp.new_CThostFtdcParkedOrderField()
-        )
+        _ctp.CThostFtdcParkedOrderField_swiginit(self, _ctp.new_CThostFtdcParkedOrderField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcParkedOrderField
 
@@ -4788,7 +4732,7 @@ _ctp.CThostFtdcParkedOrderField_swigregister(CThostFtdcParkedOrderField)
 
 class CThostFtdcParkedOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4902,7 +4846,7 @@ _ctp.CThostFtdcParkedOrderActionField_swigregister(CThostFtdcParkedOrderActionFi
 
 class CThostFtdcRemoveParkedOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4936,7 +4880,7 @@ _ctp.CThostFtdcRemoveParkedOrderField_swigregister(CThostFtdcRemoveParkedOrderFi
 
 class CThostFtdcRemoveParkedOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -4965,14 +4909,12 @@ class CThostFtdcRemoveParkedOrderActionField:
 
 
 # Register CThostFtdcRemoveParkedOrderActionField in _ctp:
-_ctp.CThostFtdcRemoveParkedOrderActionField_swigregister(
-    CThostFtdcRemoveParkedOrderActionField
-)
+_ctp.CThostFtdcRemoveParkedOrderActionField_swigregister(CThostFtdcRemoveParkedOrderActionField)
 
 
 class CThostFtdcErrOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -5131,7 +5073,7 @@ _ctp.CThostFtdcErrOrderField_swigregister(CThostFtdcErrOrderField)
 
 class CThostFtdcErrorConditionalOrderField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -5416,14 +5358,12 @@ class CThostFtdcErrorConditionalOrderField:
 
 
 # Register CThostFtdcErrorConditionalOrderField in _ctp:
-_ctp.CThostFtdcErrorConditionalOrderField_swigregister(
-    CThostFtdcErrorConditionalOrderField
-)
+_ctp.CThostFtdcErrorConditionalOrderField_swigregister(CThostFtdcErrorConditionalOrderField)
 
 
 class CThostFtdcErrOrderActionField:
     thisown = property(
-        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
+        lambda x: x.this.own(), lambda x, v: x.this.own(v), doc="The membership flag"
     )
     __repr__ = _swig_repr
     BrokerID = property(
@@ -5568,9 +5508,7 @@ class CThostFtdcErrOrderActionField:
     )
 
     def __init__(self) -> None:
-        _ctp.CThostFtdcErrOrderActionField_swiginit(
-            self, _ctp.new_CThostFtdcErrOrderActionField()
-        )
+        _ctp.CThostFtdcErrOrderActionField_swiginit(self, _ctp.new_CThostFtdcErrOrderActionField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcErrOrderActionField
 
@@ -5579,50 +5517,50 @@ class CThostFtdcErrOrderActionField:
 _ctp.CThostFtdcErrOrderActionField_swigregister(CThostFtdcErrOrderActionField)
 
 __all__ = [
-    'CThostFtdcInputOrderField',
-    'CThostFtdcOrderField',
-    'CThostFtdcExchangeOrderField',
-    'CThostFtdcExchangeOrderInsertErrorField',
-    'CThostFtdcInputOrderActionField',
-    'CThostFtdcOrderActionField',
-    'CThostFtdcExchangeOrderActionField',
-    'CThostFtdcExchangeOrderActionErrorField',
-    'CThostFtdcInputExecOrderField',
-    'CThostFtdcInputExecOrderActionField',
-    'CThostFtdcExecOrderField',
-    'CThostFtdcExecOrderActionField',
-    'CThostFtdcExchangeExecOrderField',
-    'CThostFtdcExchangeExecOrderActionField',
-    'CThostFtdcErrExecOrderField',
-    'CThostFtdcErrExecOrderActionField',
-    'CThostFtdcInputForQuoteField',
-    'CThostFtdcForQuoteField',
-    'CThostFtdcExchangeForQuoteField',
-    'CThostFtdcInputQuoteField',
-    'CThostFtdcInputQuoteActionField',
-    'CThostFtdcQuoteField',
-    'CThostFtdcQuoteActionField',
-    'CThostFtdcExchangeQuoteField',
-    'CThostFtdcExchangeQuoteActionField',
-    'CThostFtdcForQuoteRspField',
-    'CThostFtdcInputBatchOrderActionField',
-    'CThostFtdcBatchOrderActionField',
-    'CThostFtdcExchangeBatchOrderActionField',
-    'CThostFtdcInputCombActionField',
-    'CThostFtdcCombActionField',
-    'CThostFtdcExchangeCombActionField',
-    'CThostFtdcForQuoteParamField',
-    'CThostFtdcInputOptionSelfCloseField',
-    'CThostFtdcInputOptionSelfCloseActionField',
-    'CThostFtdcOptionSelfCloseField',
-    'CThostFtdcOptionSelfCloseActionField',
-    'CThostFtdcExchangeOptionSelfCloseField',
-    'CThostFtdcExchangeOptionSelfCloseActionField',
-    'CThostFtdcParkedOrderField',
-    'CThostFtdcParkedOrderActionField',
-    'CThostFtdcRemoveParkedOrderField',
-    'CThostFtdcRemoveParkedOrderActionField',
-    'CThostFtdcErrOrderField',
-    'CThostFtdcErrorConditionalOrderField',
-    'CThostFtdcErrOrderActionField',
+    "CThostFtdcInputOrderField",
+    "CThostFtdcOrderField",
+    "CThostFtdcExchangeOrderField",
+    "CThostFtdcExchangeOrderInsertErrorField",
+    "CThostFtdcInputOrderActionField",
+    "CThostFtdcOrderActionField",
+    "CThostFtdcExchangeOrderActionField",
+    "CThostFtdcExchangeOrderActionErrorField",
+    "CThostFtdcInputExecOrderField",
+    "CThostFtdcInputExecOrderActionField",
+    "CThostFtdcExecOrderField",
+    "CThostFtdcExecOrderActionField",
+    "CThostFtdcExchangeExecOrderField",
+    "CThostFtdcExchangeExecOrderActionField",
+    "CThostFtdcErrExecOrderField",
+    "CThostFtdcErrExecOrderActionField",
+    "CThostFtdcInputForQuoteField",
+    "CThostFtdcForQuoteField",
+    "CThostFtdcExchangeForQuoteField",
+    "CThostFtdcInputQuoteField",
+    "CThostFtdcInputQuoteActionField",
+    "CThostFtdcQuoteField",
+    "CThostFtdcQuoteActionField",
+    "CThostFtdcExchangeQuoteField",
+    "CThostFtdcExchangeQuoteActionField",
+    "CThostFtdcForQuoteRspField",
+    "CThostFtdcInputBatchOrderActionField",
+    "CThostFtdcBatchOrderActionField",
+    "CThostFtdcExchangeBatchOrderActionField",
+    "CThostFtdcInputCombActionField",
+    "CThostFtdcCombActionField",
+    "CThostFtdcExchangeCombActionField",
+    "CThostFtdcForQuoteParamField",
+    "CThostFtdcInputOptionSelfCloseField",
+    "CThostFtdcInputOptionSelfCloseActionField",
+    "CThostFtdcOptionSelfCloseField",
+    "CThostFtdcOptionSelfCloseActionField",
+    "CThostFtdcExchangeOptionSelfCloseField",
+    "CThostFtdcExchangeOptionSelfCloseActionField",
+    "CThostFtdcParkedOrderField",
+    "CThostFtdcParkedOrderActionField",
+    "CThostFtdcRemoveParkedOrderField",
+    "CThostFtdcRemoveParkedOrderActionField",
+    "CThostFtdcErrOrderField",
+    "CThostFtdcErrorConditionalOrderField",
+    "CThostFtdcErrOrderActionField",
 ]

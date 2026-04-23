@@ -13,13 +13,13 @@ class CtpBarData(BarData):
         self,
         bar_info,
         symbol_name=None,
-        asset_type='FUTURE',
+        asset_type="FUTURE",
         has_been_json_encoded=False,
     ):
         super().__init__(bar_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
-        self.exchange_name = 'CTP'
+        self.exchange_name = "CTP"
         self._initialized = False
         self.open_time = None
         self.close_time = None
@@ -37,33 +37,33 @@ class CtpBarData(BarData):
             return self
         info = self.bar_info
         if isinstance(info, dict):
-            self.open_time = from_dict_get_string(info, 'open_time')
-            self.close_time = from_dict_get_string(info, 'close_time')
-            self.open_price = from_dict_get_float(info, 'open', 0.0)
-            self.high_price = from_dict_get_float(info, 'high', 0.0)
-            self.low_price = from_dict_get_float(info, 'low', 0.0)
-            self.close_price = from_dict_get_float(info, 'close', 0.0)
-            self.volume_val = from_dict_get_int(info, 'volume', 0)
-            self.amount_val = from_dict_get_float(info, 'amount', 0.0)
-            self.open_interest = from_dict_get_float(info, 'open_interest', 0.0)
-            self.settlement_price_val = from_dict_get_float(info, 'settlement_price')
+            self.open_time = from_dict_get_string(info, "open_time")
+            self.close_time = from_dict_get_string(info, "close_time")
+            self.open_price = from_dict_get_float(info, "open", 0.0)
+            self.high_price = from_dict_get_float(info, "high", 0.0)
+            self.low_price = from_dict_get_float(info, "low", 0.0)
+            self.close_price = from_dict_get_float(info, "close", 0.0)
+            self.volume_val = from_dict_get_int(info, "volume", 0)
+            self.amount_val = from_dict_get_float(info, "amount", 0.0)
+            self.open_interest = from_dict_get_float(info, "open_interest", 0.0)
+            self.settlement_price_val = from_dict_get_float(info, "settlement_price")
         self._initialized = True
         return self
 
     def get_exchange_name(self):
-        return self.exchange_name or ''
+        return self.exchange_name or ""
 
     def get_symbol_name(self):
-        return self.symbol_name or ''
+        return self.symbol_name or ""
 
     def get_asset_type(self):
-        return self.asset_type or ''
+        return self.asset_type or ""
 
     def get_server_time(self):
-        return self.close_time or ''
+        return self.close_time or ""
 
     def get_open_time(self):
-        return self.open_time or ''
+        return self.open_time or ""
 
     def get_open_price(self):
         return float(self.open_price or 0.0)
@@ -84,7 +84,7 @@ class CtpBarData(BarData):
         return float(self.amount_val or 0.0)
 
     def get_close_time(self):
-        return self.close_time or ''
+        return self.close_time or ""
 
     def get_bar_status(self):
         return True
@@ -99,20 +99,20 @@ class CtpBarData(BarData):
         if not self._initialized:
             self.init_data()
         return {
-            'exchange_name': self.exchange_name,
-            'symbol_name': self.symbol_name,
-            'asset_type': self.asset_type,
-            'open_time': self.open_time,
-            'close_time': self.close_time,
-            'open': self.open_price,
-            'high': self.high_price,
-            'low': self.low_price,
-            'close': self.close_price,
-            'volume': self.volume_val,
-            'amount': self.amount_val,
-            'open_interest': self.open_interest,
-            'settlement_price': self.settlement_price_val,
-            'bar_status': True,
+            "exchange_name": self.exchange_name,
+            "symbol_name": self.symbol_name,
+            "asset_type": self.asset_type,
+            "open_time": self.open_time,
+            "close_time": self.close_time,
+            "open": self.open_price,
+            "high": self.high_price,
+            "low": self.low_price,
+            "close": self.close_price,
+            "volume": self.volume_val,
+            "amount": self.amount_val,
+            "open_interest": self.open_interest,
+            "settlement_price": self.settlement_price_val,
+            "bar_status": True,
         }
 
     def __str__(self):
