@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=65", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -15,6 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
@@ -31,6 +32,14 @@ ctp = "bt_api_ctp.plugin:register_plugin"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_* *-manylinux_i686 *-win32 *-win_arm64 pp* cp3??t-*"
+test-command = "python -c \"from bt_api_ctp.ctp._ctp_base import is_ctp_native_loaded, get_ctp_import_error; assert is_ctp_native_loaded(), get_ctp_import_error()\""
 
 [tool.ruff]
 src = ["src"]

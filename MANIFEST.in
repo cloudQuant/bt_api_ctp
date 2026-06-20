@@ -1,0 +1,25 @@
+include README.md
+include pyproject.toml
+include setup.py
+recursive-include src/bt_api_ctp/configs *.yaml
+recursive-include src/bt_api_ctp/ctp *.h *.i *.cpp
+recursive-include src/bt_api_ctp/ctp/api/6.7.7 *.h *.so *.dll *.lib
+graft src/bt_api_ctp/ctp/api/6.7.7/darwin
+
+global-exclude .DS_Store
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+global-exclude *.bak
+global-exclude *.egg-info/*
+exclude src/bt_api_ctp/ctp/_ctp*.so
+exclude src/bt_api_ctp/ctp/_ctp*.pyd
+exclude src/bt_api_ctp/ctp/thost*.dll
+prune src/bt_api_ctp.egg-info
+prune src/bt_api_ctp/ctp/thostmduserapi_se.framework
+prune src/bt_api_ctp/ctp/thosttraderapi_se.framework
+prune build
+prune dist
+prune .github
+prune .pytest_cache
+prune .ruff_cache
+prune .benchmarks
