@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from bt_api_base.gateway.adapters.base import BaseGatewayAdapter
@@ -15,13 +15,15 @@ from bt_api_base.gateway.protocol import CHANNEL_EVENT, CHANNEL_MARKET
 from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
+from bt_api_ctp.ctp.client import _check_native_module
 from bt_api_ctp.feeds.live_ctp_feed import (
     CtpMarketStream,
     CtpRequestDataFuture,
     CtpTradeStream,
 )
 
-_CTP_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"})
+_CTP_EXCHANGES = frozenset({'SHFE', 'DCE', 'CZCE', 'CFFEX', 'INE', 'GFEX'})
+_CTP_TZ = timezone(timedelta(hours=8))
 _CZCE_PRODUCT_PREFIXES = frozenset(
     {
         "AP",
@@ -52,6 +54,24 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
 )
 
 
+def _ctp_tick_timestamp_datetime(
+    row: CtpTickerData, fallback_time: float | None = None
+) -> tuple[float, datetime]:
+    stamp = float(time.time() if fallback_time is None else fallback_time)
+    tick_dt = datetime.fromtimestamp(stamp, timezone.utc)
+    day = str(row.trading_day or '')
+    update_time = str(row.update_time_val or '')
+    if len(day) == 8 and day.isdigit() and update_time:
+        tick_dt = datetime.strptime(
+            f'{day} {update_time}', '%Y%m%d %H:%M:%S'
+        ).replace(
+            microsecond=int(row.update_millisec or 0) * 1000,
+            tzinfo=_CTP_TZ,
+        )
+        stamp = tick_dt.timestamp()
+    return stamp, tick_dt
+
+
 class CtpGatewayAdapter(BaseGatewayAdapter):
     def __init__(self, **kwargs: Any) -> None:
         normalized = dict(kwargs)
@@ -74,6 +94,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
     def connect(self) -> None:
         if self.running:
             return
+        _check_native_module()
         self.market.start()
         self.trade.start()
         if not self.market.wait_connected(timeout=self.timeout):
@@ -241,14 +262,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         prev = self.last_volume.get(instrument)
         self.last_volume[instrument] = total
         volume = max(total - prev, 0.0) if prev is not None else 0.0
-        day = str(row.trading_day or "")
-        stamp = time.time()
-        dt = datetime.fromtimestamp(stamp)
-        if len(day) == 8 and day.isdigit() and row.update_time_val:
-            dt = datetime.strptime(f"{day} {row.update_time_val}", "%Y%m%d %H:%M:%S").replace(
-                microsecond=int(row.update_millisec or 0) * 1000
-            )
-            stamp = dt.timestamp()
+        stamp, dt = _ctp_tick_timestamp_datetime(row)
         for alias in self.aliases.get(instrument) or {instrument}:
             self.emit(
                 CHANNEL_MARKET,

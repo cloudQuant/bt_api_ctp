@@ -16,7 +16,10 @@ CTP Feed 集成测试
 from __future__ import annotations
 
 import importlib
+import os
 import queue
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -56,6 +59,23 @@ class TestCtpImports:
                 assert get_ctp_runtime_source() == "vendored_bt_api_py"
         else:
             assert get_ctp_runtime_source() == "vendored_bt_api_py"
+
+    def test_openctp_runtime_preflight_does_not_abort_interpreter(self):
+        """openctp_ctp runtime is probed in a child process before main-process import."""
+        env = dict(os.environ)
+        env["BT_API_PY_CTP_RUNTIME"] = "openctp_ctp"
+        result = subprocess.run(
+            [sys.executable, "-c", "import bt_api_ctp.ctp.client"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+        assert result.returncode not in {-6, 134}
+        if result.returncode != 0:
+            assert "openctp_ctp" in f"{result.stderr}\n{result.stdout}"
 
     def test_ctp_feed_import(self):
         """验证 CTP Feed 类可以正常导入"""
