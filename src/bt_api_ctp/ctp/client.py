@@ -40,53 +40,53 @@ from contextlib import suppress
 
 from ._ctp_base import format_ctp_native_diagnostics, is_ctp_native_loaded
 
-_TRUE_ENV_VALUES = {'1', 'true', 'yes', 'on'}
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 def _env_text(name: str) -> str:
-    return str(os.environ.get(name) or '').strip().lower()
+    return str(os.environ.get(name) or "").strip().lower()
 
 
 def _select_ctp_runtime_source() -> str:
-    requested = _env_text('BT_API_PY_CTP_RUNTIME')
-    if requested in {'vendored', 'bundled', 'bt_api_ctp', 'bt_api_py', ''}:
-        return 'vendored_bt_api_py'
-    if requested in {'ctp', 'external_ctp', 'external_ctp_python'}:
-        return 'external_ctp_python'
-    if requested in {'openctp', 'openctp_ctp', 'external_openctp_ctp'}:
-        return 'external_openctp_ctp'
-    if _env_text('BT_API_PY_USE_OPENCTP_CTP') in _TRUE_ENV_VALUES:
-        return 'external_openctp_ctp'
-    if _env_text('BT_API_PY_USE_EXTERNAL_CTP') in _TRUE_ENV_VALUES:
-        return 'external_ctp_python'
-    return 'vendored_bt_api_py'
+    requested = _env_text("BT_API_PY_CTP_RUNTIME")
+    if requested in {"vendored", "bundled", "bt_api_ctp", "bt_api_py", ""}:
+        return "vendored_bt_api_py"
+    if requested in {"ctp", "external_ctp", "external_ctp_python"}:
+        return "external_ctp_python"
+    if requested in {"openctp", "openctp_ctp", "external_openctp_ctp"}:
+        return "external_openctp_ctp"
+    if _env_text("BT_API_PY_USE_OPENCTP_CTP") in _TRUE_ENV_VALUES:
+        return "external_openctp_ctp"
+    if _env_text("BT_API_PY_USE_EXTERNAL_CTP") in _TRUE_ENV_VALUES:
+        return "external_ctp_python"
+    return "vendored_bt_api_py"
 
 
 def _probe_openctp_import() -> None:
     code = "from openctp_ctp import mdapi, tdapi; print('openctp_ctp import ok')"
     try:
         result = subprocess.run(
-            [sys.executable, '-c', code],
+            [sys.executable, "-c", code],
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ImportError('external CTP runtime openctp_ctp import preflight timed out') from exc
+        raise ImportError("external CTP runtime openctp_ctp import preflight timed out") from exc
 
     if result.returncode != 0:
-        stderr_tail = (result.stderr or '')[-2000:]
-        stdout_tail = (result.stdout or '')[-500:]
+        stderr_tail = (result.stderr or "")[-2000:]
+        stdout_tail = (result.stdout or "")[-500:]
         raise ImportError(
-            'external CTP runtime openctp_ctp failed import preflight '
-            f'(returncode={result.returncode}). stderr={stderr_tail!r} stdout={stdout_tail!r}'
+            "external CTP runtime openctp_ctp failed import preflight "
+            f"(returncode={result.returncode}). stderr={stderr_tail!r} stdout={stdout_tail!r}"
         )
 
 
 _CTP_RUNTIME_SOURCE = _select_ctp_runtime_source()
 
-if _CTP_RUNTIME_SOURCE == 'external_ctp_python':
+if _CTP_RUNTIME_SOURCE == "external_ctp_python":
     from ctp import (
         CThostFtdcMdApi,
         CThostFtdcMdSpi,
@@ -98,7 +98,7 @@ if _CTP_RUNTIME_SOURCE == 'external_ctp_python':
         CThostFtdcTraderApi,
         CThostFtdcTraderSpi,
     )
-elif _CTP_RUNTIME_SOURCE == 'external_openctp_ctp':
+elif _CTP_RUNTIME_SOURCE == "external_openctp_ctp":
     _probe_openctp_import()
     from openctp_ctp import mdapi as _openctp_mdapi
     from openctp_ctp import tdapi as _openctp_tdapi
@@ -128,15 +128,15 @@ else:
 
 def _check_native_module():
     """Raise ImportError early if the CTP C++ extension is not available."""
-    if _CTP_RUNTIME_SOURCE.startswith('external_'):
+    if _CTP_RUNTIME_SOURCE.startswith("external_"):
         return
     if not is_ctp_native_loaded():
         raise ImportError(
-            f'{format_ctp_native_diagnostics()}. '
-            'Connections will silently fail. '
-            'Install a native _ctp extension matching this OS, Python ABI, and CTP runtime, '
-            'set BT_API_PY_USE_EXTERNAL_CTP=1 with a compatible ctp package, '
-            'or set BT_API_PY_CTP_RUNTIME=openctp_ctp with a compatible openctp-ctp package.'
+            f"{format_ctp_native_diagnostics()}. "
+            "Connections will silently fail. "
+            "Install a native _ctp extension matching this OS, Python ABI, and CTP runtime, "
+            "set BT_API_PY_USE_EXTERNAL_CTP=1 with a compatible ctp package, "
+            "or set BT_API_PY_CTP_RUNTIME=openctp_ctp with a compatible openctp-ctp package."
         )
 
 

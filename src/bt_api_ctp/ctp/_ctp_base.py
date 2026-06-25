@@ -117,13 +117,13 @@ def _ctp_package_dir() -> Path:
 
 
 def _expected_ctp_extension_names() -> list[str]:
-    return [f'_ctp{suffix}' for suffix in importlib.machinery.EXTENSION_SUFFIXES]
+    return [f"_ctp{suffix}" for suffix in importlib.machinery.EXTENSION_SUFFIXES]
 
 
 def _available_ctp_extension_names() -> list[str]:
     package_dir = _ctp_package_dir()
     return sorted(
-        p.name for p in package_dir.glob('_ctp*') if p.is_file() and p.name != '_ctp_base.py'
+        p.name for p in package_dir.glob("_ctp*") if p.is_file() and p.name != "_ctp_base.py"
     )
 
 
@@ -134,13 +134,13 @@ def _format_ctp_import_warning(import_error: Exception) -> str:
     if matching:
         reason = f"matching extension failed to load. matching={', '.join(matching)}"
     else:
-        reason = 'no bundled extension matches this interpreter'
+        reason = "no bundled extension matches this interpreter"
     return (
-        'CTP C++ extension (_ctp) failed to load; '
+        "CTP C++ extension (_ctp) failed to load; "
         f"{reason}; expected={', '.join(expected)}; "
         f"available={', '.join(available) or 'none'}; "
-        f'import_error={import_error}. '
-        'All CTP operations will silently no-op.'
+        f"import_error={import_error}. "
+        "All CTP operations will silently no-op."
     )
 
 
@@ -183,48 +183,48 @@ def get_ctp_native_diagnostics() -> dict[str, object]:
     import_error = get_ctp_import_error()
 
     if native_loaded:
-        reason = 'native_loaded'
+        reason = "native_loaded"
     elif not matching:
-        reason = 'missing_extension_for_platform'
+        reason = "missing_extension_for_platform"
     else:
-        reason = 'matching_extension_failed_to_load'
+        reason = "matching_extension_failed_to_load"
 
     return {
-        'native_loaded': native_loaded,
-        'reason': reason,
-        'package_dir': str(package_dir),
-        'python_version': '.'.join(str(part) for part in sys.version_info[:3]),
-        'platform': platform.platform(),
-        'machine': platform.machine(),
-        'extension_suffixes': suffixes,
-        'expected_extensions': expected,
-        'available_extensions': available,
-        'matching_extensions': matching,
-        'import_error': str(import_error) if import_error else '',
+        "native_loaded": native_loaded,
+        "reason": reason,
+        "package_dir": str(package_dir),
+        "python_version": ".".join(str(part) for part in sys.version_info[:3]),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "extension_suffixes": suffixes,
+        "expected_extensions": expected,
+        "available_extensions": available,
+        "matching_extensions": matching,
+        "import_error": str(import_error) if import_error else "",
     }
 
 
 def format_ctp_native_diagnostics() -> str:
     """Format CTP native diagnostics for health reports and startup errors."""
     diag = get_ctp_native_diagnostics()
-    if diag['native_loaded']:
-        return 'CTP C++ extension (_ctp) is loaded'
+    if diag["native_loaded"]:
+        return "CTP C++ extension (_ctp) is loaded"
 
-    expected = ', '.join(str(item) for item in diag['expected_extensions'])
-    available = ', '.join(str(item) for item in diag['available_extensions']) or 'none'
-    matching = ', '.join(str(item) for item in diag['matching_extensions']) or 'none'
+    expected = ", ".join(str(item) for item in diag["expected_extensions"])
+    available = ", ".join(str(item) for item in diag["available_extensions"]) or "none"
+    matching = ", ".join(str(item) for item in diag["matching_extensions"]) or "none"
     base = (
-        'CTP C++ extension (_ctp) not available for '
+        "CTP C++ extension (_ctp) not available for "
         f"{diag['platform']} / Python {diag['python_version']}; "
         f"package_dir={diag['package_dir']}"
     )
-    if diag['reason'] == 'missing_extension_for_platform':
-        detail = f'no bundled extension matches this interpreter. expected={expected}; available={available}'
+    if diag["reason"] == "missing_extension_for_platform":
+        detail = f"no bundled extension matches this interpreter. expected={expected}; available={available}"
     else:
-        detail = f'matching extension failed to load. matching={matching}; available={available}'
-    if diag['import_error']:
+        detail = f"matching extension failed to load. matching={matching}; available={available}"
+    if diag["import_error"]:
         detail = f"{detail}; import_error={diag['import_error']}"
-    return f'{base}; {detail}'
+    return f"{base}; {detail}"
 
 
 def _swig_setattr_nondynamic_instance_variable(setter):

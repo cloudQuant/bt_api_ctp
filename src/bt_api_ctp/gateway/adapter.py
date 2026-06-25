@@ -22,7 +22,7 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpTradeStream,
 )
 
-_CTP_EXCHANGES = frozenset({'SHFE', 'DCE', 'CZCE', 'CFFEX', 'INE', 'GFEX'})
+_CTP_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"})
 _CTP_TZ = timezone(timedelta(hours=8))
 _CZCE_PRODUCT_PREFIXES = frozenset(
     {
@@ -59,12 +59,10 @@ def _ctp_tick_timestamp_datetime(
 ) -> tuple[float, datetime]:
     stamp = float(time.time() if fallback_time is None else fallback_time)
     tick_dt = datetime.fromtimestamp(stamp, timezone.utc)
-    day = str(row.trading_day or '')
-    update_time = str(row.update_time_val or '')
+    day = str(row.trading_day or "")
+    update_time = str(row.update_time_val or "")
     if len(day) == 8 and day.isdigit() and update_time:
-        tick_dt = datetime.strptime(
-            f'{day} {update_time}', '%Y%m%d %H:%M:%S'
-        ).replace(
+        tick_dt = datetime.strptime(f"{day} {update_time}", "%Y%m%d %H:%M:%S").replace(
             microsecond=int(row.update_millisec or 0) * 1000,
             tzinfo=_CTP_TZ,
         )
@@ -80,9 +78,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         normalized["user_id"] = normalized.get("user_id") or normalized.get("investor_id") or ""
         super().__init__(**normalized)
         self.q: queue.Queue[Any] = queue.Queue()
-        self.market = CtpMarketStream(self.q, **normalized)
-        self.trade = CtpTradeStream(self.q, **normalized)
-        self.feed = CtpRequestDataFuture(None, **normalized)
+        self._stream_kwargs = normalized
+        self.market: CtpMarketStream
+        self.trade: CtpTradeStream
+        self.feed: CtpRequestDataFuture
+        self._create_streams()
         self.aliases: dict[str, set[str]] = defaultdict(set)
         self.last_volume: dict[str, float] = {}
         self.last_price: dict[str, float] = {}
@@ -90,22 +90,64 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.running = False
         self.thread: threading.Thread | None = None
         self.timeout = float(normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0)
+        configured_attempts = normalized.get("gateway_startup_attempts")
+        if configured_attempts is None:
+            configured_attempts = 3 if self.timeout >= 30.0 else 1
+        self.startup_attempts = max(1, int(configured_attempts or 1))
+        self.retry_backoff = max(
+            0.0,
+            float(normalized.get("gateway_startup_retry_backoff_sec", 1.0) or 0.0),
+        )
+
+    def _create_streams(self) -> None:
+        self.market = CtpMarketStream(self.q, **self._stream_kwargs)
+        self.trade = CtpTradeStream(self.q, **self._stream_kwargs)
+        self.feed = CtpRequestDataFuture(None, **self._stream_kwargs)
+
+    def _startup_stream_timeout(self) -> float:
+        if self.startup_attempts <= 1:
+            return self.timeout
+        return max(5.0, self.timeout / (self.startup_attempts * 2.0))
+
+    def _stop_startup_streams(self) -> None:
+        self.feed._trader = None
+        self.feed._connected = False
+        for stream in (self.market, self.trade):
+            try:
+                stream.stop()
+            except Exception:
+                pass
 
     def connect(self) -> None:
         if self.running:
             return
         _check_native_module()
-        self.market.start()
-        self.trade.start()
-        if not self.market.wait_connected(timeout=self.timeout):
-            raise RuntimeError("ctp market not ready")
-        if not self.trade.wait_connected(timeout=self.timeout):
-            raise RuntimeError("ctp trade not ready")
-        self.feed._trader = self.trade.trader_client
-        self.feed._connected = True
-        self.running = True
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        stream_timeout = self._startup_stream_timeout()
+        last_error: Exception | None = None
+        for attempt in range(1, self.startup_attempts + 1):
+            try:
+                self.market.start()
+                self.trade.start()
+                if not self.market.wait_connected(timeout=stream_timeout):
+                    raise RuntimeError("ctp market not ready")
+                if not self.trade.wait_connected(timeout=stream_timeout):
+                    raise RuntimeError("ctp trade not ready")
+                self.feed._trader = self.trade.trader_client
+                self.feed._connected = True
+                self.running = True
+                self.thread = threading.Thread(target=self._run, daemon=True)
+                self.thread.start()
+                return
+            except Exception as exc:
+                last_error = exc
+                self._stop_startup_streams()
+                self._create_streams()
+                if attempt < self.startup_attempts and self.retry_backoff > 0:
+                    time.sleep(self.retry_backoff)
+        if last_error is not None:
+            raise RuntimeError(
+                f"ctp gateway not ready after {self.startup_attempts} attempts: {last_error}"
+            ) from last_error
 
     def disconnect(self) -> None:
         self.running = False
