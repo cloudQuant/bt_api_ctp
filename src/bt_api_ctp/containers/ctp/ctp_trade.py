@@ -5,9 +5,10 @@ from typing import Any
 from bt_api_base.containers.trades.trade import TradeData
 from bt_api_base.functions.utils import (
     from_dict_get_float,
-    from_dict_get_int,
     from_dict_get_string,
 )
+
+from ._normalization import ctp_dict_code, ctp_int
 
 
 class CtpTradeData(TradeData):
@@ -51,16 +52,16 @@ class CtpTradeData(TradeData):
             self.trade_id_value = from_dict_get_string(info, "TradeID")
             self.order_ref = from_dict_get_string(info, "OrderRef")
             self.order_sys_id = from_dict_get_string(info, "OrderSysID")
-            direction_key = from_dict_get_string(info, "Direction", "0") or "0"
+            direction_key = ctp_dict_code(info, "Direction", "0") or "0"
             self.direction = "buy" if direction_key == "0" else "sell"
             self.offset = {
                 "0": "open",
                 "1": "close",
                 "3": "close_today",
                 "4": "close_yesterday",
-            }.get(from_dict_get_string(info, "OffsetFlag", "0") or "0", "open")
+            }.get(ctp_dict_code(info, "OffsetFlag", "0") or "0", "open")
             self.price = from_dict_get_float(info, "Price", 0.0)
-            self.volume = from_dict_get_int(info, "Volume", 0)
+            self.volume = ctp_int(info, "Volume", 0)
             self.trade_date = from_dict_get_string(info, "TradeDate")
             self.trade_time = from_dict_get_string(info, "TradeTime")
             self.trade_time_text = from_dict_get_string(info, "TradeTime")

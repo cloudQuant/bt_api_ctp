@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ except ImportError:
     find_dotenv = None
     load_dotenv = None
 
+from bt_api_base.containers.orders.order import OrderStatus
 from bt_api_base.containers.requestdatas.request_data import RequestData
 from bt_api_base.exceptions import ExchangeConnectionAlias as BtConnectionError
 from bt_api_base.feeds.capability import Capability
@@ -43,6 +45,18 @@ CTP_OFFSET_FLAG = {
 }
 CTP_DIRECTION_FLAG = {"buy": "0", "sell": "1"}
 _ctp_field_logger = get_logger("ctp_field_converter")
+
+
+def _positive_int_lot(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or value in (None, ""):
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
+    try:
+        lot = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.") from exc
+    if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
+    return int(lot)
 
 
 def _load_ctp_env() -> None:
@@ -261,9 +275,22 @@ class CtpRequestData(Feed):
         trader = self._trader
         if trader is None:
             return self._make_request_data([], "make_order", symbol, extra_data, status=False)
-        side, order_kind = order_type.split("-")
-        direction = CTP_DIRECTION_FLAG.get(side.lower(), "0")
-        offset_flag = CTP_OFFSET_FLAG.get(offset, "0")
+        try:
+            side, order_kind = str(order_type or "").lower().split("-", 1)
+        except ValueError as exc:
+            raise ValueError(f"CTP order_type must be '<buy|sell>-limit' (got {order_type!r}).") from exc
+        if side not in CTP_DIRECTION_FLAG:
+            raise ValueError(f"CTP order side must be buy or sell (got {side!r}).")
+        if order_kind != "limit":
+            raise ValueError(
+                f"CTP order kind {order_kind!r} is unsupported; use a positive-price limit order."
+            )
+        offset_text = str(offset or "open").lower()
+        if offset_text not in CTP_OFFSET_FLAG:
+            raise ValueError(f"CTP order offset {offset!r} is unsupported.")
+        order_volume = _positive_int_lot(volume, "volume")
+        direction = CTP_DIRECTION_FLAG[side]
+        offset_flag = CTP_OFFSET_FLAG[offset_text]
         exchange_id = kwargs.get("exchange_id", "")
         field = CThostFtdcInputOrderField()
         field.BrokerID = self.broker_id
@@ -275,7 +302,7 @@ class CtpRequestData(Feed):
         field.Direction = direction
         field.CombOffsetFlag = offset_flag
         field.CombHedgeFlag = "1"
-        field.VolumeTotalOriginal = int(volume)
+        field.VolumeTotalOriginal = order_volume
         field.MinVolume = 1
         field.ForceCloseReason = "0"
         field.IsAutoSuspend = 0
@@ -352,10 +379,39 @@ class CtpRequestData(Feed):
         )
 
     def query_order(self, symbol=None, order_id=None, extra_data=None, **kwargs):
-        return self._make_request_data([], "query_order", symbol, extra_data, status=False)
+        trader = self._trader
+        if trader is None or not getattr(trader, "is_ready", False):
+            return self._make_request_data([], "query_order", symbol, extra_data, status=False)
+        rows = []
+        for raw in trader.query_orders(
+            instrument_id=symbol or "",
+            exchange_id=kwargs.get("exchange_id", ""),
+            order_sys_id=order_id or "",
+            timeout=kwargs.get("timeout", 5),
+        ):
+            data = raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            rows.append(CtpOrderData(data, data.get("InstrumentID", symbol), self.asset_type, True))
+        return self._make_request_data(rows, "query_order", symbol, extra_data)
 
     def get_open_orders(self, symbol=None, extra_data=None, **kwargs):
-        return self._make_request_data([], "get_open_orders", symbol, extra_data, status=False)
+        response = self.query_order(symbol=symbol, extra_data=extra_data, **kwargs)
+        if not response.get_status():
+            return self._make_request_data([], "get_open_orders", symbol, extra_data, status=False)
+        rows = []
+        for row in response.get_data() or []:
+            order = row.init_data()
+            if order.get_order_status() in {
+                OrderStatus.COMPLETED,
+                OrderStatus.CANCELED,
+                OrderStatus.REJECTED,
+                OrderStatus.EXPIRED,
+                OrderStatus.MMP_CANCELED,
+                OrderStatus.EXPIRED_IN_MATCH,
+            }:
+                continue
+            if int(order.volume_total or 0) > 0:
+                rows.append(order)
+        return self._make_request_data(rows, "get_open_orders", symbol, extra_data)
 
     def get_deals(
         self,

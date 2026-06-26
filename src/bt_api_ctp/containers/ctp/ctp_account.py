@@ -74,7 +74,9 @@ class CtpAccountData(AccountData):
 
     def get_margin(self):
         self._ensure_init()
-        return self.balance or 0.0
+        balance = float(self.balance or 0.0)
+        position_profit = float(self.position_profit or 0.0)
+        return balance - position_profit
 
     def get_available_margin(self):
         self._ensure_init()

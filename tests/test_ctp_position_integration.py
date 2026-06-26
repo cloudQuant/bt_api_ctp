@@ -34,6 +34,7 @@ class TestCtpPositionData:
             "OpenCost": 4000000.0,
             "PositionCost": 4000000.0,
             "UseMargin": 400000.0,
+            "Commission": 25.0,
             "PositionProfit": 10000.0,
             "CloseProfit": 5000.0,
             "SettlementPrice": 4000.0,
@@ -50,6 +51,7 @@ class TestCtpPositionData:
         assert position.today_position == 5
         assert position.yd_position == 5
         assert position.open_cost == 4000000.0
+        assert position.commission == 25.0
         assert position.position_profit == 10000.0
         assert position.exchange_id == "CFFEX"
 

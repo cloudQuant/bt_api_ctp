@@ -6,6 +6,7 @@ import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from bt_api_base.gateway.adapters.base import BaseGatewayAdapter
@@ -17,6 +18,8 @@ from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
 from bt_api_ctp.ctp.client import _check_native_module
 from bt_api_ctp.feeds.live_ctp_feed import (
+    CTP_DIRECTION_FLAG,
+    CTP_OFFSET_FLAG,
     CtpMarketStream,
     CtpRequestDataFuture,
     CtpTradeStream,
@@ -87,6 +90,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.last_volume: dict[str, float] = {}
         self.last_price: dict[str, float] = {}
         self._price_ticks: dict[str, float] = {}
+        self._symbol_specs: dict[str, dict[str, Any]] = {}
         self.running = False
         self.thread: threading.Thread | None = None
         self.timeout = float(normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0)
@@ -176,51 +180,163 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
     def get_balance(self) -> dict[str, Any]:
         rows = self.feed.get_account().get_data()
         if not rows:
-            return {"cash": 0.0, "value": 0.0}
+            return {"cash": 0.0, "value": 0.0, "equity": 0.0, "margin": 0.0}
         row = rows[0].init_data()
+        balance = float(getattr(row, "balance", None) or row.get_total_wallet_balance() or 0.0)
+        available = float(getattr(row, "available", None) or row.get_available_margin() or 0.0)
+        used_margin = float(getattr(row, "curr_margin", None) or 0.0)
+        position_profit = float(getattr(row, "position_profit", None) or 0.0)
         return {
-            "cash": float(row.get_available_margin() or 0.0),
-            "value": float(row.get_margin() or 0.0),
+            "account_id": getattr(row, "account_id", None),
+            "cash": available,
+            "available": available,
+            "available_funds": available,
+            "margin_free": available,
+            "value": balance,
+            "equity": balance,
+            "balance": balance,
+            "margin": used_margin,
+            "used_margin": used_margin,
+            "profit": position_profit,
+            "position_profit": position_profit,
+            "close_profit": float(getattr(row, "close_profit", None) or 0.0),
+            "commission": float(getattr(row, "commission", None) or 0.0),
+            "frozen_margin": float(getattr(row, "frozen_margin", None) or 0.0),
+            "pre_balance": float(getattr(row, "pre_balance", None) or 0.0),
+            "risk_degree": float(getattr(row, "risk_degree", None) or 0.0),
         }
 
     def get_positions(self) -> list[dict[str, Any]]:
         out = []
         for raw in self.feed.get_position().get_data() or []:
             row = raw.init_data()
+            instrument = row.get_symbol_name()
+            exchange_id = row.exchange_id
+            spec_symbol = f"{exchange_id}.{instrument}" if exchange_id else instrument
+            spec = self.get_symbol_info(spec_symbol) if instrument else {}
+            multiplier = _positive_float(spec.get("multiplier"), 1.0)
+            avg_price = row.get_avg_price(multiplier)
+            current_price = self.last_price.get(instrument) or row.get_mark_price()
             out.append(
                 {
-                    "instrument": row.get_symbol_name(),
+                    "instrument": instrument,
+                    "symbol": instrument,
                     "direction": row.get_position_direction(),
                     "volume": row.get_position_volume(),
-                    "price": row.get_avg_price(),
-                    "exchange_id": row.exchange_id,
+                    "price": avg_price,
+                    "avg_price": avg_price,
+                    "current_price": current_price,
+                    "last_price": self.last_price.get(instrument),
+                    "mark_price": row.get_mark_price(),
+                    "profit": row.get_position_unrealized_pnl(),
+                    "position_profit": row.get_position_unrealized_pnl(),
+                    "close_profit": row.close_profit,
+                    "commission": row.get_position_commission(),
+                    "use_margin": row.get_initial_margin(),
+                    "margin_value": row.get_initial_margin(),
+                    "initial_margin": row.get_initial_margin(),
+                    "today_position": row.get_today_position(),
+                    "yd_position": row.get_yesterday_position(),
+                    "position_cost": row.position_cost,
+                    "open_cost": row.open_cost,
+                    "exchange_id": exchange_id,
+                    **spec,
                 }
             )
         return out
+
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        response = self.feed.get_open_orders()
+        if not response.get_status():
+            return []
+        out = []
+        for raw in response.get_data() or []:
+            row = raw.init_data()
+            item = _order(row, self.aliases)
+            item.update(
+                {
+                    "id": item.get("external_order_id") or item.get("order_ref"),
+                    "order_id": item.get("external_order_id") or item.get("order_ref"),
+                }
+            )
+            if int(item.get("remaining") or 0) > 0:
+                out.append(item)
+        return out
+
+    fetch_open_orders = get_open_orders
+
+    def get_symbol_info(self, symbol: str) -> dict[str, Any]:
+        instrument, exchange_id = _split(symbol)
+        cache_keys = [key for key in (str(symbol or "").strip(), instrument) if key]
+        for key in cache_keys:
+            cached = self._symbol_specs.get(key)
+            if cached:
+                return dict(cached)
+
+        trader = getattr(self.feed, "trader_client", None) or getattr(self.feed, "_trader", None)
+        if trader is None:
+            return {}
+
+        instrument_info = _safe_query(
+            getattr(trader, "query_instrument", None),
+            instrument,
+            exchange_id=exchange_id,
+            timeout=2,
+        )
+        margin_info = _safe_query(
+            getattr(trader, "query_instrument_margin_rate", None),
+            instrument,
+            exchange_id=exchange_id,
+            timeout=2,
+        )
+        commission_info = _safe_query(
+            getattr(trader, "query_instrument_commission_rate", None),
+            instrument,
+            exchange_id=exchange_id,
+            timeout=2,
+        )
+        spec = _symbol_spec(instrument, exchange_id, instrument_info, margin_info, commission_info)
+        if spec:
+            for key in cache_keys + [spec.get("instrument", ""), spec.get("symbol", "")]:
+                if key:
+                    self._symbol_specs[str(key)] = dict(spec)
+        return spec
 
     def _get_price_tick(self, instrument: str) -> float:
         cached = self._price_ticks.get(instrument)
         if cached is not None:
             return cached
-        trader = self.feed.trader_client
-        if trader and hasattr(trader, "query_instrument"):
-            try:
-                info = trader.query_instrument(instrument, timeout=2)
-            except Exception:
-                info = None
-            if info and hasattr(info, "PriceTick"):
-                tick = float(info.PriceTick or 0)
-                if tick > 0:
-                    self._price_ticks[instrument] = tick
-                    return tick
+        spec = self.get_symbol_info(instrument)
+        tick = _positive_float(spec.get("price_tick") or spec.get("tick_size"), 0.0)
+        if tick > 0:
+            self._price_ticks[instrument] = tick
+            return tick
         return 1.0
 
     def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
-        name = str(payload.get("data_name") or payload.get("symbol") or "").strip()
+        name = str(
+            payload.get("data_name") or payload.get("symbol") or payload.get("instrument") or ""
+        ).strip()
         instrument, exchange_id = _split(name)
+        if not instrument:
+            raise ValueError("CTP order rejected: missing instrument.")
         side = str(payload.get("side") or "buy").lower()
+        if side not in CTP_DIRECTION_FLAG:
+            raise ValueError(f"CTP order side {payload.get('side')!r} is unsupported.")
+        requested_order_type = str(
+            payload.get("order_type") or payload.get("type") or "limit"
+        ).lower()
+        if requested_order_type not in {"limit", "market"}:
+            raise ValueError(f"CTP order type {requested_order_type!r} is unsupported.")
+        offset = str(payload.get("offset") or "open").lower()
+        if offset not in CTP_OFFSET_FLAG:
+            raise ValueError(f"CTP order offset {payload.get('offset')!r} is unsupported.")
+        volume = _positive_int_lot(
+            payload["size"] if "size" in payload else payload.get("volume"),
+            "size",
+        )
         price = payload.get("price")
-        if price is None or float(price) <= 0:
+        if requested_order_type == "market":
             last_price = self.last_price.get(instrument or name)
             if not last_price or last_price <= 0:
                 raise RuntimeError(
@@ -232,13 +348,27 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 (last_price + slippage) if side == "buy" else max(last_price - slippage, price_tick)
             )
             price = round(price, 4)
+        else:
+            try:
+                price = float(price)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("CTP limit order requires a positive price.") from exc
+            if price <= 0:
+                raise ValueError("CTP limit order requires a positive price.")
+        client_order_id = _first_non_empty(
+            payload,
+            "client_order_id",
+            "bt_order_ref",
+            "request_id",
+            "order_ref",
+        )
         response = self.feed.make_order(
-            instrument or name,
-            volume=payload.get("size") or 0,
+            instrument,
+            volume=volume,
             price=price,
             order_type=f"{side}-limit",
-            offset=str(payload.get("offset") or "open"),
-            client_order_id=payload.get("client_order_id") or payload.get("bt_order_ref"),
+            offset=offset,
+            client_order_id=client_order_id,
             exchange_id=exchange_id or payload.get("exchange_id") or "",
         )
         if not response.get_status():
@@ -253,7 +383,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             "front_id": row.front_id,
             "session_id": row.session_id,
             "exchange_id": row.get_order_exchange_id(),
-            "details": {"bt_order_ref": payload.get("bt_order_ref")},
+            "details": {
+                "bt_order_ref": payload.get("bt_order_ref"),
+                "request_id": payload.get("request_id"),
+                "client_order_id": client_order_id,
+            },
         }
 
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -337,13 +471,25 @@ def _split(value: str) -> tuple[str, str]:
     text = str(value or "").strip()
     if "." in text:
         left, right = text.split(".", 1)
-        exchange = right.strip().upper()
-        return _normalize_instrument(left.strip(), exchange), exchange
+        left_text = left.strip()
+        right_text = right.strip()
+        left_exchange = left_text.upper()
+        right_exchange = right_text.upper()
+        if left_exchange in _CTP_EXCHANGES:
+            return _normalize_instrument(right_text, left_exchange), left_exchange
+        if right_exchange in _CTP_EXCHANGES:
+            return _normalize_instrument(left_text, right_exchange), right_exchange
+        return _normalize_instrument(left_text, right_exchange), right_exchange
     if "_" in text:
-        exchange, instrument = text.split("_", 1)
-        exchange = exchange.strip().upper()
-        if exchange in _CTP_EXCHANGES:
-            return _normalize_instrument(instrument.strip(), exchange), exchange
+        left, right = text.split("_", 1)
+        left_text = left.strip()
+        right_text = right.strip()
+        left_exchange = left_text.upper()
+        right_exchange = right_text.upper()
+        if left_exchange in _CTP_EXCHANGES:
+            return _normalize_instrument(right_text, left_exchange), left_exchange
+        if right_exchange in _CTP_EXCHANGES:
+            return _normalize_instrument(left_text, right_exchange), right_exchange
     return _normalize_instrument(text, ""), ""
 
 
@@ -359,6 +505,159 @@ def _normalize_instrument(instrument: str, exchange_id: str = "") -> str:
     if exchange == "CZCE" or (not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES):
         return f"{prefix}{digits[-3:]}"
     return text
+
+
+def _field_value(source: Any, *names: str) -> Any:
+    for name in names:
+        if isinstance(source, dict) and name in source:
+            value = source.get(name)
+            if value not in (None, ""):
+                return value
+        if source is not None and hasattr(source, name):
+            try:
+                value = getattr(source, name)
+            except Exception:
+                continue
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _field_float(source: Any, *names: str) -> float | None:
+    value = _field_value(source, *names)
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive_float(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _positive_int_lot(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or value in (None, ""):
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
+    try:
+        lot = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.") from exc
+    if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
+    return int(lot)
+
+
+def _first_non_empty(source: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        value = source.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _safe_query(func: Any, *args: Any, **kwargs: Any) -> Any:
+    if not callable(func):
+        return None
+    try:
+        return func(*args, **kwargs)
+    except TypeError:
+        kwargs.pop("exchange_id", None)
+        try:
+            return func(*args, **kwargs)
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _symbol_spec(
+    instrument: str,
+    exchange_id: str,
+    instrument_info: Any,
+    margin_info: Any,
+    commission_info: Any,
+) -> dict[str, Any]:
+    if not any((instrument_info, margin_info, commission_info)):
+        return {}
+    exchange = str(
+        _field_value(instrument_info, "ExchangeID")
+        or _field_value(margin_info, "ExchangeID")
+        or _field_value(commission_info, "ExchangeID")
+        or exchange_id
+        or ""
+    ).strip()
+    symbol = str(
+        _field_value(instrument_info, "InstrumentID")
+        or _field_value(margin_info, "InstrumentID")
+        or _field_value(commission_info, "InstrumentID")
+        or instrument
+        or ""
+    ).strip()
+    multiplier = _field_float(instrument_info, "VolumeMultiple", "contract_size", "multiplier")
+    price_tick = _field_float(instrument_info, "PriceTick", "price_tick", "tick_size")
+    long_margin_rate = _field_float(margin_info, "LongMarginRatioByMoney", "long_margin_rate")
+    short_margin_rate = _field_float(margin_info, "ShortMarginRatioByMoney", "short_margin_rate")
+    open_fee_rate = _field_float(commission_info, "OpenRatioByMoney", "open_fee_rate")
+    open_fee_amount = _field_float(commission_info, "OpenRatioByVolume", "open_fee_amount")
+    close_fee_rate = _field_float(commission_info, "CloseRatioByMoney", "close_fee_rate")
+    close_fee_amount = _field_float(commission_info, "CloseRatioByVolume", "close_fee_amount")
+    close_today_fee_rate = _field_float(
+        commission_info,
+        "CloseTodayRatioByMoney",
+        "close_today_fee_rate",
+    )
+    close_today_fee_amount = _field_float(
+        commission_info,
+        "CloseTodayRatioByVolume",
+        "close_today_fee_amount",
+    )
+    margin_rate = long_margin_rate if long_margin_rate is not None else short_margin_rate
+
+    spec: dict[str, Any] = {
+        "source": "ctp_gateway",
+        "symbol": symbol,
+        "instrument": symbol,
+        "exchange": exchange,
+        "exchange_id": exchange,
+        "product_id": _field_value(instrument_info, "ProductID"),
+        "price_tick": price_tick,
+        "tick_size": price_tick,
+        "multiplier": multiplier,
+        "contract_multiplier": multiplier,
+        "contract_size": multiplier,
+        "volume_multiple": multiplier,
+        "margin": margin_rate,
+        "margin_rate": margin_rate,
+        "long_margin_rate": long_margin_rate,
+        "short_margin_rate": short_margin_rate,
+        "long_margin_amount": _field_float(margin_info, "LongMarginRatioByVolume"),
+        "short_margin_amount": _field_float(margin_info, "ShortMarginRatioByVolume"),
+        "open_fee_rate": open_fee_rate,
+        "open_commission_rate": open_fee_rate,
+        "commission_rate": open_fee_rate,
+        "open_fee_amount": open_fee_amount,
+        "open_commission_amount": open_fee_amount,
+        "commission_amount": open_fee_amount,
+        "close_fee_rate": close_fee_rate,
+        "close_commission_rate": close_fee_rate,
+        "close_fee_amount": close_fee_amount,
+        "close_commission_amount": close_fee_amount,
+        "close_yesterday_fee_rate": close_fee_rate,
+        "close_yesterday_commission_rate": close_fee_rate,
+        "close_yesterday_fee_amount": close_fee_amount,
+        "close_yesterday_commission_amount": close_fee_amount,
+        "close_today_fee_rate": close_today_fee_rate,
+        "close_today_commission_rate": close_today_fee_rate,
+        "close_today_fee_amount": close_today_fee_amount,
+        "close_today_commission_amount": close_today_fee_amount,
+    }
+    return {key: value for key, value in spec.items() if value not in (None, "")}
 
 
 def _alias(aliases: dict[str, set[str]], instrument: str) -> str:

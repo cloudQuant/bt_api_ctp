@@ -3,9 +3,10 @@ from __future__ import annotations
 from bt_api_base.containers.positions.position import PositionData
 from bt_api_base.functions.utils import (
     from_dict_get_float,
-    from_dict_get_int,
     from_dict_get_string,
 )
+
+from ._normalization import ctp_dict_code, ctp_int
 
 CTP_POS_DIRECTION_MAP = {"1": "net", "2": "long", "3": "short"}
 
@@ -32,6 +33,7 @@ class CtpPositionData(PositionData):
         self.open_cost = None
         self.close_profit = None
         self.use_margin = None
+        self.commission = None
         self.position_profit = None
         self.settlement_price = None
         self.exchange_id = None
@@ -42,15 +44,16 @@ class CtpPositionData(PositionData):
         info = self.position_info
         if isinstance(info, dict):
             self.instrument_id = from_dict_get_string(info, "InstrumentID")
-            pos_direction = from_dict_get_string(info, "PosiDirection", "1") or "1"
+            pos_direction = ctp_dict_code(info, "PosiDirection", "1") or "1"
             self.position_direction = CTP_POS_DIRECTION_MAP.get(pos_direction, "net")
-            self.position_volume = from_dict_get_int(info, "Position", 0)
-            self.today_position = from_dict_get_int(info, "TodayPosition", 0)
-            self.yd_position = from_dict_get_int(info, "YdPosition", 0)
+            self.position_volume = ctp_int(info, "Position", 0)
+            self.today_position = ctp_int(info, "TodayPosition", 0)
+            self.yd_position = ctp_int(info, "YdPosition", 0)
             self.position_cost = from_dict_get_float(info, "PositionCost", 0.0)
             self.open_cost = from_dict_get_float(info, "OpenCost", 0.0)
             self.close_profit = from_dict_get_float(info, "CloseProfit", 0.0)
             self.use_margin = from_dict_get_float(info, "UseMargin", 0.0)
+            self.commission = from_dict_get_float(info, "Commission", 0.0)
             self.position_profit = from_dict_get_float(info, "PositionProfit", 0.0)
             self.settlement_price = from_dict_get_float(info, "SettlementPrice", 0.0)
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
@@ -69,9 +72,13 @@ class CtpPositionData(PositionData):
     def get_position_volume(self):
         return self.position_volume or 0
 
-    def get_avg_price(self):
+    def get_avg_price(self, contract_multiplier=None):
         if self.position_volume and self.position_volume > 0:
-            return float(self.position_cost or 0.0) / self.position_volume
+            multiplier = float(contract_multiplier or 0.0)
+            denominator = (
+                self.position_volume * multiplier if multiplier > 0 else self.position_volume
+            )
+            return float(self.position_cost or 0.0) / denominator
         return 0.0
 
     def get_mark_price(self):
@@ -88,6 +95,9 @@ class CtpPositionData(PositionData):
 
     def get_position_unrealized_pnl(self):
         return self.position_profit or 0.0
+
+    def get_position_commission(self):
+        return self.commission or 0.0
 
     def get_position_funding_value(self):
         return 0.0
@@ -115,6 +125,7 @@ class CtpPositionData(PositionData):
             "open_cost": self.open_cost,
             "close_profit": self.close_profit,
             "use_margin": self.use_margin,
+            "commission": self.commission,
             "position_profit": self.position_profit,
             "settlement_price": self.settlement_price,
             "exchange_id": self.exchange_id,

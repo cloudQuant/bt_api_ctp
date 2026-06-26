@@ -67,6 +67,16 @@ class TestCtpTradeData:
 
         assert trade.direction == "sell"
 
+    def test_direction_offset_and_volume_accept_float_strings(self):
+        """CTP trade fields must survive numeric-string conversion."""
+        data = {"Direction": "1.0", "OffsetFlag": "3.0", "Volume": "2.0"}
+        trade = CtpTradeData(data, symbol_name="rb2505")
+        trade.init_data()
+
+        assert trade.direction == "sell"
+        assert trade.offset == "close_today"
+        assert trade.volume == 2
+
     def test_offset_close(self):
         """Test close offset."""
         data = {"OffsetFlag": "1"}

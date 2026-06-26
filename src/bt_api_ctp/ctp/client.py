@@ -90,7 +90,11 @@ if _CTP_RUNTIME_SOURCE == "external_ctp_python":
     from ctp import (
         CThostFtdcMdApi,
         CThostFtdcMdSpi,
+        CThostFtdcQryInstrumentCommissionRateField,
+        CThostFtdcQryInstrumentField,
+        CThostFtdcQryInstrumentMarginRateField,
         CThostFtdcQryInvestorPositionField,
+        CThostFtdcQryOrderField,
         CThostFtdcQryTradingAccountField,
         CThostFtdcReqAuthenticateField,
         CThostFtdcReqUserLoginField,
@@ -105,7 +109,13 @@ elif _CTP_RUNTIME_SOURCE == "external_openctp_ctp":
 
     CThostFtdcMdApi = _openctp_mdapi.CThostFtdcMdApi
     CThostFtdcMdSpi = _openctp_mdapi.CThostFtdcMdSpi
+    CThostFtdcQryInstrumentCommissionRateField = (
+        _openctp_tdapi.CThostFtdcQryInstrumentCommissionRateField
+    )
+    CThostFtdcQryInstrumentField = _openctp_tdapi.CThostFtdcQryInstrumentField
+    CThostFtdcQryInstrumentMarginRateField = _openctp_tdapi.CThostFtdcQryInstrumentMarginRateField
     CThostFtdcQryInvestorPositionField = _openctp_tdapi.CThostFtdcQryInvestorPositionField
+    CThostFtdcQryOrderField = _openctp_tdapi.CThostFtdcQryOrderField
     CThostFtdcQryTradingAccountField = _openctp_tdapi.CThostFtdcQryTradingAccountField
     CThostFtdcReqAuthenticateField = _openctp_tdapi.CThostFtdcReqAuthenticateField
     CThostFtdcReqUserLoginField = _openctp_tdapi.CThostFtdcReqUserLoginField
@@ -120,7 +130,11 @@ else:
         CThostFtdcSettlementInfoConfirmField,
     )
     from .ctp_structs_query import (
+        CThostFtdcQryInstrumentCommissionRateField,
+        CThostFtdcQryInstrumentField,
+        CThostFtdcQryInstrumentMarginRateField,
         CThostFtdcQryInvestorPositionField,
+        CThostFtdcQryOrderField,
         CThostFtdcQryTradingAccountField,
     )
     from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
@@ -393,6 +407,32 @@ class _TraderSpi(CThostFtdcTraderSpi):
         if bIsLast:
             self._c._query_done.set()
 
+    def OnRspQryOrder(self, pOrder, pRspInfo, nRequestID, bIsLast):
+        if pOrder:
+            self._c._last_orders.append(pOrder)
+        if bIsLast:
+            self._c._query_done.set()
+
+    def OnRspQryInstrument(self, pInstrument, pRspInfo, nRequestID, bIsLast):
+        if pInstrument:
+            self._c._last_instrument = pInstrument
+        if bIsLast:
+            self._c._query_done.set()
+
+    def OnRspQryInstrumentMarginRate(self, pInstrumentMarginRate, pRspInfo, nRequestID, bIsLast):
+        if pInstrumentMarginRate:
+            self._c._last_margin_rate = pInstrumentMarginRate
+        if bIsLast:
+            self._c._query_done.set()
+
+    def OnRspQryInstrumentCommissionRate(
+        self, pInstrumentCommissionRate, pRspInfo, nRequestID, bIsLast
+    ):
+        if pInstrumentCommissionRate:
+            self._c._last_commission_rate = pInstrumentCommissionRate
+        if bIsLast:
+            self._c._query_done.set()
+
     def OnRtnOrder(self, pOrder):
         self._c._push_order_event(pOrder)
 
@@ -466,6 +506,18 @@ class TraderClient:
         self._query_done = threading.Event()
         self._last_account = None
         self._last_positions = []
+        self._last_orders = []
+        self._last_instrument = None
+        self._last_margin_rate = None
+        self._last_commission_rate = None
+        self._query_lock = threading.Lock()
+        self._last_query_submitted_at = 0.0
+        try:
+            self._query_interval = max(
+                0.0, float(os.environ.get("BT_API_PY_CTP_QUERY_INTERVAL_SEC") or 1.05)
+            )
+        except ValueError:
+            self._query_interval = 1.05
         self._max_order_ref = 0
         self._order_ref_lock = threading.Lock()
         self._order_events = queue.Queue()
@@ -508,29 +560,128 @@ class TraderClient:
         """查询资金账户，返回 CThostFtdcTradingAccountField 或 None"""
         if not self._ready:
             return None
-        self._query_done.clear()
-        self._last_account = None
-        field = CThostFtdcQryTradingAccountField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
-        self._req_id += 1
-        self._api.ReqQryTradingAccount(field, self._req_id)
-        self._query_done.wait(timeout)
-        return self._last_account
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_account = None
+            field = CThostFtdcQryTradingAccountField()
+            field.BrokerID = self.broker_id
+            field.InvestorID = self.user_id
+            ok = self._submit_query(lambda req_id: self._api.ReqQryTradingAccount(field, req_id))
+            if not ok:
+                return None
+            self._query_done.wait(timeout)
+            return self._last_account
 
     def query_positions(self, timeout=5):
         """查询持仓，返回 list[CThostFtdcInvestorPositionField]"""
         if not self._ready:
             return []
-        self._query_done.clear()
-        self._last_positions = []
-        field = CThostFtdcQryInvestorPositionField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_positions = []
+            field = CThostFtdcQryInvestorPositionField()
+            field.BrokerID = self.broker_id
+            field.InvestorID = self.user_id
+            ok = self._submit_query(lambda req_id: self._api.ReqQryInvestorPosition(field, req_id))
+            if not ok:
+                return []
+            self._query_done.wait(timeout)
+            return self._last_positions
+
+    def query_orders(self, instrument_id="", exchange_id="", order_sys_id="", timeout=5):
+        """查询委托，返回 list[CThostFtdcOrderField]。"""
+        if not self._ready:
+            return []
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_orders = []
+            field = CThostFtdcQryOrderField()
+            field.BrokerID = self.broker_id
+            field.InvestorID = self.user_id
+            if instrument_id:
+                field.InstrumentID = str(instrument_id)
+            if exchange_id:
+                field.ExchangeID = str(exchange_id)
+            if order_sys_id:
+                field.OrderSysID = str(order_sys_id)
+            ok = self._submit_query(lambda req_id: self._api.ReqQryOrder(field, req_id))
+            if not ok:
+                return []
+            self._query_done.wait(timeout)
+            return self._last_orders
+
+    def query_instrument(self, instrument_id, exchange_id="", timeout=5):
+        """查询合约规格，返回 CThostFtdcInstrumentField 或 None"""
+        if not self._ready:
+            return None
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_instrument = None
+            field = CThostFtdcQryInstrumentField()
+            field.InstrumentID = str(instrument_id or "")
+            if exchange_id:
+                field.ExchangeID = str(exchange_id)
+            ok = self._submit_query(lambda req_id: self._api.ReqQryInstrument(field, req_id))
+            if not ok:
+                return None
+            self._query_done.wait(timeout)
+            return self._last_instrument
+
+    def query_instrument_margin_rate(
+        self, instrument_id, exchange_id="", hedge_flag="1", timeout=5
+    ):
+        """查询投资者合约保证金率，返回 CThostFtdcInstrumentMarginRateField 或 None"""
+        if not self._ready:
+            return None
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_margin_rate = None
+            field = CThostFtdcQryInstrumentMarginRateField()
+            field.BrokerID = self.broker_id
+            field.InvestorID = self.user_id
+            field.InstrumentID = str(instrument_id or "")
+            if exchange_id:
+                field.ExchangeID = str(exchange_id)
+            if hedge_flag:
+                field.HedgeFlag = str(hedge_flag)
+            ok = self._submit_query(
+                lambda req_id: self._api.ReqQryInstrumentMarginRate(field, req_id)
+            )
+            if not ok:
+                return None
+            self._query_done.wait(timeout)
+            return self._last_margin_rate
+
+    def query_instrument_commission_rate(self, instrument_id, exchange_id="", timeout=5):
+        """查询投资者合约手续费率，返回 CThostFtdcInstrumentCommissionRateField 或 None"""
+        if not self._ready:
+            return None
+        with self._query_lock:
+            self._query_done.clear()
+            self._last_commission_rate = None
+            field = CThostFtdcQryInstrumentCommissionRateField()
+            field.BrokerID = self.broker_id
+            field.InvestorID = self.user_id
+            field.InstrumentID = str(instrument_id or "")
+            if exchange_id:
+                field.ExchangeID = str(exchange_id)
+            ok = self._submit_query(
+                lambda req_id: self._api.ReqQryInstrumentCommissionRate(field, req_id)
+            )
+            if not ok:
+                return None
+            self._query_done.wait(timeout)
+            return self._last_commission_rate
+
+    def _submit_query(self, submit):
+        elapsed = time.monotonic() - self._last_query_submitted_at
+        wait_time = self._query_interval - elapsed
+        if wait_time > 0:
+            time.sleep(wait_time)
         self._req_id += 1
-        self._api.ReqQryInvestorPosition(field, self._req_id)
-        self._query_done.wait(timeout)
-        return self._last_positions
+        ret = submit(self._req_id)
+        self._last_query_submitted_at = time.monotonic()
+        return ret in (None, 0)
 
     def next_order_ref(self) -> str:
         """Return the next monotonic CTP OrderRef.

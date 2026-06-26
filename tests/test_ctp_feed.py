@@ -186,7 +186,7 @@ class TestCtpContainerParsing:
         )
         account.init_data()
         assert account.get_exchange_name() == "CTP"
-        assert account.get_margin() == 500000.0
+        assert account.get_margin() == 495000.0
         assert account.get_available_margin() == 300000.0
         assert account.get_unrealized_profit() == 5000.0
         assert account.get_account_type() == "123456"
@@ -331,7 +331,7 @@ class TestCtpContainerParsing:
         account.init_data()
         handler = ExchangeRegistry.get_balance_handler("CTP___FUTURE")
         value_result, cash_result = handler([account])
-        assert value_result["TEST"]["value"] == 103000.0
+        assert value_result["TEST"]["value"] == 100000.0
         assert cash_result["TEST"]["cash"] == 80000.0
 
 
@@ -399,6 +399,41 @@ class TestCtpOrderThreadingRegression:
         assert trade_event["TradeID"] == "TRADE001"
         assert trade_event["Price"] == 3500.0
         assert seen_order_refs == ["101"]
+
+    def test_trader_client_query_orders_uses_req_qry_order(self):
+        from bt_api_ctp.ctp.client import TraderClient
+
+        class MockOrderField:
+            InstrumentID = "IF2506"
+            OrderRef = "101"
+            OrderSysID = "SYS001"
+            VolumeTotal = 1
+
+        class FakeApi:
+            def __init__(self, client):
+                self.client = client
+                self.field = None
+                self.req_id = None
+
+            def ReqQryOrder(self, field, req_id):
+                self.field = field
+                self.req_id = req_id
+                self.client._last_orders.append(MockOrderField())
+                self.client._query_done.set()
+                return 0
+
+        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client._ready = True
+        client._api = FakeApi(client)
+
+        rows = client.query_orders(instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01)
+
+        assert rows[0].OrderSysID == "SYS001"
+        assert client._api.field.BrokerID == "9999"
+        assert client._api.field.InvestorID == "demo"
+        assert client._api.field.InstrumentID == "IF2506"
+        assert client._api.field.ExchangeID == "CFFEX"
+        assert client._api.req_id == 1
 
     def test_trader_client_snapshots_order_insert_errors(self):
         from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
@@ -484,3 +519,131 @@ class TestCtpOrderThreadingRegression:
         assert order.get_client_order_id() == "108"
         assert order.front_id == 11
         assert order.session_id == 22
+
+    def test_get_open_orders_queries_and_filters_remaining_orders(self):
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        class FakeTrader:
+            is_ready = True
+
+            def query_orders(self, **_kwargs):
+                return [
+                    {
+                        "InstrumentID": "IF2506",
+                        "OrderRef": "open-1",
+                        "OrderSysID": "SYS001",
+                        "Direction": "0",
+                        "CombOffsetFlag": "0",
+                        "LimitPrice": 3500.0,
+                        "VolumeTotalOriginal": 2,
+                        "VolumeTraded": 1,
+                        "VolumeTotal": 1,
+                        "OrderStatus": "1",
+                        "ExchangeID": "CFFEX",
+                    },
+                    {
+                        "InstrumentID": "IF2506",
+                        "OrderRef": "done-1",
+                        "OrderSysID": "SYS002",
+                        "Direction": "0",
+                        "CombOffsetFlag": "0",
+                        "LimitPrice": 3500.0,
+                        "VolumeTotalOriginal": 1,
+                        "VolumeTraded": 1,
+                        "VolumeTotal": 0,
+                        "OrderStatus": "0",
+                        "ExchangeID": "CFFEX",
+                    },
+                    {
+                        "InstrumentID": "IF2506",
+                        "OrderRef": "part-cancel-1",
+                        "OrderSysID": "SYS003",
+                        "Direction": "0",
+                        "CombOffsetFlag": "0",
+                        "LimitPrice": 3500.0,
+                        "VolumeTotalOriginal": 2,
+                        "VolumeTraded": 1,
+                        "VolumeTotal": 1,
+                        "OrderStatus": "2",
+                        "ExchangeID": "CFFEX",
+                    },
+                    {
+                        "InstrumentID": "IF2506",
+                        "OrderRef": "no-trade-not-queueing-1",
+                        "OrderSysID": "SYS004",
+                        "Direction": "0",
+                        "CombOffsetFlag": "0",
+                        "LimitPrice": 3500.0,
+                        "VolumeTotalOriginal": 1,
+                        "VolumeTraded": 0,
+                        "VolumeTotal": 1,
+                        "OrderStatus": "4",
+                        "ExchangeID": "CFFEX",
+                    },
+                ]
+
+        feed = CtpRequestDataFuture(
+            queue.Queue(),
+            broker_id="9999",
+            user_id="demo",
+            password="secret",
+            td_front="tcp://test",
+        )
+        feed._trader = FakeTrader()
+        feed._connected = True
+
+        response = feed.get_open_orders(symbol="IF2506", exchange_id="CFFEX")
+        rows = [row.init_data() for row in response.get_data()]
+
+        assert response.get_status() is True
+        assert [row.get_client_order_id() for row in rows] == ["open-1"]
+        assert rows[0].get_order_id() == "SYS001"
+        assert rows[0].volume_total == 1
+
+    @pytest.mark.parametrize(
+        ("kwargs", "error"),
+        [
+            ({"volume": 1.5}, "positive integer"),
+            ({"volume": 0}, "positive integer"),
+            ({"order_type": "hold-limit"}, "side"),
+            ({"order_type": "buy-market"}, "unsupported"),
+            ({"offset": "bad"}, "offset"),
+        ],
+    )
+    def test_make_order_rejects_unsafe_ctp_fields(self, kwargs, error):
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        class FakeApi:
+            def ReqOrderInsert(self, field, req_id):
+                raise AssertionError("ReqOrderInsert should not be called")
+
+        class FakeTrader:
+            def __init__(self):
+                self.api = FakeApi()
+                self.is_ready = True
+                self._req_id = 7
+                self._front_id = 11
+                self._session_id = 22
+
+        feed = CtpRequestDataFuture(
+            queue.Queue(),
+            broker_id="9999",
+            user_id="demo",
+            password="secret",
+            td_front="tcp://test",
+        )
+        feed._trader = FakeTrader()
+        feed._connected = True
+
+        params = {
+            "symbol": "IF2506",
+            "volume": 1,
+            "price": 3500.0,
+            "order_type": "buy-limit",
+            "offset": "open",
+            "exchange_id": "CFFEX",
+        }
+        params.update(kwargs)
+
+        with pytest.raises(ValueError, match=error):
+            feed.make_order(**params)

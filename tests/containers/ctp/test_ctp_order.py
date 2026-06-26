@@ -81,6 +81,28 @@ class TestCtpOrderData:
 
         assert order.direction == "sell"
 
+    def test_direction_status_and_quantities_accept_float_strings(self):
+        """CTP order fields must survive numeric-string conversion."""
+        data = {
+            "Direction": "1.0",
+            "OrderStatus": "0.0",
+            "VolumeTotalOriginal": "3.0",
+            "VolumeTraded": "2.0",
+            "VolumeTotal": "1.0",
+            "FrontID": "7.0",
+            "SessionID": "9.0",
+        }
+        order = CtpOrderData(data)
+        order.init_data()
+
+        assert order.direction == "sell"
+        assert order.order_status == OrderStatus.COMPLETED
+        assert order.volume_total_original == 3
+        assert order.volume_traded == 2
+        assert order.volume_total == 1
+        assert order.front_id == 7
+        assert order.session_id == 9
+
     def test_offset_close(self):
         """Test close offset mapping."""
         data = {"CombOffsetFlag": "1"}
@@ -108,6 +130,23 @@ class TestCtpOrderData:
     def test_order_status_canceled(self):
         """Test canceled order status."""
         data = {"OrderStatus": "5"}
+        order = CtpOrderData(data)
+        order.init_data()
+
+        assert order.order_status == OrderStatus.CANCELED
+
+    def test_order_status_part_traded_not_queueing_is_terminal(self):
+        """CTP status 2 has fills but is no longer an active queued order."""
+        data = {"OrderStatus": "2", "VolumeTotalOriginal": 2, "VolumeTraded": 1}
+        order = CtpOrderData(data)
+        order.init_data()
+
+        assert order.order_status == OrderStatus.CANCELED
+        assert order.get_executed_qty() == 1
+
+    def test_order_status_no_trade_not_queueing_is_terminal(self):
+        """CTP status 4 is not queued and must not remain accepted."""
+        data = {"OrderStatus": "4"}
         order = CtpOrderData(data)
         order.init_data()
 

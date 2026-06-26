@@ -27,6 +27,7 @@ class TestCtpPositionData:
             "OpenCost": 35000.0,
             "PositionCost": 35000.0,
             "UseMargin": 10000.0,
+            "Commission": 12.5,
             "PositionProfit": 500.0,
             "CloseProfit": 1000.0,
             "SettlementPrice": 3550.0,
@@ -43,6 +44,7 @@ class TestCtpPositionData:
         assert position.open_cost == 35000.0
         assert position.position_cost == 35000.0
         assert position.use_margin == 10000.0
+        assert position.commission == 12.5
         assert position.position_profit == 500.0
         assert position.close_profit == 1000.0
         assert position.settlement_price == 3550.0
@@ -68,6 +70,22 @@ class TestCtpPositionData:
         position.init_data()
 
         assert position.position_direction == "short"
+
+    def test_position_direction_and_quantities_accept_float_strings(self):
+        """CTP rows converted through JSON/pandas may expose enum integers as '3.0'."""
+        data = {
+            "PosiDirection": "3.0",
+            "Position": "2.0",
+            "TodayPosition": "1.0",
+            "YdPosition": "1.0",
+        }
+        position = CtpPositionData(data)
+        position.init_data()
+
+        assert position.position_direction == "short"
+        assert position.position_volume == 2
+        assert position.today_position == 1
+        assert position.yd_position == 1
 
     def test_position_direction_net(self):
         """Test net position direction."""
@@ -114,6 +132,17 @@ class TestCtpPositionData:
 
         assert position.get_avg_price() == 3500.0
 
+    def test_get_avg_price_with_contract_multiplier(self):
+        """Test get_avg_price can undo CTP's multiplier-included position cost."""
+        data = {
+            "Position": 10,
+            "PositionCost": 12000000.0,
+        }
+        position = CtpPositionData(data)
+        position.init_data()
+
+        assert position.get_avg_price(contract_multiplier=300) == 4000.0
+
     def test_get_avg_price_zero_volume(self):
         """Test get_avg_price with zero volume."""
         data = {"Position": 0, "PositionCost": 35000.0}
@@ -159,6 +188,14 @@ class TestCtpPositionData:
 
         assert position.get_position_unrealized_pnl() == 500.0
 
+    def test_get_position_commission(self):
+        """Test get_position_commission."""
+        data = {"Commission": 12.5}
+        position = CtpPositionData(data)
+        position.init_data()
+
+        assert position.get_position_commission() == 12.5
+
     def test_get_position_funding_value(self):
         """Test get_position_funding_value returns 0 for CTP."""
         position = CtpPositionData({})
@@ -194,6 +231,7 @@ class TestCtpPositionData:
             "InstrumentID": "rb2505",
             "Position": 10,
             "PositionProfit": 500.0,
+            "Commission": 12.5,
         }
         position = CtpPositionData(data)
         position.init_data()
@@ -204,6 +242,7 @@ class TestCtpPositionData:
         assert result["instrument_id"] == "rb2505"
         assert result["position_volume"] == 10
         assert result["position_profit"] == 500.0
+        assert result["commission"] == 12.5
 
 
 class TestCtpPosDirectionMap:
