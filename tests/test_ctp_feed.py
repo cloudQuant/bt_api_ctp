@@ -1,16 +1,16 @@
 """
-CTP Feed 集成测试
-使用 SimNow 7x24 环境进行实盘连接测试
+CTP Feed 
+ SimNow 7x24 
 
-运行方式:
+:
     pytest tests/test_ctp_feed.py -v -s
 
-环境变量 (.env):
+ (.env):
     CTP_BROKER_ID, CTP_USER_ID, CTP_PASSWORD, CTP_APP_ID, CTP_AUTH_CODE
     CTP_MD_FRONT, CTP_TD_FRONT, CTP_INSTRUMENT, CTP_EXCHANGE
 
-注意: CTP C++ API 在 macOS 上进程退出时可能产生 segfault (exit code 139)，
-      这是 SWIG 对象 GC 清理的已知问题，不影响测试结果。
+: CTP C++ API  macOS  segfault (exit code 139)，
+       SWIG  GC ，。
 """
 
 from __future__ import annotations
@@ -23,24 +23,24 @@ import pytest
 
 
 class TestCtpImports:
-    """测试 CTP 子模块导入"""
+    """ CTP """
 
     def test_internal_ctp_module_import(self):
-        """验证 bt_api_ctp.ctp 子模块可以正常导入"""
+        """ bt_api_ctp.ctp """
         from bt_api_ctp.ctp import CThostFtdcMdApi, CThostFtdcTraderApi
 
         assert CThostFtdcMdApi is not None
         assert CThostFtdcTraderApi is not None
 
     def test_ctp_client_import(self):
-        """验证 MdClient / TraderClient 可以正常导入"""
+        """ MdClient / TraderClient """
         from bt_api_ctp.ctp.client import MdClient, TraderClient
 
         assert MdClient is not None
         assert TraderClient is not None
 
     def test_ctp_client_prefers_external_runtime_when_installed(self):
-        """验证安装了 ctp-python 时优先使用外部 runtime（需要设置环境变量）。"""
+        """ ctp-python  runtime（）。"""
         from bt_api_ctp.ctp.client import get_ctp_runtime_source
 
         try:
@@ -58,7 +58,7 @@ class TestCtpImports:
             assert get_ctp_runtime_source() == "vendored_bt_api_py"
 
     def test_ctp_feed_import(self):
-        """验证 CTP Feed 类可以正常导入"""
+        """ CTP Feed """
         from bt_api_ctp.feeds.live_ctp_feed import CTP_DIRECTION_FLAG, CTP_OFFSET_FLAG
 
         assert CTP_OFFSET_FLAG["open"] == "0"
@@ -66,19 +66,29 @@ class TestCtpImports:
         assert CTP_DIRECTION_FLAG["buy"] == "0"
         assert CTP_DIRECTION_FLAG["sell"] == "1"
 
+    def test_ctp_field_to_dict_accepts_callback_snapshot_dicts(self):
+        """Field converter should preserve callback snapshots from TraderClient."""
+        from bt_api_ctp.feeds.live_ctp_feed import _ctp_field_to_dict
+
+        snapshot = {"AccountID": "TEST", "Balance": 100000.0, "Available": 80000.0}
+
+        assert _ctp_field_to_dict(snapshot) == snapshot
+
     def test_ctp_containers_import(self):
-        """验证 CTP 容器类可以正常导入"""
+        """ CTP """
         from bt_api_ctp.containers.ctp import CtpAccountData
 
         assert CtpAccountData is not None
 
     def test_ctp_registry(self):
-        """验证 CTP 在 ExchangeRegistry 中已注册"""
+        """ CTP  ExchangeRegistry """
         from bt_api_ctp.plugin import register_plugin
         from bt_api_base.registry import ExchangeRegistry
 
         class MockRuntimeFactory:
+            """Class MockRuntimeFactory"""
             def register_adapter(self, *args, **kwargs):
+                """register_adapter method"""
                 pass
 
         register_plugin(ExchangeRegistry, MockRuntimeFactory)
@@ -88,14 +98,14 @@ class TestCtpImports:
         assert ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
 
     def test_btapi_includes_ctp(self):
-        """验证 BtApi 可用交易所列表包含 CTP"""
+        """ BtApi  CTP"""
         from bt_api_py.bt_api import BtApi
 
         available = BtApi.list_available_exchanges()
         assert "CTP___FUTURE" in available
 
     def test_split_submodule_imports(self):
-        """验证拆分后的子模块可以独立导入"""
+        """"""
         from bt_api_ctp.ctp.ctp_constants import THOST_TERT_RESTART
         from bt_api_ctp.ctp.ctp_md_api import CThostFtdcMdApi
         from bt_api_ctp.ctp.ctp_trader_api import CThostFtdcTraderSpi
@@ -105,7 +115,7 @@ class TestCtpImports:
         assert THOST_TERT_RESTART is not None
 
     def test_split_submodule_backward_compat(self):
-        """验证拆分子模块与原始包导入返回相同对象 (向后兼容)"""
+        """ ()"""
         from bt_api_ctp.ctp import CThostFtdcInputOrderField as CThostFtdcInputOrderFieldInit
         from bt_api_ctp.ctp import CThostFtdcMdApi as CThostFtdcMdApiInit
         from bt_api_ctp.ctp.ctp_md_api import CThostFtdcMdApi as CThostFtdcMdApiSubmod
@@ -117,7 +127,7 @@ class TestCtpImports:
         assert CThostFtdcInputOrderFieldInit is CThostFtdcInputOrderFieldSubmod
 
     def test_split_submodule_field_instantiation(self):
-        """验证通过拆分子模块导入的 Field 可正常实例化和赋值"""
+        """ Field """
         from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcInputOrderField
 
         field = CThostFtdcInputOrderField()
@@ -127,7 +137,7 @@ class TestCtpImports:
         assert field.VolumeTotalOriginal == 1
 
     def test_split_submodule_all_modules_importable(self):
-        """验证所有 12 个拆分子模块都可以导入"""
+        """ 12 """
         import importlib
 
         modules = [
@@ -151,9 +161,10 @@ class TestCtpImports:
 
 
 class TestCtpContainerParsing:
-    """测试 CTP 容器类数据解析（纯单元测试，不需要网络）"""
+    """ CTP （，）"""
 
     def test_account_data(self):
+        """test_account_data method"""
         from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
 
         account = CtpAccountData(
@@ -181,6 +192,7 @@ class TestCtpContainerParsing:
         assert all_data["risk_degree"] == 150000.0 / 500000.0
 
     def test_order_data(self):
+        """test_order_data method"""
         from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 
         order = CtpOrderData(
@@ -208,6 +220,7 @@ class TestCtpContainerParsing:
         assert order.get_order_size() == 1
 
     def test_position_data(self):
+        """test_position_data method"""
         from bt_api_ctp.containers.ctp.ctp_position import CtpPositionData
 
         pos = CtpPositionData(
@@ -230,6 +243,7 @@ class TestCtpContainerParsing:
         assert pos.get_yesterday_position() == 2
 
     def test_trade_data(self):
+        """test_trade_data method"""
         from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
 
         trade = CtpTradeData(
@@ -254,6 +268,7 @@ class TestCtpContainerParsing:
 
     @pytest.mark.ticker
     def test_ticker_data(self):
+        """test_ticker_data method"""
         from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 
         tick = CtpTickerData(
@@ -279,9 +294,11 @@ class TestCtpContainerParsing:
         assert tick.get_open_interest() == 120000.0
 
     def test_field_to_dict(self):
+        """test_field_to_dict method"""
         from bt_api_ctp.feeds.live_ctp_feed import _ctp_field_to_dict
 
         class MockField:
+            """Class MockField"""
             InstrumentID = "rb2510"
             LastPrice = 3800.0
             Volume = 1000
@@ -295,12 +312,15 @@ class TestCtpContainerParsing:
         assert "_internal" not in d
 
     def test_balance_handler(self):
+        """test_balance_handler method"""
         from bt_api_ctp.plugin import register_plugin
         from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
         from bt_api_base.registry import ExchangeRegistry
 
         class MockRuntimeFactory:
+            """Class MockRuntimeFactory"""
             def register_adapter(self, *args, **kwargs):
+                """register_adapter method"""
                 pass
 
         register_plugin(ExchangeRegistry, MockRuntimeFactory)
@@ -321,9 +341,10 @@ class TestCtpContainerParsing:
 
 
 class TestCtpOrderThreadingRegression:
-    """回归测试：验证下单回报在线程之间安全传递。"""
+    """：。"""
 
     def test_trader_client_next_order_ref_is_thread_safe(self):
+        """test_trader_client_next_order_ref_is_thread_safe method"""
         from bt_api_ctp.ctp.client import TraderClient
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
@@ -346,10 +367,13 @@ class TestCtpOrderThreadingRegression:
         assert sorted(refs) == list(range(101, 113))
 
     def test_trader_client_snapshots_order_and_trade_callbacks(self):
+        """test_trader_client_snapshots_order_and_trade_callbacks method"""
         from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 
         class MockOrderField:
+            """Class MockOrderField"""
             def __init__(self):
+                """__init__ method"""
                 self.InstrumentID = "IF2506"
                 self.OrderRef = "101"
                 self.OrderSysID = "SYS001"
@@ -357,7 +381,9 @@ class TestCtpOrderThreadingRegression:
                 self.CombOffsetFlag = "0"
 
         class MockTradeField:
+            """Class MockTradeField"""
             def __init__(self):
+                """__init__ method"""
                 self.InstrumentID = "IF2506"
                 self.TradeID = "TRADE001"
                 self.OrderRef = "101"
@@ -386,15 +412,20 @@ class TestCtpOrderThreadingRegression:
         assert seen_order_refs == ["101"]
 
     def test_trader_client_snapshots_order_insert_errors(self):
+        """test_trader_client_snapshots_order_insert_errors method"""
         from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 
         class MockInputOrder:
+            """Class MockInputOrder"""
             def __init__(self):
+                """__init__ method"""
                 self.InstrumentID = "IF2506"
                 self.OrderRef = "105"
 
         class MockRspInfo:
+            """Class MockRspInfo"""
             def __init__(self):
+                """__init__ method"""
                 self.ErrorID = 32
                 self.ErrorMsg = "order rejected"
 
@@ -412,21 +443,168 @@ class TestCtpOrderThreadingRegression:
         assert error_event["field"]["OrderRef"] == "105"
         assert seen_errors == [(32, "order rejected")]
 
-    def test_make_order_sets_required_ctp_fields(self):
-        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+    def test_trader_client_snapshots_account_and_position_query_callbacks(self):
+        """Query callbacks should not leak transient SWIG objects across threads."""
+        from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
+
+        class MockAccountField:
+            AccountID = "TEST"
+            Balance = 100000.0
+            Available = 80000.0
+
+        class MockPositionField:
+            InstrumentID = "IF2506"
+            PosiDirection = "2"
+            Position = 2
+            PositionCost = 7000.0
+
+        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        spi = _TraderSpi(client)
+
+        spi.OnRspQryTradingAccount(MockAccountField(), None, 1, True)
+        spi.OnRspQryInvestorPosition(MockPositionField(), None, 2, True)
+
+        assert client._last_account == {
+            "AccountID": "TEST",
+            "Available": 80000.0,
+            "Balance": 100000.0,
+        }
+        assert client._last_positions == [
+            {
+                "InstrumentID": "IF2506",
+                "Position": 2,
+                "PositionCost": 7000.0,
+                "PosiDirection": "2",
+            }
+        ]
+
+    def test_trader_client_blocks_login_after_authentication_failure(self):
+        """Authentication failure must not continue into CTP user login."""
+        from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 
         class FakeApi:
             def __init__(self):
+                self.login_requests = 0
+
+            def ReqUserLogin(self, field, req_id):
+                self.login_requests += 1
+                return 0
+
+        class MockRspInfo:
+            ErrorID = 63
+            ErrorMsg = "auth failed"
+
+        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client._api = FakeApi()
+        seen_errors = []
+        client.on_error = lambda rsp_info: seen_errors.append(
+            (rsp_info.ErrorID, rsp_info.ErrorMsg)
+        )
+
+        _TraderSpi(client).OnRspAuthenticate(None, MockRspInfo(), 1, True)
+
+        assert client._api.login_requests == 0
+        assert client.auth_state == "failed"
+        assert client.login_state == "blocked"
+        assert client.is_ready is False
+        assert seen_errors == [(63, "auth failed")]
+        session_state = client.get_session_state()
+        assert session_state["auth_state"] == "failed"
+        assert session_state["login_state"] == "blocked"
+        assert session_state["last_auth_error"]["error_id"] == 63
+
+    def test_trader_client_records_auth_and_login_success_metadata(self):
+        """Successful CTP auth/login should expose structured session state."""
+        from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
+
+        class FakeApi:
+            def __init__(self):
+                self.login_requests = 0
+
+            def ReqUserLogin(self, field, req_id):
+                self.login_requests += 1
+                return 0
+
+            def ReqSettlementInfoConfirm(self, field, req_id):
+                return 0
+
+        class MockLogin:
+            FrontID = 7
+            SessionID = 8801
+            TradingDay = "20260618"
+            LoginTime = "20:01:02"
+            SystemName = "SIMNOW"
+            BrokerID = "9999"
+            UserID = "demo"
+            MaxOrderRef = "100"
+
+        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client._api = FakeApi()
+        spi = _TraderSpi(client)
+
+        spi.OnRspAuthenticate(None, None, 1, True)
+        spi.OnRspUserLogin(MockLogin(), None, 2, True)
+        spi.OnRspSettlementInfoConfirm(None, None, 3, True)
+
+        assert client._api.login_requests == 1
+        assert client.auth_state == "authenticated"
+        assert client.login_state == "logged_in"
+        assert client.is_ready is True
+        session_state = client.get_session_state()
+        assert session_state["front_id"] == 7
+        assert session_state["session_id"] == 8801
+        assert session_state["trading_day"] == "20260618"
+
+    def test_md_client_treats_missing_login_rsp_info_as_success(self):
+        """CTP market login can succeed with an empty RspInfo payload."""
+        from bt_api_ctp.ctp.client import MdClient, _MdSpi
+
+        class FakeApi:
+            def __init__(self):
+                self.subscribed = []
+
+            def SubscribeMarketData(self, instruments):
+                self.subscribed.extend(instruments)
+                return 0
+
+        client = MdClient("tcp://test-md", "9999", "demo", "secret")
+        client._api = FakeApi()
+        client._connected = True
+        client._pending_instruments = ["rb2510"]
+        seen_logins = []
+        seen_errors = []
+        client.on_login = lambda login: seen_logins.append(login)
+        client.on_error = lambda rsp_info: seen_errors.append(rsp_info)
+
+        login = object()
+        _MdSpi(client).OnRspUserLogin(login, None, 1, True)
+
+        assert client.is_ready is True
+        assert client._api.subscribed == ["rb2510"]
+        assert seen_logins == [login]
+        assert seen_errors == []
+
+    def test_make_order_sets_required_ctp_fields(self):
+        """test_make_order_sets_required_ctp_fields method"""
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        class FakeApi:
+            """Class FakeApi"""
+            def __init__(self):
+                """__init__ method"""
                 self.field = None
                 self.req_id = None
 
             def ReqOrderInsert(self, field, req_id):
+                """ReqOrderInsert method"""
                 self.field = field
                 self.req_id = req_id
                 return 0
 
         class FakeTrader:
+            """Class FakeTrader"""
             def __init__(self):
+                """__init__ method"""
                 self.api = FakeApi()
                 self.is_ready = True
                 self._req_id = 7
@@ -434,6 +612,7 @@ class TestCtpOrderThreadingRegression:
                 self._session_id = 22
 
             def next_order_ref(self):
+                """next_order_ref method"""
                 return "108"
 
         feed = CtpRequestDataFuture(

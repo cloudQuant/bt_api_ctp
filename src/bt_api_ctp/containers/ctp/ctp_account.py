@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from bt_api_base.containers.accounts.account import AccountData
@@ -5,6 +6,7 @@ from bt_api_base.functions.utils import from_dict_get_float, from_dict_get_strin
 
 
 class CtpAccountData(AccountData):
+    """Class CtpAccountData"""
     def __init__(
         self,
         account_info,
@@ -12,6 +14,7 @@ class CtpAccountData(AccountData):
         asset_type='FUTURE',
         has_been_json_encoded=False,
     ):
+        """__init__ method"""
         super().__init__(account_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
@@ -32,6 +35,7 @@ class CtpAccountData(AccountData):
         self.risk_degree = None
 
     def init_data(self):
+        """init_data method"""
         if self._initialized:
             return self
         info = self.account_info
@@ -55,42 +59,53 @@ class CtpAccountData(AccountData):
         return self
 
     def get_exchange_name(self):
+        """get_exchange_name method"""
         self._ensure_init()
         return self.exchange_name or ''
 
     def get_asset_type(self):
+        """get_asset_type method"""
         self._ensure_init()
         return self.asset_type or ''
 
     def get_account_type(self):
+        """get_account_type method"""
         self._ensure_init()
         return self.account_id or 'CNY'
 
     def get_server_time(self):
+        """get_server_time method"""
         return None
 
     def get_total_wallet_balance(self):
+        """get_total_wallet_balance method"""
         return self.balance
 
     def get_margin(self):
+        """get_margin method"""
         self._ensure_init()
         return self.balance or 0.0
 
     def get_available_margin(self):
+        """get_available_margin method"""
         self._ensure_init()
         return self.available or 0.0
 
     def get_unrealized_profit(self):
+        """get_unrealized_profit method"""
         self._ensure_init()
         return self.position_profit or 0.0
 
     def get_balances(self):
+        """get_balances method"""
         return [self]
 
     def get_positions(self):
+        """get_positions method"""
         return []
 
     def get_all_data(self):
+        """get_all_data method"""
         return {
             'exchange_name': self.exchange_name,
             'asset_type': self.asset_type,

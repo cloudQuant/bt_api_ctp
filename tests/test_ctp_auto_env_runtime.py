@@ -1,3 +1,4 @@
+"""Module documentation"""
 from __future__ import annotations
 
 import atexit
@@ -90,6 +91,7 @@ def _runtime_config() -> tuple[dict[str, str], str, str, str]:
 @pytest.mark.network
 @pytest.mark.ctp
 def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
+    """test_ctp_request_feed_uses_auto_env_fronts_and_connects function"""
     _ensure_ctp_atexit()
     from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
@@ -118,6 +120,7 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 @pytest.mark.network
 @pytest.mark.ctp
 def test_btapi_ctp_feed_uses_auto_env_fronts_and_connects() -> None:
+    """test_btapi_ctp_feed_uses_auto_env_fronts_and_connects function"""
     _ensure_ctp_atexit()
     from bt_api_py.bt_api import BtApi
 

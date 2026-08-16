@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from typing import Any
@@ -45,6 +46,7 @@ def _ctp_future_subscribe_handler(
 def register_plugin(
     registry: type[ExchangeRegistry], runtime_factory: type[GatewayRuntimeRegistrar]
 ) -> PluginInfo:
+    """register_plugin function"""
     registry.register_feed('CTP___FUTURE', CtpRequestDataFuture)
     registry.register_exchange_data('CTP___FUTURE', CtpExchangeDataFuture)
     registry.register_balance_handler('CTP___FUTURE', _ctp_balance_handler)

@@ -1,11 +1,11 @@
 """
-高层封装 / High-level CTP Client Wrappers
+ / High-level CTP Client Wrappers
 
-提供简洁的 API，减少样板代码。3 行即可收行情或完成交易登录。
+ API，。3 。
 
-用法 / Usage:
+ / Usage:
 
-    # 行情客户端
+    # 
     from bt_api_py.ctp.client import MdClient
 
     def on_tick(data):
@@ -14,9 +14,9 @@
     client = MdClient("tcp://182.254.243.31:30011", "9999", "user", "pass")
     client.on_tick = on_tick
     client.subscribe(["IF2603", "IC2603"])
-    client.start()  # 阻塞
+    client.start()  # 
 
-    # 交易客户端
+    # 
     from bt_api_py.ctp.client import TraderClient
 
     client = TraderClient("tcp://182.254.243.31:30001", "9999", "user", "pass",
@@ -91,6 +91,7 @@ def _check_native_module():
 
 
 def get_ctp_runtime_source() -> str:
+    """get_ctp_runtime_source function"""
     return _CTP_RUNTIME_SOURCE
 
 
@@ -125,17 +126,32 @@ def _snapshot_ctp_field(field):
     return result
 
 
+def _snapshot_rsp_info(rsp_info):
+    """Create a stable error snapshot from a CTP response info field."""
+    if rsp_info is None:
+        return None
+    error_id = getattr(rsp_info, 'ErrorID', 0) or 0
+    with suppress(TypeError, ValueError):
+        error_id = int(error_id)
+    return {
+        'error_id': error_id,
+        'error_msg': str(getattr(rsp_info, 'ErrorMsg', '') or ''),
+    }
+
+
 # ===========================================================================
-#  MdClient - 行情客户端
+#  MdClient - 
 # ===========================================================================
 
 
 class _MdSpi(CThostFtdcMdSpi):
     def __init__(self, client):
+        """__init__ method"""
         super().__init__()
         self._c = client
 
     def OnFrontConnected(self):
+        """OnFrontConnected method"""
         self._c._connected = True
         field = CThostFtdcReqUserLoginField()
         field.BrokerID = self._c.broker_id
@@ -144,11 +160,14 @@ class _MdSpi(CThostFtdcMdSpi):
         self._c._api.ReqUserLogin(field, 1)
 
     def OnFrontDisconnected(self, nReason):
+        """OnFrontDisconnected method"""
         self._c._connected = False
         self._c._loggedin = False
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
-        if pRspInfo and pRspInfo.ErrorID == 0:
+        """OnRspUserLogin method"""
+        ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
+        if ok:
             self._c._loggedin = True
             if self._c._pending_instruments:
                 self._c._api.SubscribeMarketData(self._c._pending_instruments)
@@ -159,28 +178,31 @@ class _MdSpi(CThostFtdcMdSpi):
                 self._c.on_error(pRspInfo)
 
     def OnRtnDepthMarketData(self, pDepthMarketData):
+        """OnRtnDepthMarketData method"""
         if self._c.on_tick:
             self._c.on_tick(pDepthMarketData)
 
     def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
+        """OnRspSubMarketData method"""
         pass
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
+        """OnRspError method"""
         if self._c.on_error:
             self._c.on_error(pRspInfo)
 
 
 class MdClient:
-    """行情客户端封装
+    """
 
-    Args:
-        front: 前置地址，如 "tcp://182.254.243.31:30011"
-        broker_id: 经纪商代码
-        user_id: 投资者代码
-        password: 密码
+    Args: front: ， "tcp://182.254.243.31:30011"
+        broker_id: 
+        user_id: 
+        password: 
     """
 
     def __init__(self, front, broker_id, user_id, password):
+        """__init__ method"""
         self.front = front
         self.broker_id = broker_id
         self.user_id = user_id
@@ -198,16 +220,15 @@ class MdClient:
         self._thread = None
 
     def subscribe(self, instruments):
-        """订阅合约列表（可在 start 前或后调用）"""
+        """（ start ）"""
         self._pending_instruments = list(instruments)
         if self._loggedin and self._api:
             self._api.SubscribeMarketData(self._pending_instruments)
 
     def start(self, block=True):
-        """启动连接
+        """
 
-        Args:
-            block: True=阻塞直到断开, False=后台线程运行
+        Args: block: True=, False=
         """
         _check_native_module()
         flow = _flow_dir(f'md_{self.broker_id}_{self.user_id}')
@@ -229,7 +250,7 @@ class MdClient:
             self._thread.start()
 
     def wait_ready(self, timeout=15):
-        """等待登录就绪"""
+        """"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._loggedin:
@@ -238,12 +259,12 @@ class MdClient:
         return self._loggedin
 
     def stop(self):
-        """停止并释放资源
+        """
 
-        macOS 上 CTP C++ API 的 Release() 在 Join() 仍然运行于
-        另一个线程时会触发 segfault。因此:
-        - 非阻塞模式 (daemon thread): 仅置空引用，让 daemon 线程随进程退出
-        - 阻塞模式 (Join 已返回): 安全调用 Release()
+        macOS  CTP C++ API  Release()  Join() 
+         segfault。:
+        -  (daemon thread): ， daemon 
+        -  (Join ):  Release()
         """
         self._loggedin = False
         self._connected = False
@@ -256,45 +277,76 @@ class MdClient:
                 api.Release()
             except Exception:
                 pass
-            # 如果 daemon thread 还活着，不调用 Release，
-            # daemon=True 线程会在进程退出时自动终止
+            #  daemon thread ， Release，
+            # daemon=True 
 
     @property
     def is_ready(self):
+        """is_ready method"""
         return self._connected and self._loggedin
 
 
 # ===========================================================================
-#  TraderClient - 交易客户端
+#  TraderClient - 
 # ===========================================================================
 
 
 class _TraderSpi(CThostFtdcTraderSpi):
     def __init__(self, client):
+        """__init__ method"""
         super().__init__()
         self._c = client
 
     def OnFrontConnected(self):
+        """OnFrontConnected method"""
         self._c._connected = True
+        self._c._ready = False
+        self._c._auth_state = 'pending'
+        self._c._login_state = 'waiting_for_auth'
+        self._c._auth_request = {
+            'broker_id': self._c.broker_id,
+            'user_id': self._c.user_id,
+            'app_id': self._c.app_id,
+            'has_auth_code': bool(self._c.auth_code),
+        }
         field = CThostFtdcReqAuthenticateField()
         field.BrokerID = self._c.broker_id
         field.UserID = self._c.user_id
         field.AppID = self._c.app_id
         field.AuthCode = self._c.auth_code
         self._c._req_id += 1
+        if self._c.on_auth_request:
+            self._c.on_auth_request(dict(self._c._auth_request))
         self._c._api.ReqAuthenticate(field, self._c._req_id)
 
     def OnFrontDisconnected(self, nReason):
+        """OnFrontDisconnected method"""
         self._c._connected = False
         self._c._ready = False
+        if self._c._login_state not in {'blocked', 'failed'}:
+            self._c._login_state = 'disconnected'
 
     def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
         # Some fronts may not populate RspInfo on success; treat missing as OK.
+        """OnRspAuthenticate method"""
+        self._c._connected = True
         ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
-        if not ok and self._c.on_error:
-            self._c.on_error(pRspInfo)
+        if not ok:
+            self._c._auth_state = 'failed'
+            self._c._login_state = 'blocked'
+            self._c._ready = False
+            self._c._last_auth_error = _snapshot_rsp_info(pRspInfo)
+            self._c._push_error_event(
+                event_type='authenticate_response',
+                rsp_info=pRspInfo,
+                field=pRspAuthenticateField,
+                request_id=nRequestID,
+            )
+            return
 
-        # Fall back to login even if authentication fails (some broker setups skip auth).
+        self._c._auth_state = 'authenticated'
+        self._c._last_auth_error = None
+        self._c._login_state = 'pending'
         field = CThostFtdcReqUserLoginField()
         field.BrokerID = self._c.broker_id
         field.UserID = self._c.user_id
@@ -303,10 +355,21 @@ class _TraderSpi(CThostFtdcTraderSpi):
         self._c._api.ReqUserLogin(field, self._c._req_id)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
+        """OnRspUserLogin method"""
+        self._c._connected = True
         ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if ok:
-            self._c._front_id = pRspUserLogin.FrontID
-            self._c._session_id = pRspUserLogin.SessionID
+            self._c._login_state = 'logged_in'
+            self._c._last_login_error = None
+            self._c._front_id = getattr(pRspUserLogin, 'FrontID', 0) or 0
+            self._c._session_id = getattr(pRspUserLogin, 'SessionID', 0) or 0
+            self._c._login_info = {
+                'trading_day': str(getattr(pRspUserLogin, 'TradingDay', '') or ''),
+                'login_time': str(getattr(pRspUserLogin, 'LoginTime', '') or ''),
+                'system_name': str(getattr(pRspUserLogin, 'SystemName', '') or ''),
+                'broker_id': str(getattr(pRspUserLogin, 'BrokerID', self._c.broker_id) or ''),
+                'user_id': str(getattr(pRspUserLogin, 'UserID', self._c.user_id) or ''),
+            }
             with suppress(TypeError, ValueError):
                 self._c._max_order_ref = max(
                     self._c._max_order_ref,
@@ -323,35 +386,60 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 self._c._ready = True
             if self._c.on_login:
                 self._c.on_login(pRspUserLogin)
-        elif self._c.on_error:
-            self._c.on_error(pRspInfo)
+        else:
+            self._c._login_state = 'failed'
+            self._c._ready = False
+            self._c._last_login_error = _snapshot_rsp_info(pRspInfo)
+            self._c._push_error_event(
+                event_type='login_response',
+                rsp_info=pRspInfo,
+                field=pRspUserLogin,
+                request_id=nRequestID,
+            )
 
     def OnRspSettlementInfoConfirm(
         self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
     ):
+        """OnRspSettlementInfoConfirm method"""
         ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if ok:
             self._c._ready = True
+        else:
+            self._c._ready = False
+            self._c._last_login_error = _snapshot_rsp_info(pRspInfo)
+            self._c._push_error_event(
+                event_type='settlement_confirm_response',
+                rsp_info=pRspInfo,
+                field=pSettlementInfoConfirm,
+                request_id=nRequestID,
+            )
 
     def OnRspQryTradingAccount(self, pTradingAccount, pRspInfo, nRequestID, bIsLast):
+        """OnRspQryTradingAccount method"""
         if pTradingAccount:
-            self._c._last_account = pTradingAccount
+            self._c._last_account = _snapshot_ctp_field(pTradingAccount)
         if bIsLast:
             self._c._query_done.set()
 
     def OnRspQryInvestorPosition(self, pPos, pRspInfo, nRequestID, bIsLast):
-        if pPos and pPos.Position > 0:
-            self._c._last_positions.append(pPos)
+        """OnRspQryInvestorPosition method"""
+        if pPos:
+            snapshot = _snapshot_ctp_field(pPos)
+            if snapshot and snapshot.get('Position', 0) > 0:
+                self._c._last_positions.append(snapshot)
         if bIsLast:
             self._c._query_done.set()
 
     def OnRtnOrder(self, pOrder):
+        """OnRtnOrder method"""
         self._c._push_order_event(pOrder)
 
     def OnRtnTrade(self, pTrade):
+        """OnRtnTrade method"""
         self._c._push_trade_event(pTrade)
 
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
+        """OnRspOrderInsert method"""
         self._c._push_error_event(
             event_type='order_insert_response',
             rsp_info=pRspInfo,
@@ -360,6 +448,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
+        """OnErrRtnOrderInsert method"""
         self._c._push_error_event(
             event_type='order_insert_error',
             rsp_info=pRspInfo,
@@ -367,6 +456,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
+        """OnRspError method"""
         self._c._push_error_event(
             event_type='response_error',
             rsp_info=pRspInfo,
@@ -375,15 +465,14 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
 
 class TraderClient:
-    """交易客户端封装
+    """
 
-    Args:
-        front: 交易前置地址
-        broker_id: 经纪商代码
-        user_id: 投资者代码
-        password: 密码
-        app_id: 客户端 AppID
-        auth_code: 认证码
+    Args: front:
+        broker_id: 
+        user_id: 
+        password: 
+        app_id:  AppID
+        auth_code: 
     """
 
     def __init__(
@@ -395,6 +484,7 @@ class TraderClient:
         app_id='simnow_client_test',
         auth_code='0000000000000000',
     ):
+        """__init__ method"""
         self.front = front
         self.broker_id = broker_id
         self.user_id = user_id
@@ -406,9 +496,16 @@ class TraderClient:
         self.on_order = None  # callback(CThostFtdcOrderField)
         self.on_trade = None  # callback(CThostFtdcTradeField)
         self.on_error = None  # callback(CThostFtdcRspInfoField)
+        self.on_auth_request = None  # callback(dict)
 
         self._connected = False
         self._ready = False
+        self._auth_state = 'idle'
+        self._login_state = 'idle'
+        self._auth_request = {}
+        self._login_info = {}
+        self._last_auth_error = None
+        self._last_login_error = None
         self._req_id = 0
         self._front_id = 0
         self._session_id = 0
@@ -425,7 +522,7 @@ class TraderClient:
         self._error_events = queue.Queue()
 
     def start(self, block=False):
-        """启动连接（默认后台运行）"""
+        """（）"""
         _check_native_module()
         flow = _flow_dir(f'td_{self.broker_id}_{self.user_id}')
         self._api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
@@ -448,7 +545,7 @@ class TraderClient:
             self._thread.start()
 
     def wait_ready(self, timeout=15):
-        """等待完成认证→登录→结算确认"""
+        """→→"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._ready:
@@ -457,7 +554,7 @@ class TraderClient:
         return self._ready
 
     def query_account(self, timeout=5):
-        """查询资金账户，返回 CThostFtdcTradingAccountField 或 None"""
+        """， CThostFtdcTradingAccountField  None"""
         if not self._ready:
             return None
         self._query_done.clear()
@@ -471,7 +568,7 @@ class TraderClient:
         return self._last_account
 
     def query_positions(self, timeout=5):
-        """查询持仓，返回 list[CThostFtdcInvestorPositionField]"""
+        """， list[CThostFtdcInvestorPositionField]"""
         if not self._ready:
             return []
         self._query_done.clear()
@@ -495,24 +592,50 @@ class TraderClient:
 
     def wait_order_event(self, timeout=5):
         """Wait for the next order callback snapshot."""
-        try:
-            return self._order_events.get(timeout=timeout)
+        try: return self._order_events.get(timeout=timeout)
         except queue.Empty:
             return None
 
     def wait_trade_event(self, timeout=5):
         """Wait for the next trade callback snapshot."""
-        try:
-            return self._trade_events.get(timeout=timeout)
+        try: return self._trade_events.get(timeout=timeout)
         except queue.Empty:
             return None
 
     def wait_error_event(self, timeout=5):
         """Wait for the next error callback snapshot."""
-        try:
-            return self._error_events.get(timeout=timeout)
+        try: return self._error_events.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    @property
+    def auth_state(self):
+        """Return the latest CTP penetration-authentication state."""
+        return self._auth_state
+
+    @property
+    def login_state(self):
+        """Return the latest CTP trader-login state."""
+        return self._login_state
+
+    def get_session_state(self):
+        """Return structured CTP auth/login metadata for upper layers."""
+        return {
+            'connected': bool(self._connected),
+            'ready': bool(self.is_ready),
+            'auth_state': self._auth_state,
+            'login_state': self._login_state,
+            'front_id': self._front_id,
+            'session_id': self._session_id,
+            'trading_day': self._login_info.get('trading_day', ''),
+            'login_time': self._login_info.get('login_time', ''),
+            'system_name': self._login_info.get('system_name', ''),
+            'broker_id': self._login_info.get('broker_id', self.broker_id),
+            'user_id': self._login_info.get('user_id', self.user_id),
+            'auth_request': dict(self._auth_request),
+            'last_auth_error': dict(self._last_auth_error or {}),
+            'last_login_error': dict(self._last_login_error or {}),
+        }
 
     def _push_order_event(self, order_field) -> None:
         snapshot = _snapshot_ctp_field(order_field)
@@ -546,16 +669,16 @@ class TraderClient:
 
     @property
     def api(self):
-        """获取底层 CThostFtdcTraderApi 对象，用于发送自定义请求"""
+        """ CThostFtdcTraderApi ，"""
         return self._api
 
     def stop(self):
-        """停止并释放资源
+        """
 
-        macOS 上 CTP C++ API 的 Release() 在 Join() 仍然运行于
-        另一个线程时会触发 segfault。因此:
-        - 非阻塞模式 (daemon thread): 仅置空引用，让 daemon 线程随进程退出
-        - 阻塞模式 (Join 已返回): 安全调用 Release()
+        macOS  CTP C++ API  Release()  Join() 
+         segfault。:
+        -  (daemon thread): ， daemon 
+        -  (Join ):  Release()
         """
         self._ready = False
         self._connected = False
@@ -571,4 +694,5 @@ class TraderClient:
 
     @property
     def is_ready(self):
+        """is_ready method"""
         return self._connected and self._ready

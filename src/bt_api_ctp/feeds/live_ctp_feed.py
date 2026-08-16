@@ -1,3 +1,4 @@
+"""Module documentation"""
 from __future__ import annotations
 
 import os
@@ -118,6 +119,8 @@ def _sanitize_ctp_field_value(value):
 def _ctp_field_to_dict(field):
     if field is None:
         return {}
+    if isinstance(field, dict):
+        return {key: _sanitize_ctp_field_value(value) for key, value in field.items()}
     result = {}
     for attr in dir(field):
         if attr.startswith('_') or attr in {'this', 'thisown'}:
@@ -136,6 +139,7 @@ def _ctp_field_to_dict(field):
 
 
 class CtpRequestData(Feed):
+    """Class CtpRequestData"""
     @classmethod
     def _capabilities(cls):
         return {
@@ -153,6 +157,7 @@ class CtpRequestData(Feed):
         }
 
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
+        """__init__ method"""
         super().__init__(data_queue)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
         self.data_queue = data_queue
@@ -172,6 +177,7 @@ class CtpRequestData(Feed):
         self._connect_timeout = resolved_kwargs.get('connect_timeout', 15)
 
     def translate_error(self, raw_response):
+        """translate_error method"""
         if isinstance(raw_response, dict) and raw_response.get('ErrorID', 0) != 0:
             return raw_response
         return None
@@ -183,6 +189,7 @@ class CtpRequestData(Feed):
             raise BtConnectionError('CTP', 'TraderClient not ready after connect()')
 
     def connect(self):
+        """connect method"""
         if self._trader is not None and self._trader.is_ready:
             return
         self._trader = ctp_client.TraderClient(
@@ -197,6 +204,7 @@ class CtpRequestData(Feed):
         self._connected = self._trader.wait_ready(timeout=self._connect_timeout)
 
     def disconnect(self):
+        """disconnect method"""
         if self._trader is not None:
             self._trader.stop()
             self._trader = None
@@ -216,6 +224,7 @@ class CtpRequestData(Feed):
         return request
 
     def get_account(self, symbol=None, extra_data=None, **kwargs):
+        """get_account method"""
         self._ensure_connected()
         trader = self._trader
         if trader is None:
@@ -231,9 +240,11 @@ class CtpRequestData(Feed):
         return self._make_request_data([row], 'get_account', symbol, extra_data)
 
     def get_balance(self, symbol=None, extra_data=None, **kwargs):
+        """get_balance method"""
         return self.get_account(symbol, extra_data, **kwargs)
 
     def get_position(self, symbol=None, extra_data=None, **kwargs):
+        """get_position method"""
         self._ensure_connected()
         trader = self._trader
         if trader is None:
@@ -251,14 +262,17 @@ class CtpRequestData(Feed):
         return self._make_request_data(rows, 'get_position', symbol, extra_data)
 
     def get_tick(self, symbol, extra_data=None, **kwargs):
+        """get_tick method"""
         return self._make_request_data([], 'get_tick', symbol, extra_data, status=False)
 
     def get_depth(self, symbol, count=5, extra_data=None, **kwargs):
+        """get_depth method"""
         return self._make_request_data(
             [], 'get_depth', symbol, extra_data, status=False
         )
 
     def get_kline(self, symbol, period, count=100, extra_data=None, **kwargs):
+        """get_kline method"""
         return self._make_request_data(
             [], 'get_kline', symbol, extra_data, status=False
         )
@@ -275,6 +289,7 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
+        """make_order method"""
         self._ensure_connected()
         trader = self._trader
         if trader is None:
@@ -341,6 +356,7 @@ class CtpRequestData(Feed):
         )
 
     def cancel_order(self, symbol, order_id=None, extra_data=None, **kwargs):
+        """cancel_order method"""
         self._ensure_connected()
         trader = self._trader
         if trader is None:
@@ -380,11 +396,13 @@ class CtpRequestData(Feed):
         )
 
     def query_order(self, symbol=None, order_id=None, extra_data=None, **kwargs):
+        """query_order method"""
         return self._make_request_data(
             [], 'query_order', symbol, extra_data, status=False
         )
 
     def get_open_orders(self, symbol=None, extra_data=None, **kwargs):
+        """get_open_orders method"""
         return self._make_request_data(
             [], 'get_open_orders', symbol, extra_data, status=False
         )
@@ -398,17 +416,21 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
+        """get_deals method"""
         return self._make_request_data(
             [], 'get_deals', symbol, extra_data, status=False
         )
 
     @property
     def trader_client(self):
+        """trader_client method"""
         return self._trader
 
 
 class CtpMarketStream(BaseDataStream):
+    """Class CtpMarketStream"""
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
+        """__init__ method"""
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
         self.md_front = resolved_kwargs.get('md_front', '')
@@ -420,6 +442,7 @@ class CtpMarketStream(BaseDataStream):
         self._md_client = None
 
     def connect(self):
+        """connect method"""
         self.state = ConnectionState.CONNECTING
         self._md_client = ctp_client.MdClient(
             self.md_front, self.broker_id, self.user_id, self.password
@@ -450,12 +473,14 @@ class CtpMarketStream(BaseDataStream):
         self.state = ConnectionState.ERROR
 
     def disconnect(self):
+        """disconnect method"""
         if self._md_client is not None:
             self._md_client.stop()
             self._md_client = None
         self.state = ConnectionState.DISCONNECTED
 
     def subscribe_topics(self, topics):
+        """subscribe_topics method"""
         instruments = []
         for topic in topics:
             if topic.get('topic') in ('tick', 'ticker', 'depth'):
@@ -473,7 +498,9 @@ class CtpMarketStream(BaseDataStream):
 
 
 class CtpTradeStream(BaseDataStream):
+    """Class CtpTradeStream"""
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
+        """__init__ method"""
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
         self.td_front = resolved_kwargs.get('td_front', '')
@@ -486,6 +513,7 @@ class CtpTradeStream(BaseDataStream):
         self._trader = None
 
     def connect(self):
+        """connect method"""
         self.state = ConnectionState.CONNECTING
         self._trader = ctp_client.TraderClient(
             self.td_front,
@@ -518,12 +546,14 @@ class CtpTradeStream(BaseDataStream):
         self.state = ConnectionState.ERROR
 
     def disconnect(self):
+        """disconnect method"""
         if self._trader is not None:
             self._trader.stop()
             self._trader = None
         self.state = ConnectionState.DISCONNECTED
 
     def subscribe_topics(self, topics):
+        """subscribe_topics method"""
         return None
 
     def _run_loop(self):
@@ -533,11 +563,14 @@ class CtpTradeStream(BaseDataStream):
 
     @property
     def trader_client(self):
+        """trader_client method"""
         return self._trader
 
 
 class CtpRequestDataFuture(CtpRequestData):
+    """Class CtpRequestDataFuture"""
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
+        """__init__ method"""
         super().__init__(data_queue, **kwargs)
         self.asset_type = kwargs.get('asset_type', 'FUTURE')
         self._params = CtpExchangeDataFuture()

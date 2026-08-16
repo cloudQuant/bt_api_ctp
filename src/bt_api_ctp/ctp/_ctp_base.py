@@ -11,15 +11,18 @@ from types import ModuleType
 # Import the low-level C/C++ module.
 class _FallbackSwigHandle:
     def __init__(self) -> None:
+        """__init__ method"""
         self._owned = True
 
     def own(self, value=None):
+        """own method"""
         if value is None:
             return self._owned
         self._owned = bool(value)
         return self._owned
 
     def disown(self) -> None:
+        """disown method"""
         self._owned = False
 
     def __repr__(self) -> str:
@@ -28,6 +31,7 @@ class _FallbackSwigHandle:
 
 class _FallbackApiObject:
     def __init__(self, api_name: str) -> None:
+        """__init__ method"""
         self._api_name = api_name
 
     def __getattr__(self, name: str):
@@ -41,6 +45,7 @@ class _FallbackApiObject:
 
 class _FallbackCtpModule(ModuleType):
     def __init__(self, import_error: Exception) -> None:
+        """__init__ method"""
         super().__init__('_ctp_fallback')
         self._import_error = import_error
         self._constants: dict[str, object] = {}
@@ -150,8 +155,7 @@ def _swig_setattr_nondynamic_instance_variable(setter):
             self.this.own(value)
         elif hasattr(self, name) and isinstance(getattr(type(self), name), property):
             setter(self, name, value)
-        else:
-            raise AttributeError(f'You cannot add instance attributes to {self}')
+        else: raise AttributeError(f'You cannot add instance attributes to {self}')
 
     return set_instance_attr
 
@@ -160,8 +164,7 @@ def _swig_setattr_nondynamic_class_variable(setter):
     def set_class_attr(cls, name, value):
         if hasattr(cls, name) and not isinstance(getattr(cls, name), property):
             setter(cls, name, value)
-        else:
-            raise AttributeError(f'You cannot add class attributes to {cls}')
+        else: raise AttributeError(f'You cannot add class attributes to {cls}')
 
     return set_class_attr
 

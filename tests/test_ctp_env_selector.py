@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,6 +7,7 @@ from bt_api_py.ctp_env_selector import apply_ctp_env, get_ctp_fronts
 
 
 def test_get_ctp_fronts_prefers_set1_during_weekday_session(monkeypatch) -> None:
+    """test_get_ctp_fronts_prefers_set1_during_weekday_session function"""
     monkeypatch.setenv("CTP_SET1_GROUP", "2")
     monkeypatch.setenv("CTP_SET1_TD_FRONT_2", "tcp://set1-td")
     monkeypatch.setenv("CTP_SET1_MD_FRONT_2", "tcp://set1-md")
@@ -16,6 +18,7 @@ def test_get_ctp_fronts_prefers_set1_during_weekday_session(monkeypatch) -> None
 
 
 def test_get_ctp_fronts_uses_set2_outside_trading_hours(monkeypatch) -> None:
+    """test_get_ctp_fronts_uses_set2_outside_trading_hours function"""
     monkeypatch.setenv("CTP_SET2_TD_FRONT", "tcp://set2-td")
     monkeypatch.setenv("CTP_SET2_MD_FRONT", "tcp://set2-md")
 
@@ -25,6 +28,7 @@ def test_get_ctp_fronts_uses_set2_outside_trading_hours(monkeypatch) -> None:
 
 
 def test_get_ctp_fronts_treats_saturday_early_morning_as_set1(monkeypatch) -> None:
+    """test_get_ctp_fronts_treats_saturday_early_morning_as_set1 function"""
     monkeypatch.setenv("CTP_SET1_TD_FRONT_1", "tcp://set1-td")
     monkeypatch.setenv("CTP_SET1_MD_FRONT_1", "tcp://set1-md")
 
@@ -34,6 +38,7 @@ def test_get_ctp_fronts_treats_saturday_early_morning_as_set1(monkeypatch) -> No
 
 
 def test_apply_ctp_env_uses_env_override(monkeypatch) -> None:
+    """test_apply_ctp_env_uses_env_override function"""
     monkeypatch.setenv("CTP_ENV", "set2")
     monkeypatch.setenv("CTP_SET2_TD_FRONT", "tcp://override-td")
     monkeypatch.setenv("CTP_SET2_MD_FRONT", "tcp://override-md")

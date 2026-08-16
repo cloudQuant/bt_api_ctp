@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from typing import Any
@@ -11,6 +12,7 @@ from bt_api_base.functions.utils import (
 
 
 class CtpTradeData(TradeData):
+    """Class CtpTradeData"""
     def __init__(
         self,
         trade_info: dict[str, Any],
@@ -18,6 +20,7 @@ class CtpTradeData(TradeData):
         asset_type: str = 'FUTURE',
         has_been_json_encoded: bool = False,
     ) -> None:
+        """__init__ method"""
         super().__init__(
             trade_info,
             has_been_json_encoded,
@@ -43,6 +46,7 @@ class CtpTradeData(TradeData):
         self._all_data = None
 
     def init_data(self):
+        """init_data method"""
         if self._initialized:
             return self
         info = self.trade_info
@@ -69,48 +73,63 @@ class CtpTradeData(TradeData):
         return self
 
     def get_exchange_name(self) -> str:
+        """get_exchange_name method"""
         return self.exchange_name or ''
 
     def get_asset_type(self) -> str:
+        """get_asset_type method"""
         return self.asset_type or ''
 
     def get_symbol_name(self) -> str | None:
+        """get_symbol_name method"""
         return self.instrument_id or self.symbol_name or ''
 
     def get_server_time(self) -> str | None:
+        """get_server_time method"""
         return self.trade_time
 
     def get_trade_id(self) -> str | None:
+        """get_trade_id method"""
         return self.trade_id_value
 
     def get_order_id(self) -> str | None:
+        """get_order_id method"""
         return self.order_sys_id
 
     def get_client_order_id(self) -> str | None:
+        """get_client_order_id method"""
         return self.order_ref
 
     def get_trade_side(self) -> str | None:
+        """get_trade_side method"""
         return self.direction or ''
 
     def get_trade_offset(self) -> str:
+        """get_trade_offset method"""
         return self.offset or ''
 
     def get_trade_price(self) -> float | None:
+        """get_trade_price method"""
         return self.price
 
     def get_trade_volume(self) -> int | None:
+        """get_trade_volume method"""
         return self.volume
 
     def get_trade_time(self) -> str | None:
+        """get_trade_time method"""
         return self.trade_time
 
     def get_trade_fee(self) -> float:
+        """get_trade_fee method"""
         return float(self.trade_fee or 0.0)
 
     def get_trade_fee_symbol(self) -> str:
+        """get_trade_fee_symbol method"""
         return self.trade_fee_symbol or ''
 
     def get_all_data(self) -> dict[str, Any]:
+        """get_all_data method"""
         if self._all_data is None:
             self._all_data = {
                 'exchange_name': self.exchange_name,

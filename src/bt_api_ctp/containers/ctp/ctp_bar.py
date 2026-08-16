@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from bt_api_base.containers.bars.bar import BarData
@@ -9,6 +10,7 @@ from bt_api_base.functions.utils import (
 
 
 class CtpBarData(BarData):
+    """Class CtpBarData"""
     def __init__(
         self,
         bar_info,
@@ -16,6 +18,7 @@ class CtpBarData(BarData):
         asset_type='FUTURE',
         has_been_json_encoded=False,
     ):
+        """__init__ method"""
         super().__init__(bar_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
@@ -33,6 +36,7 @@ class CtpBarData(BarData):
         self.settlement_price_val = None
 
     def init_data(self):
+        """init_data method"""
         if self._initialized:
             return self
         info = self.bar_info
@@ -51,51 +55,67 @@ class CtpBarData(BarData):
         return self
 
     def get_exchange_name(self):
+        """get_exchange_name method"""
         return self.exchange_name or ''
 
     def get_symbol_name(self):
+        """get_symbol_name method"""
         return self.symbol_name or ''
 
     def get_asset_type(self):
+        """get_asset_type method"""
         return self.asset_type or ''
 
     def get_server_time(self):
+        """get_server_time method"""
         return None
 
     def get_open_time(self):
+        """get_open_time method"""
         return 0
 
     def get_open_price(self):
+        """get_open_price method"""
         return float(self.open_price or 0.0)
 
     def get_high_price(self):
+        """get_high_price method"""
         return float(self.high_price or 0.0)
 
     def get_low_price(self):
+        """get_low_price method"""
         return float(self.low_price or 0.0)
 
     def get_close_price(self):
+        """get_close_price method"""
         return float(self.close_price or 0.0)
 
     def get_volume(self):
+        """get_volume method"""
         return int(self.volume_val or 0)
 
     def get_amount(self):
+        """get_amount method"""
         return float(self.amount_val or 0.0)
 
     def get_close_time(self):
+        """get_close_time method"""
         return 0
 
     def get_bar_status(self):
+        """get_bar_status method"""
         return True
 
     def get_open_interest(self):
+        """get_open_interest method"""
         return float(self.open_interest or 0.0)
 
     def get_settlement_price(self):
+        """get_settlement_price method"""
         return float(self.settlement_price_val or 0.0)
 
     def get_all_data(self):
+        """get_all_data method"""
         if not self._initialized:
             self.init_data()
         return {

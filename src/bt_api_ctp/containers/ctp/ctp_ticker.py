@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from bt_api_base.containers.tickers.ticker import TickerData
@@ -9,6 +10,7 @@ from bt_api_base.functions.utils import (
 
 
 class CtpTickerData(TickerData):
+    """Class CtpTickerData"""
     def __init__(
         self,
         ticker_info,
@@ -16,6 +18,7 @@ class CtpTickerData(TickerData):
         asset_type='FUTURE',
         has_been_json_encoded=False,
     ):
+        """__init__ method"""
         super().__init__(ticker_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
@@ -42,6 +45,7 @@ class CtpTickerData(TickerData):
         self.exchange_id = None
 
     def init_data(self):
+        """init_data method"""
         if self._initialized:
             return self
         info = self.ticker_info
@@ -69,57 +73,73 @@ class CtpTickerData(TickerData):
         return self
 
     def get_exchange_name(self):
+        """get_exchange_name method"""
         self._ensure_init()
         return self.exchange_name or ''
 
     def get_local_update_time(self):
+        """get_local_update_time method"""
         self._ensure_init()
         return float(self.update_millisec or 0)
 
     def get_symbol_name(self):
+        """get_symbol_name method"""
         self._ensure_init()
         return self.instrument_id or self.symbol_name or ''
 
     def get_ticker_symbol_name(self):
+        """get_ticker_symbol_name method"""
         return self.instrument_id or self.symbol_name or ''
 
     def get_asset_type(self):
+        """get_asset_type method"""
         return self.asset_type or ''
 
     def get_server_time(self):
+        """get_server_time method"""
         return None
 
     def get_bid_price(self):
+        """get_bid_price method"""
         self._ensure_init()
         return self.bid_price_1
 
     def get_ask_price(self):
+        """get_ask_price method"""
         self._ensure_init()
         return self.ask_price_1
 
     def get_bid_volume(self):
+        """get_bid_volume method"""
         return self.bid_volume_1
 
     def get_ask_volume(self):
+        """get_ask_volume method"""
         return self.ask_volume_1
 
     def get_last_price(self):
+        """get_last_price method"""
         self._ensure_init()
         return self.last_price_val
 
     def get_last_volume(self):
+        """get_last_volume method"""
         return self.volume_val
 
     def get_open_interest(self):
+        """get_open_interest method"""
         return self.open_interest
 
     def get_upper_limit_price(self):
+        """get_upper_limit_price method"""
         return self.upper_limit_price
 
     def get_lower_limit_price(self):
+        """get_lower_limit_price method"""
         return self.lower_limit_price
 
     def get_all_data(self):
+        """get_all_data method"""
         self._ensure_init()
         return {
             'exchange_name': self.exchange_name,

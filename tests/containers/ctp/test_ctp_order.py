@@ -37,7 +37,7 @@ class TestCtpOrderData:
             "OrderStatus": "1",
             "InsertTime": "14:30:00",
             "UpdateTime": "14:30:30",
-            "StatusMsg": "部分成交",
+            "StatusMsg": "",
             "ExchangeID": "SHFE",
             "FrontID": 1,
             "SessionID": 100,

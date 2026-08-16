@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 import queue
@@ -53,7 +54,9 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
 
 
 class CtpGatewayAdapter(BaseGatewayAdapter):
+    """Class CtpGatewayAdapter"""
     def __init__(self, **kwargs: Any) -> None:
+        """__init__ method"""
         normalized = dict(kwargs)
         normalized['md_front'] = (
             normalized.get('md_front') or normalized.get('md_address') or ''
@@ -80,6 +83,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         )
 
     def connect(self) -> None:
+        """connect method"""
         if self.running:
             return
         self.market.start()
@@ -95,6 +99,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.thread.start()
 
     def disconnect(self) -> None:
+        """disconnect method"""
         self.running = False
         if self.thread is not None:
             self.thread.join(timeout=1.0)
@@ -103,7 +108,20 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.market.stop()
         self.trade.stop()
 
+    def get_session_state(self) -> dict[str, Any]:
+        """Return CTP authentication/login state from the trade client."""
+        trader = getattr(getattr(self, 'trade', None), 'trader_client', None)
+        getter = getattr(trader, 'get_session_state', None)
+        if callable(getter):
+            state = getter()
+            return dict(state or {}) if isinstance(state, dict) else {}
+        return {
+            'auth_state': 'unknown',
+            'login_state': 'unknown',
+        }
+
     def subscribe_symbols(self, symbols: list[str]) -> dict[str, Any]:
+        """subscribe_symbols method"""
         topics = []
         done = []
         for raw in symbols:
@@ -119,6 +137,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         return {'symbols': done}
 
     def get_balance(self) -> dict[str, Any]:
+        """get_balance method"""
         rows = self.feed.get_account().get_data()
         if not rows:
             return {'cash': 0.0, 'value': 0.0}
@@ -129,6 +148,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         }
 
     def get_positions(self) -> list[dict[str, Any]]:
+        """get_positions method"""
         out = []
         for raw in self.feed.get_position().get_data() or []:
             row = raw.init_data()
@@ -161,6 +181,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         return 1.0
 
     def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """place_order method"""
         name = str(payload.get('data_name') or payload.get('symbol') or '').strip()
         instrument, exchange_id = _split(name)
         side = str(payload.get('side') or 'buy').lower()
@@ -192,19 +213,25 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         if not response.get_status():
             raise RuntimeError('ctp order failed')
         row = response.get_data()[0].init_data()
-        order_id = row.get_order_id() or row.get_client_order_id()
+        order_id = row.get_order_id() or ''
+        order_ref = row.get_client_order_id() or ''
         return {
             'id': order_id,
+            'client_order_id': payload.get('client_order_id') or payload.get('bt_order_ref') or order_ref,
             'order_id': order_id,
             'external_order_id': order_id,
-            'order_ref': row.get_client_order_id(),
+            'order_ref': order_ref,
+            'order_sys_id': order_id,
             'front_id': row.front_id,
             'session_id': row.session_id,
             'exchange_id': row.get_order_exchange_id(),
+            'id_source': 'exchange' if order_id else 'local_pending',
+            'raw_fields': _raw_fields(row),
             'details': {'bt_order_ref': payload.get('bt_order_ref')},
         }
 
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """cancel_order method"""
         name = str(
             payload.get('data_name')
             or payload.get('symbol')
@@ -224,14 +251,16 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             raise RuntimeError('ctp cancel failed')
         data = dict((response.get_data() or [{}])[0])
         return {
-            'id': data.get('OrderSysID')
-            or payload.get('order_id')
-            or payload.get('order_ref'),
+            'id': data.get('OrderSysID') or payload.get('order_id') or '',
+            'client_order_id': payload.get('client_order_id') or payload.get('bt_order_ref') or '',
             'order_ref': data.get('OrderRef') or payload.get('order_ref'),
-            'order_sys_id': data.get('OrderSysID') or payload.get('order_id'),
+            'order_sys_id': data.get('OrderSysID') or payload.get('order_id') or '',
+            'external_order_id': data.get('OrderSysID') or payload.get('order_id') or '',
             'front_id': data.get('FrontID') or payload.get('front_id'),
             'session_id': data.get('SessionID') or payload.get('session_id'),
             'exchange_id': data.get('ExchangeID') or exchange_id,
+            'id_source': 'exchange' if data.get('OrderSysID') or payload.get('order_id') else 'local_pending',
+            'raw_fields': data,
         }
 
     def _run(self) -> None:
@@ -336,14 +365,34 @@ def _status(value: Any) -> str:
     }.get(raw, raw)
 
 
+def _raw_fields(row: Any) -> dict[str, Any]:
+    for attr in ('order_info', 'trade_info'):
+        value = getattr(row, attr, None)
+        if isinstance(value, dict):
+            return dict(value)
+    getter = getattr(row, 'get_all_data', None)
+    if callable(getter):
+        try:
+            data = getter()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            return dict(data)
+    return {}
+
+
 def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
     instrument = row.get_symbol_name() or ''
     size = int(row.get_order_size() or 0)
     filled = int(row.get_executed_qty() or 0)
+    order_sys_id = row.get_order_id() or ''
+    order_ref = row.get_client_order_id() or ''
     return {
         'kind': 'order',
-        'order_ref': row.get_client_order_id(),
-        'external_order_id': row.get_order_id() or row.get_client_order_id(),
+        'client_order_id': order_ref,
+        'order_ref': order_ref,
+        'external_order_id': order_sys_id,
+        'order_sys_id': order_sys_id,
         'data_name': _alias(aliases, instrument),
         'instrument': instrument,
         'exchange_id': row.get_order_exchange_id(),
@@ -357,16 +406,23 @@ def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         'size': size,
         'filled': filled,
         'remaining': max(size - filled, 0),
+        'id_source': 'exchange' if order_sys_id else 'local_pending',
+        'raw_fields': _raw_fields(row),
     }
 
 
 def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
     instrument = row.get_symbol_name() or ''
+    order_sys_id = row.get_order_id() or ''
+    order_ref = row.get_client_order_id() or ''
+    trade_id = row.get_trade_id() or ''
     return {
         'kind': 'trade',
-        'trade_id': row.get_trade_id(),
-        'order_ref': row.get_client_order_id(),
-        'external_order_id': row.get_order_id() or row.get_client_order_id(),
+        'client_order_id': order_ref,
+        'trade_id': trade_id,
+        'order_ref': order_ref,
+        'external_order_id': order_sys_id,
+        'order_sys_id': order_sys_id,
         'data_name': _alias(aliases, instrument),
         'instrument': instrument,
         'exchange_id': row.exchange_id,
@@ -374,4 +430,7 @@ def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         'offset': row.get_trade_offset(),
         'price': row.get_trade_price(),
         'size': row.get_trade_volume(),
+        'trade_time': row.get_trade_time(),
+        'id_source': 'exchange' if trade_id else 'unknown',
+        'raw_fields': _raw_fields(row),
     }

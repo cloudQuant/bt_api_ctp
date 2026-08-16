@@ -1,3 +1,4 @@
+"""Module-level docstring."""
 from __future__ import annotations
 
 from typing import Any
@@ -33,6 +34,7 @@ CTP_OFFSET_MAP = {
 
 
 class CtpOrderData(OrderData):
+    """Class CtpOrderData"""
     def __init__(
         self,
         order_info: Any,
@@ -40,6 +42,7 @@ class CtpOrderData(OrderData):
         asset_type: str = 'FUTURE',
         has_been_json_encoded: bool = False,
     ) -> None:
+        """__init__ method"""
         super().__init__(order_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
@@ -63,6 +66,7 @@ class CtpOrderData(OrderData):
         self.session_id = None
 
     def init_data(self):
+        """init_data method"""
         if self._initialized:
             return self
         info = self.order_info
@@ -96,55 +100,73 @@ class CtpOrderData(OrderData):
         return self
 
     def get_exchange_name(self) -> str:
+        """get_exchange_name method"""
         return self.exchange_name or ''
 
     def get_asset_type(self) -> str:
+        """get_asset_type method"""
         return self.asset_type or ''
 
     def get_symbol_name(self) -> str | None:
+        """get_symbol_name method"""
         return self.instrument_id or self.symbol_name or ''
 
     def get_server_time(self) -> float | None:
+        """get_server_time method"""
         return None
 
     def get_local_update_time(self) -> float | None:
+        """get_local_update_time method"""
         return None
 
     def get_order_id(self) -> str | None:
+        """get_order_id method"""
         return self.order_sys_id
 
     def get_client_order_id(self) -> str | None:
+        """get_client_order_id method"""
         return self.order_ref
 
     def get_order_size(self) -> int | None:
+        """get_order_size method"""
         return self.volume_total_original
 
     def get_order_price(self) -> float | None:
+        """get_order_price method"""
         return self.limit_price
 
     def get_order_side(self) -> str | None:
+        """get_order_side method"""
         return self.direction or ''
 
     def get_order_status(self) -> OrderStatus | None:
+        """get_order_status method"""
         return self.order_status if isinstance(self.order_status, OrderStatus) else None
 
     def get_order_offset(self) -> str | None:
+        """get_order_offset method"""
         return self.offset or ''
 
     def get_order_exchange_id(self) -> str | None:
+        """get_order_exchange_id method"""
         return self.exchange_id or ''
 
     def get_executed_qty(self) -> int | None:
+        """get_executed_qty method"""
         return self.volume_traded
 
     def get_order_symbol_name(self) -> str | None:
+        """get_order_symbol_name method"""
         return self.instrument_id or self.symbol_name or ''
 
     def get_order_type(self) -> str:
+        """get_order_type method"""
         return 'limit'
 
     def get_order_avg_price(self) -> float | None:
+        """get_order_avg_price method"""
         return self.limit_price
 
     def get_order_time_in_force(self) -> str:
+        """get_order_time_in_force method"""
         return 'GFD'
