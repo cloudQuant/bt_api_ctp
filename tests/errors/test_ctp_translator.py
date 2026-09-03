@@ -10,4 +10,4 @@ class TestCTPErrorTranslator:
 
     def test_error_map_exists(self):
         """Test ERROR_MAP is defined."""
-        assert hasattr(CTPErrorTranslator, "ERROR_MAP")
+        assert hasattr(CTPErrorTranslator, 'ERROR_MAP')

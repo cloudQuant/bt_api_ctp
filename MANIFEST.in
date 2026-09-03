@@ -1,0 +1,10 @@
+include README.md
+include pyproject.toml
+include setup.py
+recursive-include src/bt_api_ctp/configs *.yaml
+include src/bt_api_ctp/ctp/ctp.i
+include src/bt_api_ctp/ctp/ctp_wrap.cpp
+include src/bt_api_ctp/ctp/ctp_wrap.h
+include src/bt_api_ctp/ctp/iconv.h
+recursive-include src/bt_api_ctp/ctp/api/6.7.7 *.h *.so *.dll *.lib
+graft src/bt_api_ctp/ctp/api/6.7.7/darwin

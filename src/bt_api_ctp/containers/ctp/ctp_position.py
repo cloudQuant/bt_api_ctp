@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 from bt_api_base.containers.positions.position import PositionData
@@ -13,6 +14,7 @@ CTP_POS_DIRECTION_MAP = {'1': 'net', '2': 'long', '3': 'short'}
 
 class CtpPositionData(PositionData):
     """Class CtpPositionData"""
+
     def __init__(
         self,
         position_info,
@@ -26,6 +28,7 @@ class CtpPositionData(PositionData):
         self.asset_type = asset_type
         self.exchange_name = 'CTP'
         self._initialized = False
+        self._data_initialized = False
         self.instrument_id = None
         self.position_direction = None
         self.position_volume = None
@@ -41,7 +44,7 @@ class CtpPositionData(PositionData):
 
     def init_data(self):
         """init_data method"""
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.position_info
         if isinstance(info, dict):
@@ -58,6 +61,7 @@ class CtpPositionData(PositionData):
             self.position_profit = from_dict_get_float(info, 'PositionProfit', 0.0)
             self.settlement_price = from_dict_get_float(info, 'SettlementPrice', 0.0)
             self.exchange_id = from_dict_get_string(info, 'ExchangeID')
+        self._data_initialized = True
         self._initialized = True
         return self
 

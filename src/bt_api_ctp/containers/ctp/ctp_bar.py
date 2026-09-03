@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 from bt_api_base.containers.bars.bar import BarData
@@ -11,6 +12,7 @@ from bt_api_base.functions.utils import (
 
 class CtpBarData(BarData):
     """Class CtpBarData"""
+
     def __init__(
         self,
         bar_info,
@@ -24,6 +26,7 @@ class CtpBarData(BarData):
         self.asset_type = asset_type
         self.exchange_name = 'CTP'
         self._initialized = False
+        self._data_initialized = False
         self.open_time = None
         self.close_time = None
         self.open_price = None
@@ -37,7 +40,7 @@ class CtpBarData(BarData):
 
     def init_data(self):
         """init_data method"""
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.bar_info
         if isinstance(info, dict):
@@ -51,6 +54,7 @@ class CtpBarData(BarData):
             self.amount_val = from_dict_get_float(info, 'amount', 0.0)
             self.open_interest = from_dict_get_float(info, 'open_interest', 0.0)
             self.settlement_price_val = from_dict_get_float(info, 'settlement_price')
+        self._data_initialized = True
         self._initialized = True
         return self
 
@@ -68,11 +72,13 @@ class CtpBarData(BarData):
 
     def get_server_time(self):
         """get_server_time method"""
-        return None
+        self._ensure_init()
+        return self.close_time
 
     def get_open_time(self):
         """get_open_time method"""
-        return 0
+        self._ensure_init()
+        return self.open_time
 
     def get_open_price(self):
         """get_open_price method"""
@@ -100,7 +106,8 @@ class CtpBarData(BarData):
 
     def get_close_time(self):
         """get_close_time method"""
-        return 0
+        self._ensure_init()
+        return self.close_time
 
     def get_bar_status(self):
         """get_bar_status method"""

@@ -14,18 +14,18 @@ class TestCtpExchangeData:
         """Test initialization."""
         exchange = CtpExchangeData()
 
-        assert exchange.exchange_name == "CTP"
-        assert exchange.rest_url == ""
-        assert exchange.wss_url == ""
+        assert exchange.exchange_name == 'CTP'
+        assert exchange.rest_url == ''
+        assert exchange.wss_url == ''
 
     def test_kline_periods(self):
         """Test kline_periods attribute."""
         exchange = CtpExchangeData()
 
-        assert "1m" in exchange.kline_periods
-        assert "5m" in exchange.kline_periods
-        assert "1h" in exchange.kline_periods
-        assert "1d" in exchange.kline_periods
+        assert '1m' in exchange.kline_periods
+        assert '5m' in exchange.kline_periods
+        assert '1h' in exchange.kline_periods
+        assert '1d' in exchange.kline_periods
 
     def test_reverse_kline_periods(self):
         """Test reverse_kline_periods attribute."""
@@ -40,10 +40,10 @@ class TestCtpExchangeData:
         """Test that CtpExchangeData inherits from ExchangeData."""
         exchange = CtpExchangeData()
 
-        assert hasattr(exchange, "exchange_name")
-        assert hasattr(exchange, "md_front")
-        assert hasattr(exchange, "td_front")
+        assert hasattr(exchange, 'exchange_name')
+        assert hasattr(exchange, 'md_front')
+        assert hasattr(exchange, 'td_front')
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

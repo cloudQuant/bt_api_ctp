@@ -12,4 +12,4 @@ class TestCtpExchangeData:
         """Test initialization."""
         exchange = CtpExchangeData()
 
-        assert exchange.exchange_name == "CTP"
+        assert exchange.exchange_name == 'CTP'

@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 import queue
@@ -55,18 +56,13 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
 
 class CtpGatewayAdapter(BaseGatewayAdapter):
     """Class CtpGatewayAdapter"""
+
     def __init__(self, **kwargs: Any) -> None:
         """__init__ method"""
         normalized = dict(kwargs)
-        normalized['md_front'] = (
-            normalized.get('md_front') or normalized.get('md_address') or ''
-        )
-        normalized['td_front'] = (
-            normalized.get('td_front') or normalized.get('td_address') or ''
-        )
-        normalized['user_id'] = (
-            normalized.get('user_id') or normalized.get('investor_id') or ''
-        )
+        normalized['md_front'] = normalized.get('md_front') or normalized.get('md_address') or ''
+        normalized['td_front'] = normalized.get('td_front') or normalized.get('td_address') or ''
+        normalized['user_id'] = normalized.get('user_id') or normalized.get('investor_id') or ''
         super().__init__(**normalized)
         self.q: queue.Queue[Any] = queue.Queue()
         self.market = CtpMarketStream(self.q, **normalized)
@@ -78,9 +74,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self._price_ticks: dict[str, float] = {}
         self.running = False
         self.thread: threading.Thread | None = None
-        self.timeout = float(
-            normalized.get('gateway_startup_timeout_sec', 10.0) or 10.0
-        )
+        self.timeout = float(normalized.get('gateway_startup_timeout_sec', 10.0) or 10.0)
 
     def connect(self) -> None:
         """connect method"""
@@ -195,9 +189,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             price_tick = self._get_price_tick(instrument or name)
             slippage = price_tick * 5
             price = (
-                (last_price + slippage)
-                if side == 'buy'
-                else max(last_price - slippage, price_tick)
+                (last_price + slippage) if side == 'buy' else max(last_price - slippage, price_tick)
             )
             price = round(price, 4)
         response = self.feed.make_order(
@@ -206,8 +198,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             price=price,
             order_type=f'{side}-limit',
             offset=str(payload.get('offset') or 'open'),
-            client_order_id=payload.get('client_order_id')
-            or payload.get('bt_order_ref'),
+            client_order_id=payload.get('client_order_id') or payload.get('bt_order_ref'),
             exchange_id=exchange_id or payload.get('exchange_id') or '',
         )
         if not response.get_status():
@@ -217,7 +208,9 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         order_ref = row.get_client_order_id() or ''
         return {
             'id': order_id,
-            'client_order_id': payload.get('client_order_id') or payload.get('bt_order_ref') or order_ref,
+            'client_order_id': payload.get('client_order_id')
+            or payload.get('bt_order_ref')
+            or order_ref,
             'order_id': order_id,
             'external_order_id': order_id,
             'order_ref': order_ref,
@@ -233,10 +226,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         """cancel_order method"""
         name = str(
-            payload.get('data_name')
-            or payload.get('symbol')
-            or payload.get('instrument')
-            or ''
+            payload.get('data_name') or payload.get('symbol') or payload.get('instrument') or ''
         ).strip()
         instrument, exchange_id = _split(name)
         response = self.feed.cancel_order(
@@ -259,7 +249,9 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             'front_id': data.get('FrontID') or payload.get('front_id'),
             'session_id': data.get('SessionID') or payload.get('session_id'),
             'exchange_id': data.get('ExchangeID') or exchange_id,
-            'id_source': 'exchange' if data.get('OrderSysID') or payload.get('order_id') else 'local_pending',
+            'id_source': 'exchange'
+            if data.get('OrderSysID') or payload.get('order_id')
+            else 'local_pending',
             'raw_fields': data,
         }
 
@@ -290,9 +282,9 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         stamp = time.time()
         dt = datetime.fromtimestamp(stamp)
         if len(day) == 8 and day.isdigit() and row.update_time_val:
-            dt = datetime.strptime(
-                f'{day} {row.update_time_val}', '%Y%m%d %H:%M:%S'
-            ).replace(microsecond=int(row.update_millisec or 0) * 1000)
+            dt = datetime.strptime(f'{day} {row.update_time_val}', '%Y%m%d %H:%M:%S').replace(
+                microsecond=int(row.update_millisec or 0) * 1000
+            )
             stamp = dt.timestamp()
         for alias in self.aliases.get(instrument) or {instrument}:
             self.emit(
@@ -345,9 +337,7 @@ def _normalize_instrument(instrument: str, exchange_id: str = '') -> str:
         return text
     prefix, digits = match.groups()
     exchange = str(exchange_id or '').strip().upper()
-    if exchange == 'CZCE' or (
-        not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES
-    ):
+    if exchange == 'CZCE' or (not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES):
         return f'{prefix}{digits[-3:]}'
     return text
 

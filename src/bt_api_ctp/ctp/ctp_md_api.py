@@ -8,6 +8,7 @@ from ._ctp_base import _ctp, _swig_repr, print_exception, stderr, weakref
 
 class CThostFtdcMdSpi:
     """Class CThostFtdcMdSpi"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -37,9 +38,7 @@ class CThostFtdcMdSpi:
             self, pUserLogout, pRspInfo, nRequestID, bIsLast
         )
 
-    def OnRspQryMulticastInstrument(
-        self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspQryMulticastInstrument(self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast):
         """OnRspQryMulticastInstrument method"""
         return _ctp.CThostFtdcMdSpi_OnRspQryMulticastInstrument(
             self, pMulticastInstrument, pRspInfo, nRequestID, bIsLast
@@ -113,6 +112,7 @@ _ctp.CThostFtdcMdSpi_swigregister(CThostFtdcMdSpi)
 
 class CThostFtdcMdApi:
     """Class CThostFtdcMdApi"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )

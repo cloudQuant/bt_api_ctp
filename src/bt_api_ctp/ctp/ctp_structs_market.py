@@ -8,6 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcDisseminationField:
     """Class CThostFtdcDisseminationField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -23,9 +24,7 @@ class CThostFtdcDisseminationField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcDisseminationField_swiginit(
-            self, _ctp.new_CThostFtdcDisseminationField()
-        )
+        _ctp.CThostFtdcDisseminationField_swiginit(self, _ctp.new_CThostFtdcDisseminationField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcDisseminationField
 
@@ -36,6 +35,7 @@ _ctp.CThostFtdcDisseminationField_swigregister(CThostFtdcDisseminationField)
 
 class CThostFtdcExchangeField:
     """Class CThostFtdcExchangeField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -66,6 +66,7 @@ _ctp.CThostFtdcExchangeField_swigregister(CThostFtdcExchangeField)
 
 class CThostFtdcProductField:
     """Class CThostFtdcProductField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -168,6 +169,7 @@ _ctp.CThostFtdcProductField_swigregister(CThostFtdcProductField)
 
 class CThostFtdcInstrumentField:
     """Class CThostFtdcInstrumentField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -315,9 +317,7 @@ class CThostFtdcInstrumentField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcInstrumentField_swiginit(
-            self, _ctp.new_CThostFtdcInstrumentField()
-        )
+        _ctp.CThostFtdcInstrumentField_swiginit(self, _ctp.new_CThostFtdcInstrumentField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcInstrumentField
 
@@ -328,6 +328,7 @@ _ctp.CThostFtdcInstrumentField_swigregister(CThostFtdcInstrumentField)
 
 class CThostFtdcDepthMarketDataField:
     """Class CThostFtdcDepthMarketDataField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -540,6 +541,7 @@ _ctp.CThostFtdcDepthMarketDataField_swigregister(CThostFtdcDepthMarketDataField)
 
 class CThostFtdcExchangeRateField:
     """Class CThostFtdcExchangeRateField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -567,9 +569,7 @@ class CThostFtdcExchangeRateField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcExchangeRateField_swiginit(
-            self, _ctp.new_CThostFtdcExchangeRateField()
-        )
+        _ctp.CThostFtdcExchangeRateField_swiginit(self, _ctp.new_CThostFtdcExchangeRateField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeRateField
 
@@ -580,6 +580,7 @@ _ctp.CThostFtdcExchangeRateField_swigregister(CThostFtdcExchangeRateField)
 
 class CThostFtdcExchangeTradeField:
     """Class CThostFtdcExchangeTradeField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -679,9 +680,7 @@ class CThostFtdcExchangeTradeField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcExchangeTradeField_swiginit(
-            self, _ctp.new_CThostFtdcExchangeTradeField()
-        )
+        _ctp.CThostFtdcExchangeTradeField_swiginit(self, _ctp.new_CThostFtdcExchangeTradeField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcExchangeTradeField
 
@@ -692,6 +691,7 @@ _ctp.CThostFtdcExchangeTradeField_swigregister(CThostFtdcExchangeTradeField)
 
 class CThostFtdcCombInstrumentGuardField:
     """Class CThostFtdcCombInstrumentGuardField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -732,6 +732,7 @@ _ctp.CThostFtdcCombInstrumentGuardField_swigregister(CThostFtdcCombInstrumentGua
 
 class CThostFtdcProductExchRateField:
     """Class CThostFtdcProductExchRateField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -772,6 +773,7 @@ _ctp.CThostFtdcProductExchRateField_swigregister(CThostFtdcProductExchRateField)
 
 class CThostFtdcMarketDataField:
     """Class CThostFtdcMarketDataField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -879,9 +881,7 @@ class CThostFtdcMarketDataField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcMarketDataField_swiginit(
-            self, _ctp.new_CThostFtdcMarketDataField()
-        )
+        _ctp.CThostFtdcMarketDataField_swiginit(self, _ctp.new_CThostFtdcMarketDataField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMarketDataField
 
@@ -892,6 +892,7 @@ _ctp.CThostFtdcMarketDataField_swigregister(CThostFtdcMarketDataField)
 
 class CThostFtdcMarketDataBaseField:
     """Class CThostFtdcMarketDataBaseField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -919,9 +920,7 @@ class CThostFtdcMarketDataBaseField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcMarketDataBaseField_swiginit(
-            self, _ctp.new_CThostFtdcMarketDataBaseField()
-        )
+        _ctp.CThostFtdcMarketDataBaseField_swiginit(self, _ctp.new_CThostFtdcMarketDataBaseField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcMarketDataBaseField
 
@@ -932,6 +931,7 @@ _ctp.CThostFtdcMarketDataBaseField_swigregister(CThostFtdcMarketDataBaseField)
 
 class CThostFtdcMarketDataStaticField:
     """Class CThostFtdcMarketDataStaticField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -984,6 +984,7 @@ _ctp.CThostFtdcMarketDataStaticField_swigregister(CThostFtdcMarketDataStaticFiel
 
 class CThostFtdcMarketDataLastMatchField:
     """Class CThostFtdcMarketDataLastMatchField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1020,6 +1021,7 @@ _ctp.CThostFtdcMarketDataLastMatchField_swigregister(CThostFtdcMarketDataLastMat
 
 class CThostFtdcMarketDataBestPriceField:
     """Class CThostFtdcMarketDataBestPriceField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1056,6 +1058,7 @@ _ctp.CThostFtdcMarketDataBestPriceField_swigregister(CThostFtdcMarketDataBestPri
 
 class CThostFtdcMarketDataBid23Field:
     """Class CThostFtdcMarketDataBid23Field"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1092,6 +1095,7 @@ _ctp.CThostFtdcMarketDataBid23Field_swigregister(CThostFtdcMarketDataBid23Field)
 
 class CThostFtdcMarketDataAsk23Field:
     """Class CThostFtdcMarketDataAsk23Field"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1128,6 +1132,7 @@ _ctp.CThostFtdcMarketDataAsk23Field_swigregister(CThostFtdcMarketDataAsk23Field)
 
 class CThostFtdcMarketDataBid45Field:
     """Class CThostFtdcMarketDataBid45Field"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1164,6 +1169,7 @@ _ctp.CThostFtdcMarketDataBid45Field_swigregister(CThostFtdcMarketDataBid45Field)
 
 class CThostFtdcMarketDataAsk45Field:
     """Class CThostFtdcMarketDataAsk45Field"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1200,6 +1206,7 @@ _ctp.CThostFtdcMarketDataAsk45Field_swigregister(CThostFtdcMarketDataAsk45Field)
 
 class CThostFtdcMarketDataUpdateTimeField:
     """Class CThostFtdcMarketDataUpdateTimeField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1235,13 +1242,12 @@ class CThostFtdcMarketDataUpdateTimeField:
 
 
 # Register CThostFtdcMarketDataUpdateTimeField in _ctp:
-_ctp.CThostFtdcMarketDataUpdateTimeField_swigregister(
-    CThostFtdcMarketDataUpdateTimeField
-)
+_ctp.CThostFtdcMarketDataUpdateTimeField_swigregister(CThostFtdcMarketDataUpdateTimeField)
 
 
 class CThostFtdcMarketDataBandingPriceField:
     """Class CThostFtdcMarketDataBandingPriceField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1265,13 +1271,12 @@ class CThostFtdcMarketDataBandingPriceField:
 
 
 # Register CThostFtdcMarketDataBandingPriceField in _ctp:
-_ctp.CThostFtdcMarketDataBandingPriceField_swigregister(
-    CThostFtdcMarketDataBandingPriceField
-)
+_ctp.CThostFtdcMarketDataBandingPriceField_swigregister(CThostFtdcMarketDataBandingPriceField)
 
 
 class CThostFtdcMarketDataExchangeField:
     """Class CThostFtdcMarketDataExchangeField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1296,6 +1301,7 @@ _ctp.CThostFtdcMarketDataExchangeField_swigregister(CThostFtdcMarketDataExchange
 
 class CThostFtdcSpecificInstrumentField:
     """Class CThostFtdcSpecificInstrumentField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1324,6 +1330,7 @@ _ctp.CThostFtdcSpecificInstrumentField_swigregister(CThostFtdcSpecificInstrument
 
 class CThostFtdcInstrumentStatusField:
     """Class CThostFtdcInstrumentStatusField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1384,6 +1391,7 @@ _ctp.CThostFtdcInstrumentStatusField_swigregister(CThostFtdcInstrumentStatusFiel
 
 class CThostFtdcMarketDataAveragePriceField:
     """Class CThostFtdcMarketDataAveragePriceField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1403,13 +1411,12 @@ class CThostFtdcMarketDataAveragePriceField:
 
 
 # Register CThostFtdcMarketDataAveragePriceField in _ctp:
-_ctp.CThostFtdcMarketDataAveragePriceField_swigregister(
-    CThostFtdcMarketDataAveragePriceField
-)
+_ctp.CThostFtdcMarketDataAveragePriceField_swigregister(CThostFtdcMarketDataAveragePriceField)
 
 
 class CThostFtdcExchangeSequenceField:
     """Class CThostFtdcExchangeSequenceField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1442,6 +1449,7 @@ _ctp.CThostFtdcExchangeSequenceField_swigregister(CThostFtdcExchangeSequenceFiel
 
 class CThostFtdcProductGroupField:
     """Class CThostFtdcProductGroupField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1469,9 +1477,7 @@ class CThostFtdcProductGroupField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcProductGroupField_swiginit(
-            self, _ctp.new_CThostFtdcProductGroupField()
-        )
+        _ctp.CThostFtdcProductGroupField_swiginit(self, _ctp.new_CThostFtdcProductGroupField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcProductGroupField
 
@@ -1482,6 +1488,7 @@ _ctp.CThostFtdcProductGroupField_swigregister(CThostFtdcProductGroupField)
 
 class CThostFtdcMulticastInstrumentField:
     """Class CThostFtdcMulticastInstrumentField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1530,6 +1537,7 @@ _ctp.CThostFtdcMulticastInstrumentField_swigregister(CThostFtdcMulticastInstrume
 
 class CThostFtdcFrontInfoField:
     """Class CThostFtdcFrontInfoField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -1549,9 +1557,7 @@ class CThostFtdcFrontInfoField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcFrontInfoField_swiginit(
-            self, _ctp.new_CThostFtdcFrontInfoField()
-        )
+        _ctp.CThostFtdcFrontInfoField_swiginit(self, _ctp.new_CThostFtdcFrontInfoField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcFrontInfoField
 

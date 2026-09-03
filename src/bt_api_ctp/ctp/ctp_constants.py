@@ -254,42 +254,18 @@ THOST_FTDC_CC_Immediately = _ctp.THOST_FTDC_CC_Immediately
 THOST_FTDC_CC_Touch = _ctp.THOST_FTDC_CC_Touch
 THOST_FTDC_CC_TouchProfit = _ctp.THOST_FTDC_CC_TouchProfit
 THOST_FTDC_CC_ParkedOrder = _ctp.THOST_FTDC_CC_ParkedOrder
-THOST_FTDC_CC_LastPriceGreaterThanStopPrice = (
-    _ctp.THOST_FTDC_CC_LastPriceGreaterThanStopPrice
-)
-THOST_FTDC_CC_LastPriceGreaterEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_LastPriceGreaterEqualStopPrice
-)
-THOST_FTDC_CC_LastPriceLesserThanStopPrice = (
-    _ctp.THOST_FTDC_CC_LastPriceLesserThanStopPrice
-)
-THOST_FTDC_CC_LastPriceLesserEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_LastPriceLesserEqualStopPrice
-)
-THOST_FTDC_CC_AskPriceGreaterThanStopPrice = (
-    _ctp.THOST_FTDC_CC_AskPriceGreaterThanStopPrice
-)
-THOST_FTDC_CC_AskPriceGreaterEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_AskPriceGreaterEqualStopPrice
-)
-THOST_FTDC_CC_AskPriceLesserThanStopPrice = (
-    _ctp.THOST_FTDC_CC_AskPriceLesserThanStopPrice
-)
-THOST_FTDC_CC_AskPriceLesserEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_AskPriceLesserEqualStopPrice
-)
-THOST_FTDC_CC_BidPriceGreaterThanStopPrice = (
-    _ctp.THOST_FTDC_CC_BidPriceGreaterThanStopPrice
-)
-THOST_FTDC_CC_BidPriceGreaterEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_BidPriceGreaterEqualStopPrice
-)
-THOST_FTDC_CC_BidPriceLesserThanStopPrice = (
-    _ctp.THOST_FTDC_CC_BidPriceLesserThanStopPrice
-)
-THOST_FTDC_CC_BidPriceLesserEqualStopPrice = (
-    _ctp.THOST_FTDC_CC_BidPriceLesserEqualStopPrice
-)
+THOST_FTDC_CC_LastPriceGreaterThanStopPrice = _ctp.THOST_FTDC_CC_LastPriceGreaterThanStopPrice
+THOST_FTDC_CC_LastPriceGreaterEqualStopPrice = _ctp.THOST_FTDC_CC_LastPriceGreaterEqualStopPrice
+THOST_FTDC_CC_LastPriceLesserThanStopPrice = _ctp.THOST_FTDC_CC_LastPriceLesserThanStopPrice
+THOST_FTDC_CC_LastPriceLesserEqualStopPrice = _ctp.THOST_FTDC_CC_LastPriceLesserEqualStopPrice
+THOST_FTDC_CC_AskPriceGreaterThanStopPrice = _ctp.THOST_FTDC_CC_AskPriceGreaterThanStopPrice
+THOST_FTDC_CC_AskPriceGreaterEqualStopPrice = _ctp.THOST_FTDC_CC_AskPriceGreaterEqualStopPrice
+THOST_FTDC_CC_AskPriceLesserThanStopPrice = _ctp.THOST_FTDC_CC_AskPriceLesserThanStopPrice
+THOST_FTDC_CC_AskPriceLesserEqualStopPrice = _ctp.THOST_FTDC_CC_AskPriceLesserEqualStopPrice
+THOST_FTDC_CC_BidPriceGreaterThanStopPrice = _ctp.THOST_FTDC_CC_BidPriceGreaterThanStopPrice
+THOST_FTDC_CC_BidPriceGreaterEqualStopPrice = _ctp.THOST_FTDC_CC_BidPriceGreaterEqualStopPrice
+THOST_FTDC_CC_BidPriceLesserThanStopPrice = _ctp.THOST_FTDC_CC_BidPriceLesserThanStopPrice
+THOST_FTDC_CC_BidPriceLesserEqualStopPrice = _ctp.THOST_FTDC_CC_BidPriceLesserEqualStopPrice
 THOST_FTDC_AF_Delete = _ctp.THOST_FTDC_AF_Delete
 THOST_FTDC_AF_Modify = _ctp.THOST_FTDC_AF_Modify
 THOST_FTDC_TR_Allow = _ctp.THOST_FTDC_TR_Allow
@@ -566,9 +542,7 @@ THOST_FTDC_UET_Authenticate = _ctp.THOST_FTDC_UET_Authenticate
 THOST_FTDC_UET_SubmitSysInfo = _ctp.THOST_FTDC_UET_SubmitSysInfo
 THOST_FTDC_UET_Transfer = _ctp.THOST_FTDC_UET_Transfer
 THOST_FTDC_UET_Other = _ctp.THOST_FTDC_UET_Other
-THOST_FTDC_UET_UpdateTradingAccountPassword = (
-    _ctp.THOST_FTDC_UET_UpdateTradingAccountPassword
-)
+THOST_FTDC_UET_UpdateTradingAccountPassword = _ctp.THOST_FTDC_UET_UpdateTradingAccountPassword
 THOST_FTDC_ICS_Close = _ctp.THOST_FTDC_ICS_Close
 THOST_FTDC_ICS_CloseToday = _ctp.THOST_FTDC_ICS_CloseToday
 THOST_FTDC_SM_Non = _ctp.THOST_FTDC_SM_Non
@@ -619,19 +593,13 @@ THOST_FTDC_FBC_Others = _ctp.THOST_FTDC_FBC_Others
 THOST_FTDC_FBC_TransferDetails = _ctp.THOST_FTDC_FBC_TransferDetails
 THOST_FTDC_FBC_CustAccStatus = _ctp.THOST_FTDC_FBC_CustAccStatus
 THOST_FTDC_FBC_AccountTradeDetails = _ctp.THOST_FTDC_FBC_AccountTradeDetails
-THOST_FTDC_FBC_FutureAccountChangeInfoDetails = (
-    _ctp.THOST_FTDC_FBC_FutureAccountChangeInfoDetails
-)
+THOST_FTDC_FBC_FutureAccountChangeInfoDetails = _ctp.THOST_FTDC_FBC_FutureAccountChangeInfoDetails
 THOST_FTDC_FBC_CustMoneyDetail = _ctp.THOST_FTDC_FBC_CustMoneyDetail
 THOST_FTDC_FBC_CustCancelAccountInfo = _ctp.THOST_FTDC_FBC_CustCancelAccountInfo
 THOST_FTDC_FBC_CustMoneyResult = _ctp.THOST_FTDC_FBC_CustMoneyResult
 THOST_FTDC_FBC_OthersExceptionResult = _ctp.THOST_FTDC_FBC_OthersExceptionResult
-THOST_FTDC_FBC_CustInterestNetMoneyDetails = (
-    _ctp.THOST_FTDC_FBC_CustInterestNetMoneyDetails
-)
-THOST_FTDC_FBC_CustMoneySendAndReceiveDetails = (
-    _ctp.THOST_FTDC_FBC_CustMoneySendAndReceiveDetails
-)
+THOST_FTDC_FBC_CustInterestNetMoneyDetails = _ctp.THOST_FTDC_FBC_CustInterestNetMoneyDetails
+THOST_FTDC_FBC_CustMoneySendAndReceiveDetails = _ctp.THOST_FTDC_FBC_CustMoneySendAndReceiveDetails
 THOST_FTDC_FBC_CorporationMoneyTotal = _ctp.THOST_FTDC_FBC_CorporationMoneyTotal
 THOST_FTDC_FBC_MainbodyMoneyTotal = _ctp.THOST_FTDC_FBC_MainbodyMoneyTotal
 THOST_FTDC_FBC_MainPartMonitorData = _ctp.THOST_FTDC_FBC_MainPartMonitorData
@@ -688,12 +656,8 @@ THOST_FTDC_TEF_NormalProcessing = _ctp.THOST_FTDC_TEF_NormalProcessing
 THOST_FTDC_TEF_Success = _ctp.THOST_FTDC_TEF_Success
 THOST_FTDC_TEF_Failed = _ctp.THOST_FTDC_TEF_Failed
 THOST_FTDC_TEF_Abnormal = _ctp.THOST_FTDC_TEF_Abnormal
-THOST_FTDC_TEF_ManualProcessedForException = (
-    _ctp.THOST_FTDC_TEF_ManualProcessedForException
-)
-THOST_FTDC_TEF_CommuFailedNeedManualProcess = (
-    _ctp.THOST_FTDC_TEF_CommuFailedNeedManualProcess
-)
+THOST_FTDC_TEF_ManualProcessedForException = _ctp.THOST_FTDC_TEF_ManualProcessedForException
+THOST_FTDC_TEF_CommuFailedNeedManualProcess = _ctp.THOST_FTDC_TEF_CommuFailedNeedManualProcess
 THOST_FTDC_TEF_SysErrorNeedManualProcess = _ctp.THOST_FTDC_TEF_SysErrorNeedManualProcess
 THOST_FTDC_PSS_NotProcess = _ctp.THOST_FTDC_PSS_NotProcess
 THOST_FTDC_PSS_StartProcess = _ctp.THOST_FTDC_PSS_StartProcess
@@ -769,12 +733,8 @@ THOST_FTDC_FBTUET_QueryFutureAccount = _ctp.THOST_FTDC_FBTUET_QueryFutureAccount
 THOST_FTDC_FBTUET_SignOut = _ctp.THOST_FTDC_FBTUET_SignOut
 THOST_FTDC_FBTUET_SyncKey = _ctp.THOST_FTDC_FBTUET_SyncKey
 THOST_FTDC_FBTUET_ReserveOpenAccount = _ctp.THOST_FTDC_FBTUET_ReserveOpenAccount
-THOST_FTDC_FBTUET_CancelReserveOpenAccount = (
-    _ctp.THOST_FTDC_FBTUET_CancelReserveOpenAccount
-)
-THOST_FTDC_FBTUET_ReserveOpenAccountConfirm = (
-    _ctp.THOST_FTDC_FBTUET_ReserveOpenAccountConfirm
-)
+THOST_FTDC_FBTUET_CancelReserveOpenAccount = _ctp.THOST_FTDC_FBTUET_CancelReserveOpenAccount
+THOST_FTDC_FBTUET_ReserveOpenAccountConfirm = _ctp.THOST_FTDC_FBTUET_ReserveOpenAccountConfirm
 THOST_FTDC_FBTUET_Other = _ctp.THOST_FTDC_FBTUET_Other
 THOST_FTDC_DBOP_Insert = _ctp.THOST_FTDC_DBOP_Insert
 THOST_FTDC_DBOP_Update = _ctp.THOST_FTDC_DBOP_Update
@@ -1280,9 +1240,7 @@ THOST_FTDC_WPSR_Lib = _ctp.THOST_FTDC_WPSR_Lib
 THOST_FTDC_WPSR_Manual = _ctp.THOST_FTDC_WPSR_Manual
 THOST_FTDC_OSCF_CloseSelfOptionPosition = _ctp.THOST_FTDC_OSCF_CloseSelfOptionPosition
 THOST_FTDC_OSCF_ReserveOptionPosition = _ctp.THOST_FTDC_OSCF_ReserveOptionPosition
-THOST_FTDC_OSCF_SellCloseSelfFuturePosition = (
-    _ctp.THOST_FTDC_OSCF_SellCloseSelfFuturePosition
-)
+THOST_FTDC_OSCF_SellCloseSelfFuturePosition = _ctp.THOST_FTDC_OSCF_SellCloseSelfFuturePosition
 THOST_FTDC_OSCF_ReserveFuturePosition = _ctp.THOST_FTDC_OSCF_ReserveFuturePosition
 THOST_FTDC_BZTP_Future = _ctp.THOST_FTDC_BZTP_Future
 THOST_FTDC_BZTP_Stock = _ctp.THOST_FTDC_BZTP_Stock

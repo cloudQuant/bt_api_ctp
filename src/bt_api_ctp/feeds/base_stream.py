@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 import threading
@@ -11,6 +12,7 @@ from bt_api_base.logging_factory import get_logger
 
 class ConnectionState(Enum):
     """Class ConnectionState"""
+
     DISCONNECTED = 'disconnected'
     CONNECTING = 'connecting'
     CONNECTED = 'connected'
@@ -20,6 +22,7 @@ class ConnectionState(Enum):
 
 class BaseDataStream(ABC):
     """Class BaseDataStream"""
+
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         """__init__ method"""
         self.data_queue = data_queue
@@ -41,13 +44,9 @@ class BaseDataStream(ABC):
         self._state = new_state
         self.on_state_change(old_state, new_state)
 
-    def on_state_change(
-        self, old_state: ConnectionState, new_state: ConnectionState
-    ) -> None:
+    def on_state_change(self, old_state: ConnectionState, new_state: ConnectionState) -> None:
         """on_state_change method"""
-        self.logger.info(
-            f'{self.stream_name} state: {old_state.value} -> {new_state.value}'
-        )
+        self.logger.info(f'{self.stream_name} state: {old_state.value} -> {new_state.value}')
 
     @abstractmethod
     def connect(self) -> None:
@@ -96,7 +95,5 @@ class BaseDataStream(ABC):
                 return True
             time.sleep(interval)
             elapsed += interval
-        self.logger.warning(
-            f'{self.stream_name}: wait_connected timeout after {timeout}s'
-        )
+        self.logger.warning(f'{self.stream_name}: wait_connected timeout after {timeout}s')
         return False

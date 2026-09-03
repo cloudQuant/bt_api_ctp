@@ -1,6 +1,6 @@
 """
-CTP Feed 
- SimNow 7x24 
+CTP Feed
+ SimNow 7x24
 
 :
     pytest tests/test_ctp_feed.py -v -s
@@ -23,86 +23,94 @@ import pytest
 
 
 class TestCtpImports:
-    """ CTP """
+    """CTP"""
 
     def test_internal_ctp_module_import(self):
-        """ bt_api_ctp.ctp """
+        """bt_api_ctp.ctp"""
         from bt_api_ctp.ctp import CThostFtdcMdApi, CThostFtdcTraderApi
 
         assert CThostFtdcMdApi is not None
         assert CThostFtdcTraderApi is not None
 
     def test_ctp_client_import(self):
-        """ MdClient / TraderClient """
+        """MdClient / TraderClient"""
         from bt_api_ctp.ctp.client import MdClient, TraderClient
 
         assert MdClient is not None
         assert TraderClient is not None
 
     def test_ctp_client_prefers_external_runtime_when_installed(self):
-        """ ctp-python  runtime（）。"""
+        """ctp-python  runtime（）。"""
         from bt_api_ctp.ctp.client import get_ctp_runtime_source
 
         try:
-            ctp_module = importlib.import_module("ctp")
-            has_external_ctp = hasattr(ctp_module, "CThostFtdcMdApi")
+            ctp_module = importlib.import_module('ctp')
+            has_external_ctp = hasattr(ctp_module, 'CThostFtdcMdApi')
         except ImportError:
             has_external_ctp = False
         if has_external_ctp:
             import os
-            if os.environ.get("BT_API_PY_USE_EXTERNAL_CTP", "").lower() in ("1", "true", "yes", "on"):
-                assert get_ctp_runtime_source() == "external_ctp_python"
+
+            if os.environ.get('BT_API_PY_USE_EXTERNAL_CTP', '').lower() in (
+                '1',
+                'true',
+                'yes',
+                'on',
+            ):
+                assert get_ctp_runtime_source() == 'external_ctp_python'
             else:
-                assert get_ctp_runtime_source() == "vendored_bt_api_py"
+                assert get_ctp_runtime_source() == 'vendored_bt_api_py'
         else:
-            assert get_ctp_runtime_source() == "vendored_bt_api_py"
+            assert get_ctp_runtime_source() == 'vendored_bt_api_py'
 
     def test_ctp_feed_import(self):
-        """ CTP Feed """
+        """CTP Feed"""
         from bt_api_ctp.feeds.live_ctp_feed import CTP_DIRECTION_FLAG, CTP_OFFSET_FLAG
 
-        assert CTP_OFFSET_FLAG["open"] == "0"
-        assert CTP_OFFSET_FLAG["close_today"] == "3"
-        assert CTP_DIRECTION_FLAG["buy"] == "0"
-        assert CTP_DIRECTION_FLAG["sell"] == "1"
+        assert CTP_OFFSET_FLAG['open'] == '0'
+        assert CTP_OFFSET_FLAG['close_today'] == '3'
+        assert CTP_DIRECTION_FLAG['buy'] == '0'
+        assert CTP_DIRECTION_FLAG['sell'] == '1'
 
     def test_ctp_field_to_dict_accepts_callback_snapshot_dicts(self):
         """Field converter should preserve callback snapshots from TraderClient."""
         from bt_api_ctp.feeds.live_ctp_feed import _ctp_field_to_dict
 
-        snapshot = {"AccountID": "TEST", "Balance": 100000.0, "Available": 80000.0}
+        snapshot = {'AccountID': 'TEST', 'Balance': 100000.0, 'Available': 80000.0}
 
         assert _ctp_field_to_dict(snapshot) == snapshot
 
     def test_ctp_containers_import(self):
-        """ CTP """
+        """CTP"""
         from bt_api_ctp.containers.ctp import CtpAccountData
 
         assert CtpAccountData is not None
 
     def test_ctp_registry(self):
-        """ CTP  ExchangeRegistry """
-        from bt_api_ctp.plugin import register_plugin
+        """CTP  ExchangeRegistry"""
         from bt_api_base.registry import ExchangeRegistry
+
+        from bt_api_ctp.plugin import register_plugin
 
         class MockRuntimeFactory:
             """Class MockRuntimeFactory"""
+
             def register_adapter(self, *args, **kwargs):
                 """register_adapter method"""
                 pass
 
         register_plugin(ExchangeRegistry, MockRuntimeFactory)
 
-        assert ExchangeRegistry.has_exchange("CTP___FUTURE")
-        assert ExchangeRegistry.get_balance_handler("CTP___FUTURE") is not None
-        assert ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
+        assert ExchangeRegistry.has_exchange('CTP___FUTURE')
+        assert ExchangeRegistry.get_balance_handler('CTP___FUTURE') is not None
+        assert ExchangeRegistry.get_stream_class('CTP___FUTURE', 'subscribe') is not None
 
     def test_btapi_includes_ctp(self):
-        """ BtApi  CTP"""
-        from bt_api_py.bt_api import BtApi
+        """BtApi  CTP"""
+        BtApi = pytest.importorskip('bt_api_py.bt_api').BtApi
 
         available = BtApi.list_available_exchanges()
-        assert "CTP___FUTURE" in available
+        assert 'CTP___FUTURE' in available
 
     def test_split_submodule_imports(self):
         """"""
@@ -115,8 +123,10 @@ class TestCtpImports:
         assert THOST_TERT_RESTART is not None
 
     def test_split_submodule_backward_compat(self):
-        """ ()"""
-        from bt_api_ctp.ctp import CThostFtdcInputOrderField as CThostFtdcInputOrderFieldInit
+        """()"""
+        from bt_api_ctp.ctp import (
+            CThostFtdcInputOrderField as CThostFtdcInputOrderFieldInit,
+        )
         from bt_api_ctp.ctp import CThostFtdcMdApi as CThostFtdcMdApiInit
         from bt_api_ctp.ctp.ctp_md_api import CThostFtdcMdApi as CThostFtdcMdApiSubmod
         from bt_api_ctp.ctp.ctp_structs_order import (
@@ -127,41 +137,41 @@ class TestCtpImports:
         assert CThostFtdcInputOrderFieldInit is CThostFtdcInputOrderFieldSubmod
 
     def test_split_submodule_field_instantiation(self):
-        """ Field """
+        """Field"""
         from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcInputOrderField
 
         field = CThostFtdcInputOrderField()
-        field.InstrumentID = "IF2506"
+        field.InstrumentID = 'IF2506'
         field.VolumeTotalOriginal = 1
-        assert field.InstrumentID == "IF2506"
+        assert field.InstrumentID == 'IF2506'
         assert field.VolumeTotalOriginal == 1
 
     def test_split_submodule_all_modules_importable(self):
-        """ 12 """
+        """12"""
         import importlib
 
         modules = [
-            "bt_api_ctp.ctp.ctp_constants",
-            "bt_api_ctp.ctp.ctp_md_api",
-            "bt_api_ctp.ctp.ctp_trader_api",
-            "bt_api_ctp.ctp.ctp_structs_common",
-            "bt_api_ctp.ctp.ctp_structs_order",
-            "bt_api_ctp.ctp.ctp_structs_trade",
-            "bt_api_ctp.ctp.ctp_structs_position",
-            "bt_api_ctp.ctp.ctp_structs_account",
-            "bt_api_ctp.ctp.ctp_structs_market",
-            "bt_api_ctp.ctp.ctp_structs_query",
-            "bt_api_ctp.ctp.ctp_structs_transfer",
-            "bt_api_ctp.ctp.ctp_structs_risk",
+            'bt_api_ctp.ctp.ctp_constants',
+            'bt_api_ctp.ctp.ctp_md_api',
+            'bt_api_ctp.ctp.ctp_trader_api',
+            'bt_api_ctp.ctp.ctp_structs_common',
+            'bt_api_ctp.ctp.ctp_structs_order',
+            'bt_api_ctp.ctp.ctp_structs_trade',
+            'bt_api_ctp.ctp.ctp_structs_position',
+            'bt_api_ctp.ctp.ctp_structs_account',
+            'bt_api_ctp.ctp.ctp_structs_market',
+            'bt_api_ctp.ctp.ctp_structs_query',
+            'bt_api_ctp.ctp.ctp_structs_transfer',
+            'bt_api_ctp.ctp.ctp_structs_risk',
         ]
         for mod_name in modules:
             mod = importlib.import_module(mod_name)
-            assert hasattr(mod, "__all__"), f"{mod_name} missing __all__"
-            assert len(mod.__all__) > 0, f"{mod_name} has empty __all__"
+            assert hasattr(mod, '__all__'), f'{mod_name} missing __all__'
+            assert len(mod.__all__) > 0, f'{mod_name} has empty __all__'
 
 
 class TestCtpContainerParsing:
-    """ CTP （，）"""
+    """CTP （，）"""
 
     def test_account_data(self):
         """test_account_data method"""
@@ -169,27 +179,27 @@ class TestCtpContainerParsing:
 
         account = CtpAccountData(
             {
-                "BrokerID": "9999",
-                "AccountID": "123456",
-                "Balance": 500000.0,
-                "Available": 300000.0,
-                "CurrMargin": 150000.0,
-                "PositionProfit": 5000.0,
-                "CloseProfit": 1000.0,
-                "Commission": 200.0,
-                "PreBalance": 495000.0,
-                "FrozenMargin": 10000.0,
+                'BrokerID': '9999',
+                'AccountID': '123456',
+                'Balance': 500000.0,
+                'Available': 300000.0,
+                'CurrMargin': 150000.0,
+                'PositionProfit': 5000.0,
+                'CloseProfit': 1000.0,
+                'Commission': 200.0,
+                'PreBalance': 495000.0,
+                'FrozenMargin': 10000.0,
             }
         )
         account.init_data()
-        assert account.get_exchange_name() == "CTP"
+        assert account.get_exchange_name() == 'CTP'
         assert account.get_margin() == 500000.0
         assert account.get_available_margin() == 300000.0
         assert account.get_unrealized_profit() == 5000.0
-        assert account.get_account_type() == "123456"
+        assert account.get_account_type() == '123456'
         all_data = account.get_all_data()
-        assert all_data["balance"] == 500000.0
-        assert all_data["risk_degree"] == 150000.0 / 500000.0
+        assert all_data['balance'] == 500000.0
+        assert all_data['risk_degree'] == 150000.0 / 500000.0
 
     def test_order_data(self):
         """test_order_data method"""
@@ -197,25 +207,25 @@ class TestCtpContainerParsing:
 
         order = CtpOrderData(
             {
-                "InstrumentID": "IF2506",
-                "OrderRef": "1",
-                "OrderSysID": "123",
-                "Direction": "0",
-                "CombOffsetFlag": "0",
-                "LimitPrice": 3500.0,
-                "VolumeTotalOriginal": 1,
-                "VolumeTraded": 0,
-                "VolumeTotal": 1,
-                "OrderStatus": "3",
-                "InsertTime": "09:30:01",
-                "ExchangeID": "CFFEX",
+                'InstrumentID': 'IF2506',
+                'OrderRef': '1',
+                'OrderSysID': '123',
+                'Direction': '0',
+                'CombOffsetFlag': '0',
+                'LimitPrice': 3500.0,
+                'VolumeTotalOriginal': 1,
+                'VolumeTraded': 0,
+                'VolumeTotal': 1,
+                'OrderStatus': '3',
+                'InsertTime': '09:30:01',
+                'ExchangeID': 'CFFEX',
             }
         )
         order.init_data()
-        assert order.get_symbol_name() == "IF2506"
-        assert order.get_order_side() == "buy"
-        assert order.get_order_offset() == "open"
-        assert order.get_order_exchange_id() == "CFFEX"
+        assert order.get_symbol_name() == 'IF2506'
+        assert order.get_order_side() == 'buy'
+        assert order.get_order_offset() == 'open'
+        assert order.get_order_exchange_id() == 'CFFEX'
         assert order.get_order_price() == 3500.0
         assert order.get_order_size() == 1
 
@@ -225,19 +235,19 @@ class TestCtpContainerParsing:
 
         pos = CtpPositionData(
             {
-                "InstrumentID": "IF2506",
-                "PosiDirection": "2",
-                "Position": 5,
-                "TodayPosition": 3,
-                "YdPosition": 2,
-                "UseMargin": 100000.0,
-                "PositionProfit": 2500.0,
-                "SettlementPrice": 3550.0,
-                "ExchangeID": "CFFEX",
+                'InstrumentID': 'IF2506',
+                'PosiDirection': '2',
+                'Position': 5,
+                'TodayPosition': 3,
+                'YdPosition': 2,
+                'UseMargin': 100000.0,
+                'PositionProfit': 2500.0,
+                'SettlementPrice': 3550.0,
+                'ExchangeID': 'CFFEX',
             }
         )
         pos.init_data()
-        assert pos.get_position_direction() == "long"
+        assert pos.get_position_direction() == 'long'
         assert pos.get_position_volume() == 5
         assert pos.get_today_position() == 3
         assert pos.get_yesterday_position() == 2
@@ -248,22 +258,22 @@ class TestCtpContainerParsing:
 
         trade = CtpTradeData(
             {
-                "InstrumentID": "IF2506",
-                "TradeID": "T001",
-                "OrderSysID": "123",
-                "Direction": "0",
-                "OffsetFlag": "0",
-                "Price": 3500.0,
-                "Volume": 1,
-                "TradeDate": "20250226",
-                "TradeTime": "09:30:01",
-                "ExchangeID": "CFFEX",
+                'InstrumentID': 'IF2506',
+                'TradeID': 'T001',
+                'OrderSysID': '123',
+                'Direction': '0',
+                'OffsetFlag': '0',
+                'Price': 3500.0,
+                'Volume': 1,
+                'TradeDate': '20250226',
+                'TradeTime': '09:30:01',
+                'ExchangeID': 'CFFEX',
             },
-            symbol_name="IF2506",
+            symbol_name='IF2506',
         )
         trade.init_data()
-        assert trade.get_trade_side() == "buy"
-        assert trade.get_trade_offset() == "open"
+        assert trade.get_trade_side() == 'buy'
+        assert trade.get_trade_offset() == 'open'
         assert trade.get_trade_price() == 3500.0
 
     @pytest.mark.ticker
@@ -273,18 +283,18 @@ class TestCtpContainerParsing:
 
         tick = CtpTickerData(
             {
-                "InstrumentID": "IF2506",
-                "LastPrice": 3550.0,
-                "BidPrice1": 3549.0,
-                "BidVolume1": 10,
-                "AskPrice1": 3551.0,
-                "AskVolume1": 8,
-                "Volume": 50000,
-                "OpenInterest": 120000.0,
-                "UpperLimitPrice": 3700.0,
-                "LowerLimitPrice": 3400.0,
-                "UpdateTime": "09:30:01",
-                "UpdateMillisec": 500,
+                'InstrumentID': 'IF2506',
+                'LastPrice': 3550.0,
+                'BidPrice1': 3549.0,
+                'BidVolume1': 10,
+                'AskPrice1': 3551.0,
+                'AskVolume1': 8,
+                'Volume': 50000,
+                'OpenInterest': 120000.0,
+                'UpperLimitPrice': 3700.0,
+                'LowerLimitPrice': 3400.0,
+                'UpdateTime': '09:30:01',
+                'UpdateMillisec': 500,
             }
         )
         tick.init_data()
@@ -299,7 +309,8 @@ class TestCtpContainerParsing:
 
         class MockField:
             """Class MockField"""
-            InstrumentID = "rb2510"
+
+            InstrumentID = 'rb2510'
             LastPrice = 3800.0
             Volume = 1000
 
@@ -307,18 +318,20 @@ class TestCtpContainerParsing:
                 pass
 
         d = _ctp_field_to_dict(MockField())
-        assert d["InstrumentID"] == "rb2510"
-        assert d["LastPrice"] == 3800.0
-        assert "_internal" not in d
+        assert d['InstrumentID'] == 'rb2510'
+        assert d['LastPrice'] == 3800.0
+        assert '_internal' not in d
 
     def test_balance_handler(self):
         """test_balance_handler method"""
-        from bt_api_ctp.plugin import register_plugin
-        from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
         from bt_api_base.registry import ExchangeRegistry
+
+        from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
+        from bt_api_ctp.plugin import register_plugin
 
         class MockRuntimeFactory:
             """Class MockRuntimeFactory"""
+
             def register_adapter(self, *args, **kwargs):
                 """register_adapter method"""
                 pass
@@ -327,17 +340,17 @@ class TestCtpContainerParsing:
 
         account = CtpAccountData(
             {
-                "AccountID": "TEST",
-                "Balance": 100000.0,
-                "Available": 80000.0,
-                "PositionProfit": 3000.0,
+                'AccountID': 'TEST',
+                'Balance': 100000.0,
+                'Available': 80000.0,
+                'PositionProfit': 3000.0,
             }
         )
         account.init_data()
-        handler = ExchangeRegistry.get_balance_handler("CTP___FUTURE")
+        handler = ExchangeRegistry.get_balance_handler('CTP___FUTURE')
         value_result, cash_result = handler([account])
-        assert value_result["TEST"]["value"] == 103000.0
-        assert cash_result["TEST"]["cash"] == 80000.0
+        assert value_result['TEST']['value'] == 103000.0
+        assert cash_result['TEST']['cash'] == 80000.0
 
 
 class TestCtpOrderThreadingRegression:
@@ -347,7 +360,7 @@ class TestCtpOrderThreadingRegression:
         """test_trader_client_next_order_ref_is_thread_safe method"""
         from bt_api_ctp.ctp.client import TraderClient
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         client._max_order_ref = 100
 
         refs = []
@@ -372,29 +385,31 @@ class TestCtpOrderThreadingRegression:
 
         class MockOrderField:
             """Class MockOrderField"""
+
             def __init__(self):
                 """__init__ method"""
-                self.InstrumentID = "IF2506"
-                self.OrderRef = "101"
-                self.OrderSysID = "SYS001"
-                self.Direction = "0"
-                self.CombOffsetFlag = "0"
+                self.InstrumentID = 'IF2506'
+                self.OrderRef = '101'
+                self.OrderSysID = 'SYS001'
+                self.Direction = '0'
+                self.CombOffsetFlag = '0'
 
         class MockTradeField:
             """Class MockTradeField"""
+
             def __init__(self):
                 """__init__ method"""
-                self.InstrumentID = "IF2506"
-                self.TradeID = "TRADE001"
-                self.OrderRef = "101"
-                self.OrderSysID = "SYS001"
-                self.Direction = "0"
-                self.OffsetFlag = "0"
+                self.InstrumentID = 'IF2506'
+                self.TradeID = 'TRADE001'
+                self.OrderRef = '101'
+                self.OrderSysID = 'SYS001'
+                self.Direction = '0'
+                self.OffsetFlag = '0'
                 self.Price = 3500.0
                 self.Volume = 1
-                self.ExchangeID = "CFFEX"
+                self.ExchangeID = 'CFFEX'
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         seen_order_refs = []
         client.on_order = lambda order_field: seen_order_refs.append(order_field.OrderRef)
         spi = _TraderSpi(client)
@@ -405,11 +420,11 @@ class TestCtpOrderThreadingRegression:
         order_event = client.wait_order_event(timeout=0.01)
         trade_event = client.wait_trade_event(timeout=0.01)
 
-        assert order_event["OrderRef"] == "101"
-        assert order_event["InstrumentID"] == "IF2506"
-        assert trade_event["TradeID"] == "TRADE001"
-        assert trade_event["Price"] == 3500.0
-        assert seen_order_refs == ["101"]
+        assert order_event['OrderRef'] == '101'
+        assert order_event['InstrumentID'] == 'IF2506'
+        assert trade_event['TradeID'] == 'TRADE001'
+        assert trade_event['Price'] == 3500.0
+        assert seen_order_refs == ['101']
 
     def test_trader_client_snapshots_order_insert_errors(self):
         """test_trader_client_snapshots_order_insert_errors method"""
@@ -417,19 +432,21 @@ class TestCtpOrderThreadingRegression:
 
         class MockInputOrder:
             """Class MockInputOrder"""
+
             def __init__(self):
                 """__init__ method"""
-                self.InstrumentID = "IF2506"
-                self.OrderRef = "105"
+                self.InstrumentID = 'IF2506'
+                self.OrderRef = '105'
 
         class MockRspInfo:
             """Class MockRspInfo"""
+
             def __init__(self):
                 """__init__ method"""
                 self.ErrorID = 32
-                self.ErrorMsg = "order rejected"
+                self.ErrorMsg = 'order rejected'
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         seen_errors = []
         client.on_error = lambda rsp_info: seen_errors.append((rsp_info.ErrorID, rsp_info.ErrorMsg))
         spi = _TraderSpi(client)
@@ -437,44 +454,44 @@ class TestCtpOrderThreadingRegression:
         spi.OnErrRtnOrderInsert(MockInputOrder(), MockRspInfo())
 
         error_event = client.wait_error_event(timeout=0.01)
-        assert error_event["event"] == "order_insert_error"
-        assert error_event["error_id"] == 32
-        assert error_event["error_msg"] == "order rejected"
-        assert error_event["field"]["OrderRef"] == "105"
-        assert seen_errors == [(32, "order rejected")]
+        assert error_event['event'] == 'order_insert_error'
+        assert error_event['error_id'] == 32
+        assert error_event['error_msg'] == 'order rejected'
+        assert error_event['field']['OrderRef'] == '105'
+        assert seen_errors == [(32, 'order rejected')]
 
     def test_trader_client_snapshots_account_and_position_query_callbacks(self):
         """Query callbacks should not leak transient SWIG objects across threads."""
         from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 
         class MockAccountField:
-            AccountID = "TEST"
+            AccountID = 'TEST'
             Balance = 100000.0
             Available = 80000.0
 
         class MockPositionField:
-            InstrumentID = "IF2506"
-            PosiDirection = "2"
+            InstrumentID = 'IF2506'
+            PosiDirection = '2'
             Position = 2
             PositionCost = 7000.0
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         spi = _TraderSpi(client)
 
         spi.OnRspQryTradingAccount(MockAccountField(), None, 1, True)
         spi.OnRspQryInvestorPosition(MockPositionField(), None, 2, True)
 
         assert client._last_account == {
-            "AccountID": "TEST",
-            "Available": 80000.0,
-            "Balance": 100000.0,
+            'AccountID': 'TEST',
+            'Available': 80000.0,
+            'Balance': 100000.0,
         }
         assert client._last_positions == [
             {
-                "InstrumentID": "IF2506",
-                "Position": 2,
-                "PositionCost": 7000.0,
-                "PosiDirection": "2",
+                'InstrumentID': 'IF2506',
+                'Position': 2,
+                'PositionCost': 7000.0,
+                'PosiDirection': '2',
             }
         ]
 
@@ -492,26 +509,24 @@ class TestCtpOrderThreadingRegression:
 
         class MockRspInfo:
             ErrorID = 63
-            ErrorMsg = "auth failed"
+            ErrorMsg = 'auth failed'
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         client._api = FakeApi()
         seen_errors = []
-        client.on_error = lambda rsp_info: seen_errors.append(
-            (rsp_info.ErrorID, rsp_info.ErrorMsg)
-        )
+        client.on_error = lambda rsp_info: seen_errors.append((rsp_info.ErrorID, rsp_info.ErrorMsg))
 
         _TraderSpi(client).OnRspAuthenticate(None, MockRspInfo(), 1, True)
 
         assert client._api.login_requests == 0
-        assert client.auth_state == "failed"
-        assert client.login_state == "blocked"
+        assert client.auth_state == 'failed'
+        assert client.login_state == 'blocked'
         assert client.is_ready is False
-        assert seen_errors == [(63, "auth failed")]
+        assert seen_errors == [(63, 'auth failed')]
         session_state = client.get_session_state()
-        assert session_state["auth_state"] == "failed"
-        assert session_state["login_state"] == "blocked"
-        assert session_state["last_auth_error"]["error_id"] == 63
+        assert session_state['auth_state'] == 'failed'
+        assert session_state['login_state'] == 'blocked'
+        assert session_state['last_auth_error']['error_id'] == 63
 
     def test_trader_client_records_auth_and_login_success_metadata(self):
         """Successful CTP auth/login should expose structured session state."""
@@ -531,14 +546,14 @@ class TestCtpOrderThreadingRegression:
         class MockLogin:
             FrontID = 7
             SessionID = 8801
-            TradingDay = "20260618"
-            LoginTime = "20:01:02"
-            SystemName = "SIMNOW"
-            BrokerID = "9999"
-            UserID = "demo"
-            MaxOrderRef = "100"
+            TradingDay = '20260618'
+            LoginTime = '20:01:02'
+            SystemName = 'SIMNOW'
+            BrokerID = '9999'
+            UserID = 'demo'
+            MaxOrderRef = '100'
 
-        client = TraderClient("tcp://test", "9999", "demo", "secret")
+        client = TraderClient('tcp://test', '9999', 'demo', 'secret')
         client._api = FakeApi()
         spi = _TraderSpi(client)
 
@@ -547,13 +562,13 @@ class TestCtpOrderThreadingRegression:
         spi.OnRspSettlementInfoConfirm(None, None, 3, True)
 
         assert client._api.login_requests == 1
-        assert client.auth_state == "authenticated"
-        assert client.login_state == "logged_in"
+        assert client.auth_state == 'authenticated'
+        assert client.login_state == 'logged_in'
         assert client.is_ready is True
         session_state = client.get_session_state()
-        assert session_state["front_id"] == 7
-        assert session_state["session_id"] == 8801
-        assert session_state["trading_day"] == "20260618"
+        assert session_state['front_id'] == 7
+        assert session_state['session_id'] == 8801
+        assert session_state['trading_day'] == '20260618'
 
     def test_md_client_treats_missing_login_rsp_info_as_success(self):
         """CTP market login can succeed with an empty RspInfo payload."""
@@ -567,10 +582,10 @@ class TestCtpOrderThreadingRegression:
                 self.subscribed.extend(instruments)
                 return 0
 
-        client = MdClient("tcp://test-md", "9999", "demo", "secret")
+        client = MdClient('tcp://test-md', '9999', 'demo', 'secret')
         client._api = FakeApi()
         client._connected = True
-        client._pending_instruments = ["rb2510"]
+        client._pending_instruments = ['rb2510']
         seen_logins = []
         seen_errors = []
         client.on_login = lambda login: seen_logins.append(login)
@@ -580,7 +595,7 @@ class TestCtpOrderThreadingRegression:
         _MdSpi(client).OnRspUserLogin(login, None, 1, True)
 
         assert client.is_ready is True
-        assert client._api.subscribed == ["rb2510"]
+        assert client._api.subscribed == ['rb2510']
         assert seen_logins == [login]
         assert seen_errors == []
 
@@ -590,6 +605,7 @@ class TestCtpOrderThreadingRegression:
 
         class FakeApi:
             """Class FakeApi"""
+
             def __init__(self):
                 """__init__ method"""
                 self.field = None
@@ -603,6 +619,7 @@ class TestCtpOrderThreadingRegression:
 
         class FakeTrader:
             """Class FakeTrader"""
+
             def __init__(self):
                 """__init__ method"""
                 self.api = FakeApi()
@@ -613,31 +630,31 @@ class TestCtpOrderThreadingRegression:
 
             def next_order_ref(self):
                 """next_order_ref method"""
-                return "108"
+                return '108'
 
         feed = CtpRequestDataFuture(
             queue.Queue(),
-            broker_id="9999",
-            user_id="demo",
-            password="secret",
-            td_front="tcp://test",
+            broker_id='9999',
+            user_id='demo',
+            password='secret',
+            td_front='tcp://test',
         )
         feed._trader = FakeTrader()
         feed._connected = True
 
         result = feed.make_order(
-            symbol="IF2506",
+            symbol='IF2506',
             volume=1,
             price=3500.0,
-            order_type="buy-limit",
-            offset="open",
-            exchange_id="CFFEX",
+            order_type='buy-limit',
+            offset='open',
+            exchange_id='CFFEX',
         )
 
         sent_field = feed._trader.api.field
         assert sent_field is not None
-        assert sent_field.OrderRef == "108"
-        assert sent_field.UserID == "demo"
+        assert sent_field.OrderRef == '108'
+        assert sent_field.UserID == 'demo'
         assert sent_field.MinVolume == 1
         assert sent_field.RequestID == 8
         assert feed._trader.api.req_id == 8
@@ -645,6 +662,6 @@ class TestCtpOrderThreadingRegression:
 
         order = result.get_data()[0]
         order.init_data()
-        assert order.get_client_order_id() == "108"
+        assert order.get_client_order_id() == '108'
         assert order.front_id == 11
         assert order.session_id == 22

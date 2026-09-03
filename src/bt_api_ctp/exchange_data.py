@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 from bt_api_base.containers.exchanges.exchange_data import ExchangeData
@@ -6,6 +7,7 @@ from bt_api_base.containers.exchanges.exchange_data import ExchangeData
 
 class CtpExchangeData(ExchangeData):
     """Class CtpExchangeData"""
+
     def __init__(self) -> None:
         """__init__ method"""
         super().__init__()
@@ -24,13 +26,12 @@ class CtpExchangeData(ExchangeData):
             '4h': '4h',
             '1d': '1d',
         }
-        self.reverse_kline_periods = {
-            value: key for key, value in self.kline_periods.items()
-        }
+        self.reverse_kline_periods = {value: key for key, value in self.kline_periods.items()}
 
 
 class CtpExchangeDataFuture(CtpExchangeData):
     """Class CtpExchangeDataFuture"""
+
     pass
 
 

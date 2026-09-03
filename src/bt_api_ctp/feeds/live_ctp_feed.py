@@ -1,4 +1,5 @@
 """Module documentation"""
+
 from __future__ import annotations
 
 import os
@@ -63,22 +64,16 @@ def _load_ctp_env() -> None:
 def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
     _load_ctp_env()
     resolved = dict(kwargs)
-    broker_id = str(
-        resolved.get('broker_id') or os.environ.get('CTP_BROKER_ID') or ''
-    ).strip()
+    broker_id = str(resolved.get('broker_id') or os.environ.get('CTP_BROKER_ID') or '').strip()
     user_id = str(
         resolved.get('user_id')
         or resolved.get('investor_id')
         or os.environ.get('CTP_USER_ID')
         or ''
     ).strip()
-    password = str(
-        resolved.get('password') or os.environ.get('CTP_PASSWORD') or ''
-    ).strip()
+    password = str(resolved.get('password') or os.environ.get('CTP_PASSWORD') or '').strip()
     auth_code = str(
-        resolved.get('auth_code')
-        or os.environ.get('CTP_AUTH_CODE')
-        or '0000000000000000'
+        resolved.get('auth_code') or os.environ.get('CTP_AUTH_CODE') or '0000000000000000'
     ).strip()
     app_id = str(
         resolved.get('app_id') or os.environ.get('CTP_APP_ID') or 'simnow_client_test'
@@ -140,6 +135,7 @@ def _ctp_field_to_dict(field):
 
 class CtpRequestData(Feed):
     """Class CtpRequestData"""
+
     @classmethod
     def _capabilities(cls):
         return {
@@ -228,14 +224,10 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], 'get_account', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'get_account', symbol, extra_data, status=False)
         raw = trader.query_account(timeout=5)
         if raw is None:
-            return self._make_request_data(
-                [], 'get_account', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'get_account', symbol, extra_data, status=False)
         row = CtpAccountData(_ctp_field_to_dict(raw), symbol, self.asset_type, True)
         return self._make_request_data([row], 'get_account', symbol, extra_data)
 
@@ -248,16 +240,12 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], 'get_position', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'get_position', symbol, extra_data, status=False)
         rows = []
         for raw in trader.query_positions(timeout=5):
             data = _ctp_field_to_dict(raw)
             rows.append(
-                CtpPositionData(
-                    data, data.get('InstrumentID', symbol), self.asset_type, True
-                )
+                CtpPositionData(data, data.get('InstrumentID', symbol), self.asset_type, True)
             )
         return self._make_request_data(rows, 'get_position', symbol, extra_data)
 
@@ -267,15 +255,11 @@ class CtpRequestData(Feed):
 
     def get_depth(self, symbol, count=5, extra_data=None, **kwargs):
         """get_depth method"""
-        return self._make_request_data(
-            [], 'get_depth', symbol, extra_data, status=False
-        )
+        return self._make_request_data([], 'get_depth', symbol, extra_data, status=False)
 
     def get_kline(self, symbol, period, count=100, extra_data=None, **kwargs):
         """get_kline method"""
-        return self._make_request_data(
-            [], 'get_kline', symbol, extra_data, status=False
-        )
+        return self._make_request_data([], 'get_kline', symbol, extra_data, status=False)
 
     def make_order(
         self,
@@ -293,9 +277,7 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], 'make_order', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'make_order', symbol, extra_data, status=False)
         side, order_kind = order_type.split('-')
         direction = CTP_DIRECTION_FLAG.get(side.lower(), '0')
         offset_flag = CTP_OFFSET_FLAG.get(offset, '0')
@@ -336,18 +318,14 @@ class CtpRequestData(Feed):
         trader._req_id = next_req_id
         api = trader.api
         if api is None:
-            return self._make_request_data(
-                [], 'make_order', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'make_order', symbol, extra_data, status=False)
         ret = api.ReqOrderInsert(field, next_req_id)
         order_dict = _ctp_field_to_dict(field)
         order_dict['_ret'] = ret
         order_dict['FrontID'] = getattr(trader, '_front_id', 0)
         order_dict['SessionID'] = getattr(trader, '_session_id', 0)
         if ret != 0:
-            return self._make_request_data(
-                [], 'make_order', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'make_order', symbol, extra_data, status=False)
         return self._make_request_data(
             [CtpOrderData(order_dict, symbol, self.asset_type, True)],
             'make_order',
@@ -360,9 +338,7 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], 'cancel_order', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'cancel_order', symbol, extra_data, status=False)
         field = CThostFtdcInputOrderActionField()
         field.BrokerID = self.broker_id
         field.InvestorID = self.user_id
@@ -383,9 +359,7 @@ class CtpRequestData(Feed):
         trader._req_id += 1
         api = trader.api
         if api is None:
-            return self._make_request_data(
-                [], 'cancel_order', symbol, extra_data, status=False
-            )
+            return self._make_request_data([], 'cancel_order', symbol, extra_data, status=False)
         ret = api.ReqOrderAction(field, trader._req_id)
         return self._make_request_data(
             [_ctp_field_to_dict(field)],
@@ -397,15 +371,11 @@ class CtpRequestData(Feed):
 
     def query_order(self, symbol=None, order_id=None, extra_data=None, **kwargs):
         """query_order method"""
-        return self._make_request_data(
-            [], 'query_order', symbol, extra_data, status=False
-        )
+        return self._make_request_data([], 'query_order', symbol, extra_data, status=False)
 
     def get_open_orders(self, symbol=None, extra_data=None, **kwargs):
         """get_open_orders method"""
-        return self._make_request_data(
-            [], 'get_open_orders', symbol, extra_data, status=False
-        )
+        return self._make_request_data([], 'get_open_orders', symbol, extra_data, status=False)
 
     def get_deals(
         self,
@@ -417,9 +387,7 @@ class CtpRequestData(Feed):
         **kwargs,
     ):
         """get_deals method"""
-        return self._make_request_data(
-            [], 'get_deals', symbol, extra_data, status=False
-        )
+        return self._make_request_data([], 'get_deals', symbol, extra_data, status=False)
 
     @property
     def trader_client(self):
@@ -429,6 +397,7 @@ class CtpRequestData(Feed):
 
 class CtpMarketStream(BaseDataStream):
     """Class CtpMarketStream"""
+
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         """__init__ method"""
         super().__init__(data_queue, **kwargs)
@@ -499,6 +468,7 @@ class CtpMarketStream(BaseDataStream):
 
 class CtpTradeStream(BaseDataStream):
     """Class CtpTradeStream"""
+
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         """__init__ method"""
         super().__init__(data_queue, **kwargs)
@@ -569,6 +539,7 @@ class CtpTradeStream(BaseDataStream):
 
 class CtpRequestDataFuture(CtpRequestData):
     """Class CtpRequestDataFuture"""
+
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         """__init__ method"""
         super().__init__(data_queue, **kwargs)

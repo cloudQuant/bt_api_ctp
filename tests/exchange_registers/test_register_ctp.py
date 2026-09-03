@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestRegisterCtp:
     """Tests for CTP registration module."""
 
     def test_module_imports(self):
-        """Test module can be imported."""
-        try:
-            from bt_api_ctp.registry_registration import register_ctp
+        """Test the actual CTP plugin registration entry point can be imported."""
+        from bt_api_ctp.plugin import register_plugin
 
-            assert register_ctp is not None
-        except ImportError:
-            pytest.skip("CTP module not available")
+        assert register_plugin is not None

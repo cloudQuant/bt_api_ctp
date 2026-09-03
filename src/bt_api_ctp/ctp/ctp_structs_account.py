@@ -8,6 +8,7 @@ from ._ctp_base import _ctp, _swig_repr
 
 class CThostFtdcTradingAccountField:
     """Class CThostFtdcTradingAccountField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -211,9 +212,7 @@ class CThostFtdcTradingAccountField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcTradingAccountField_swiginit(
-            self, _ctp.new_CThostFtdcTradingAccountField()
-        )
+        _ctp.CThostFtdcTradingAccountField_swiginit(self, _ctp.new_CThostFtdcTradingAccountField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcTradingAccountField
 
@@ -224,6 +223,7 @@ _ctp.CThostFtdcTradingAccountField_swigregister(CThostFtdcTradingAccountField)
 
 class CThostFtdcSyncDepositField:
     """Class CThostFtdcSyncDepositField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -267,9 +267,7 @@ class CThostFtdcSyncDepositField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcSyncDepositField_swiginit(
-            self, _ctp.new_CThostFtdcSyncDepositField()
-        )
+        _ctp.CThostFtdcSyncDepositField_swiginit(self, _ctp.new_CThostFtdcSyncDepositField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncDepositField
 
@@ -280,6 +278,7 @@ _ctp.CThostFtdcSyncDepositField_swigregister(CThostFtdcSyncDepositField)
 
 class CThostFtdcSyncFundMortgageField:
     """Class CThostFtdcSyncFundMortgageField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -324,6 +323,7 @@ _ctp.CThostFtdcSyncFundMortgageField_swigregister(CThostFtdcSyncFundMortgageFiel
 
 class CThostFtdcSyncDelaySwapField:
     """Class CThostFtdcSyncDelaySwapField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -375,9 +375,7 @@ class CThostFtdcSyncDelaySwapField:
 
     def __init__(self):
         """__init__ method"""
-        _ctp.CThostFtdcSyncDelaySwapField_swiginit(
-            self, _ctp.new_CThostFtdcSyncDelaySwapField()
-        )
+        _ctp.CThostFtdcSyncDelaySwapField_swiginit(self, _ctp.new_CThostFtdcSyncDelaySwapField())
 
     __swig_destroy__ = _ctp.delete_CThostFtdcSyncDelaySwapField
 
@@ -388,6 +386,7 @@ _ctp.CThostFtdcSyncDelaySwapField_swigregister(CThostFtdcSyncDelaySwapField)
 
 class CThostFtdcTradingAccountPasswordField:
     """Class CThostFtdcTradingAccountPasswordField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -419,13 +418,12 @@ class CThostFtdcTradingAccountPasswordField:
 
 
 # Register CThostFtdcTradingAccountPasswordField in _ctp:
-_ctp.CThostFtdcTradingAccountPasswordField_swigregister(
-    CThostFtdcTradingAccountPasswordField
-)
+_ctp.CThostFtdcTradingAccountPasswordField_swigregister(CThostFtdcTradingAccountPasswordField)
 
 
 class CThostFtdcTradingAccountPasswordUpdateV1Field:
     """Class CThostFtdcTradingAccountPasswordUpdateV1Field"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -464,6 +462,7 @@ _ctp.CThostFtdcTradingAccountPasswordUpdateV1Field_swigregister(
 
 class CThostFtdcTradingAccountPasswordUpdateField:
     """Class CThostFtdcTradingAccountPasswordUpdateField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -506,6 +505,7 @@ _ctp.CThostFtdcTradingAccountPasswordUpdateField_swigregister(
 
 class CThostFtdcTradingAccountReserveField:
     """Class CThostFtdcTradingAccountReserveField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )
@@ -537,13 +537,12 @@ class CThostFtdcTradingAccountReserveField:
 
 
 # Register CThostFtdcTradingAccountReserveField in _ctp:
-_ctp.CThostFtdcTradingAccountReserveField_swigregister(
-    CThostFtdcTradingAccountReserveField
-)
+_ctp.CThostFtdcTradingAccountReserveField_swigregister(CThostFtdcTradingAccountReserveField)
 
 
 class CThostFtdcSyncDelaySwapFrozenField:
     """Class CThostFtdcSyncDelaySwapFrozenField"""
+
     thisown = property(
         lambda x: x.this.own(), lambda x, v: x.this.own(v), doc='The membership flag'
     )

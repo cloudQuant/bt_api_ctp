@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 from bt_api_base.containers.accounts.account import AccountData
@@ -7,6 +8,7 @@ from bt_api_base.functions.utils import from_dict_get_float, from_dict_get_strin
 
 class CtpAccountData(AccountData):
     """Class CtpAccountData"""
+
     def __init__(
         self,
         account_info,
@@ -20,6 +22,7 @@ class CtpAccountData(AccountData):
         self.asset_type = asset_type
         self.exchange_name = 'CTP'
         self._initialized = False
+        self._data_initialized = False
         self.broker_id = None
         self.account_id = None
         self.pre_balance = None
@@ -36,7 +39,7 @@ class CtpAccountData(AccountData):
 
     def init_data(self):
         """init_data method"""
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.account_info
         if isinstance(info, dict):
@@ -55,6 +58,7 @@ class CtpAccountData(AccountData):
             balance = float(self.balance or 0.0)
             margin = float(self.curr_margin or 0.0)
             self.risk_degree = margin / balance if balance > 0 else 0.0
+        self._data_initialized = True
         self._initialized = True
         return self
 

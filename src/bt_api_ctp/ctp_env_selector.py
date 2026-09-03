@@ -1,12 +1,12 @@
 """
-CTP SimNow 
+CTP SimNow
 
  SimNow ：
 - ：（），3
 - ：7x24 ， 16:00~09:00， 16:00~12:00
 
 ：
-    from bt_api_py.ctp_env_selector import get_ctp_fronts
+    from bt_api_ctp.ctp_env_selector import get_ctp_fronts
     td_front, md_front, env_name = get_ctp_fronts()
 """
 
@@ -33,11 +33,11 @@ _NIGHT_SESSION_AFTER_MIDNIGHT = (time(0, 0), time(2, 30))
 # ：
 #   : 16:00 ~  09:00
 #   : 16:00 ~  12:00
-# : 
+# :
 
 
 def _is_weekday(dt: datetime) -> bool:
-    """ (~)"""
+    """(~)"""
     return dt.weekday() < 5
 
 
@@ -45,7 +45,7 @@ def _in_trading_session(now: datetime) -> bool:
     """"""
     t = now.time()
 
-    #  00:00~02:30 — 
+    #  00:00~02:30 —
     if _NIGHT_SESSION_AFTER_MIDNIGHT[0] <= t <= _NIGHT_SESSION_AFTER_MIDNIGHT[1]:
         return True
 
@@ -57,13 +57,13 @@ def _is_set1_available(now: datetime) -> bool:
     """（）"""
     t = now.time()
 
-    #  00:00~02:30: 
+    #  00:00~02:30:
     if _NIGHT_SESSION_AFTER_MIDNIGHT[0] <= t <= _NIGHT_SESSION_AFTER_MIDNIGHT[1]:
-        #  (weekday=5) 
+        #  (weekday=5)
         prev_day_weekday = (now.weekday() - 1) % 7
-        return prev_day_weekday < 5  # 
+        return prev_day_weekday < 5  #
 
-    #  +  21:00 
+    #  +  21:00
     if not _is_weekday(now):
         return False
 
@@ -101,10 +101,11 @@ def get_ctp_fronts(
     elif env == 'set2':
         return _get_set2_fronts()
     else:
-        # auto 
+        # auto
         if _is_set1_available(now):
             return _get_set1_fronts()
-        else: return _get_set2_fronts()
+        else:
+            return _get_set2_fronts()
 
 
 def _get_set1_fronts() -> tuple[str, str, str]:
@@ -112,17 +113,17 @@ def _get_set1_fronts() -> tuple[str, str, str]:
     group = os.environ.get('CTP_SET1_GROUP', '1').strip()
     td = os.environ.get(f'CTP_SET1_TD_FRONT_{group}', 'tcp://182.254.243.31:30001')
     md = os.environ.get(f'CTP_SET1_MD_FRONT_{group}', 'tcp://182.254.243.31:30011')
-    # 
+    #
     os.environ['CTP_TD_FRONT'] = td
     os.environ['CTP_MD_FRONT'] = md
     return td, md, f'set1_group{group}'
 
 
 def _get_set2_fronts() -> tuple[str, str, str]:
-    """ 7x24 """
+    """7x24"""
     td = os.environ.get('CTP_SET2_TD_FRONT', 'tcp://182.254.243.31:40001')
     md = os.environ.get('CTP_SET2_MD_FRONT', 'tcp://182.254.243.31:40011')
-    # 
+    #
     os.environ['CTP_TD_FRONT'] = td
     os.environ['CTP_MD_FRONT'] = md
     return td, md, 'set2_7x24'

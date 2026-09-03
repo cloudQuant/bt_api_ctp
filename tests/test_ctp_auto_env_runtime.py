@@ -1,4 +1,5 @@
 """Module documentation"""
+
 from __future__ import annotations
 
 import atexit
@@ -12,7 +13,7 @@ import pytest
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / '.env')
 
 _CTP_ATEXIT_REGISTERED = False
 
@@ -21,7 +22,7 @@ _CTP_ATEXIT_REGISTERED = False
 def _check_ctp_available() -> bool:
     """Check if CTP native extension is available."""
     try:
-        from bt_api_py.ctp._ctp_base import is_ctp_native_loaded
+        from bt_api_ctp.ctp._ctp_base import is_ctp_native_loaded
 
         return is_ctp_native_loaded()
     except ImportError:
@@ -31,7 +32,7 @@ def _check_ctp_available() -> bool:
 # Skip entire module if CTP is not available (e.g., in CI without Git LFS)
 pytestmark = pytest.mark.skipif(
     not _check_ctp_available(),
-    reason="CTP C++ extension (_ctp) not available. Run: git lfs install && git lfs pull",
+    reason='CTP C++ extension (_ctp) not available. Run: git lfs install && git lfs pull',
 )
 
 
@@ -47,43 +48,43 @@ def _ensure_ctp_atexit() -> None:
 
 
 def _check_ctp_service(front: str, timeout: float = 3.0) -> str:
-    host, port_text = front.replace("tcp://", "").split(":")
+    host, port_text = front.replace('tcp://', '').split(':')
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
         sock.connect((host, int(port_text)))
         try:
             data = sock.recv(128)
-            return "ok" if data else "no_service"
+            return 'ok' if data else 'no_service'
         except TimeoutError:
-            return "no_service"
+            return 'no_service'
         finally:
             sock.close()
     except TimeoutError:
-        return "timeout"
+        return 'timeout'
     except ConnectionRefusedError:
-        return "refused"
+        return 'refused'
     except Exception as exc:
-        return f"error:{exc}"
+        return f'error:{exc}'
 
 
 def _runtime_config() -> tuple[dict[str, str], str, str, str]:
-    from bt_api_py.ctp_env_selector import apply_ctp_env
+    from bt_api_ctp.ctp_env_selector import apply_ctp_env
 
     td_front, md_front, env_name = apply_ctp_env()
-    broker_id = os.environ.get("CTP_BROKER_ID") or os.environ.get("SIMNOW_BROKER_ID") or "9999"
-    user_id = os.environ.get("CTP_USER_ID") or os.environ.get("SIMNOW_USER_ID") or ""
-    password = os.environ.get("CTP_PASSWORD") or os.environ.get("SIMNOW_PASSWORD") or ""
-    app_id = os.environ.get("CTP_APP_ID", "simnow_client_test")
-    auth_code = os.environ.get("CTP_AUTH_CODE", "0000000000000000")
+    broker_id = os.environ.get('CTP_BROKER_ID') or os.environ.get('SIMNOW_BROKER_ID') or '9999'
+    user_id = os.environ.get('CTP_USER_ID') or os.environ.get('SIMNOW_USER_ID') or ''
+    password = os.environ.get('CTP_PASSWORD') or os.environ.get('SIMNOW_PASSWORD') or ''
+    app_id = os.environ.get('CTP_APP_ID', 'simnow_client_test')
+    auth_code = os.environ.get('CTP_AUTH_CODE', '0000000000000000')
     if not user_id or not password:
-        pytest.skip("CTP_USER_ID/CTP_PASSWORD or SIMNOW_USER_ID/SIMNOW_PASSWORD not configured")
+        pytest.skip('CTP_USER_ID/CTP_PASSWORD or SIMNOW_USER_ID/SIMNOW_PASSWORD not configured')
     config = {
-        "broker_id": broker_id,
-        "user_id": user_id,
-        "password": password,
-        "app_id": app_id,
-        "auth_code": auth_code,
+        'broker_id': broker_id,
+        'user_id': user_id,
+        'password': password,
+        'app_id': app_id,
+        'auth_code': auth_code,
     }
     return config, td_front, md_front, env_name
 
@@ -97,10 +98,10 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 
     config, expected_td, expected_md, env_name = _runtime_config()
     svc_status = _check_ctp_service(expected_td)
-    if svc_status == "refused":
-        pytest.skip(f"CTP front {expected_td} refused connection (env={env_name})")
-    if svc_status == "timeout" or svc_status.startswith("error:"):
-        pytest.skip(f"CTP front {expected_td} unreachable: {svc_status}")
+    if svc_status == 'refused':
+        pytest.skip(f'CTP front {expected_td} refused connection (env={env_name})')
+    if svc_status == 'timeout' or svc_status.startswith('error:'):
+        pytest.skip(f'CTP front {expected_td} unreachable: {svc_status}')
 
     feed = CtpRequestDataFuture(queue.Queue(), connect_timeout=20, **config)
     assert feed.td_front == expected_td
@@ -109,7 +110,7 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 
     try:
         feed.connect()
-        assert feed._connected, f"CtpRequestDataFuture failed to connect via auto env {env_name}"
+        assert feed._connected, f'CtpRequestDataFuture failed to connect via auto env {env_name}'
         assert feed.trader_client is not None
         assert feed.trader_client.is_ready
     finally:
@@ -122,17 +123,17 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 def test_btapi_ctp_feed_uses_auto_env_fronts_and_connects() -> None:
     """test_btapi_ctp_feed_uses_auto_env_fronts_and_connects function"""
     _ensure_ctp_atexit()
-    from bt_api_py.bt_api import BtApi
+    BtApi = pytest.importorskip('bt_api_py.bt_api').BtApi
 
     config, expected_td, expected_md, env_name = _runtime_config()
     svc_status = _check_ctp_service(expected_td)
-    if svc_status == "refused":
-        pytest.skip(f"CTP front {expected_td} refused connection (env={env_name})")
-    if svc_status == "timeout" or svc_status.startswith("error:"):
-        pytest.skip(f"CTP front {expected_td} unreachable: {svc_status}")
+    if svc_status == 'refused':
+        pytest.skip(f'CTP front {expected_td} refused connection (env={env_name})')
+    if svc_status == 'timeout' or svc_status.startswith('error:'):
+        pytest.skip(f'CTP front {expected_td} unreachable: {svc_status}')
 
-    api = BtApi({"CTP___FUTURE": dict(config)}, debug=True)
-    feed = api.get_request_api("CTP___FUTURE")
+    api = BtApi({'CTP___FUTURE': dict(config)}, debug=True)
+    feed = api.get_request_api('CTP___FUTURE')
     assert feed is not None
     assert feed.td_front == expected_td
     assert feed.md_front == expected_md
@@ -140,7 +141,7 @@ def test_btapi_ctp_feed_uses_auto_env_fronts_and_connects() -> None:
 
     try:
         feed.connect()
-        assert feed._connected, f"BtApi CTP feed failed to connect via auto env {env_name}"
+        assert feed._connected, f'BtApi CTP feed failed to connect via auto env {env_name}'
         assert feed.trader_client is not None
         assert feed.trader_client.is_ready
     finally:

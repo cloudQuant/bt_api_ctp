@@ -1,4 +1,5 @@
 """Module-level docstring."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -35,6 +36,7 @@ CTP_OFFSET_MAP = {
 
 class CtpOrderData(OrderData):
     """Class CtpOrderData"""
+
     def __init__(
         self,
         order_info: Any,
@@ -48,6 +50,7 @@ class CtpOrderData(OrderData):
         self.asset_type = asset_type
         self.exchange_name = 'CTP'
         self._initialized = False
+        self._data_initialized = False
         self.instrument_id = None
         self.order_ref = None
         self.order_sys_id = None
@@ -67,7 +70,7 @@ class CtpOrderData(OrderData):
 
     def init_data(self):
         """init_data method"""
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.order_info
         if isinstance(info, dict):
@@ -77,25 +80,20 @@ class CtpOrderData(OrderData):
             direction_key = from_dict_get_string(info, 'Direction', '0') or '0'
             self.direction = CTP_DIRECTION_MAP.get(direction_key, 'buy')
             offset_char = from_dict_get_string(info, 'CombOffsetFlag', '0') or '0'
-            self.offset = CTP_OFFSET_MAP.get(
-                offset_char[0] if offset_char else '0', 'open'
-            )
+            self.offset = CTP_OFFSET_MAP.get(offset_char[0] if offset_char else '0', 'open')
             self.limit_price = from_dict_get_float(info, 'LimitPrice', 0.0)
-            self.volume_total_original = from_dict_get_int(
-                info, 'VolumeTotalOriginal', 0
-            )
+            self.volume_total_original = from_dict_get_int(info, 'VolumeTotalOriginal', 0)
             self.volume_traded = from_dict_get_int(info, 'VolumeTraded', 0)
             self.volume_total = from_dict_get_int(info, 'VolumeTotal', 0)
             status_key = from_dict_get_string(info, 'OrderStatus', 'a') or 'a'
-            self.order_status = CTP_ORDER_STATUS_MAP.get(
-                status_key, OrderStatus.SUBMITTED
-            )
+            self.order_status = CTP_ORDER_STATUS_MAP.get(status_key, OrderStatus.SUBMITTED)
             self.insert_time = from_dict_get_string(info, 'InsertTime')
             self.update_time = from_dict_get_string(info, 'UpdateTime')
             self.status_msg = from_dict_get_string(info, 'StatusMsg')
             self.exchange_id = from_dict_get_string(info, 'ExchangeID')
             self.front_id = from_dict_get_int(info, 'FrontID')
             self.session_id = from_dict_get_int(info, 'SessionID')
+        self._data_initialized = True
         self._initialized = True
         return self
 

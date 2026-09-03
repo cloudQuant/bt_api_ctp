@@ -1,7 +1,8 @@
-#  — 
+#  —
 # : from bt_api_py.ctp.ctp_trader_api import CThostFtdcTraderApi
 # : from bt_api_py.ctp.ctp_structs_order import CThostFtdcInputOrderField
 """Module-level docstring."""
+
 from __future__ import annotations
 
 import contextlib

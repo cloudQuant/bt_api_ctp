@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.machinery
+import platform
+import sys
 import weakref
+from pathlib import Path
 from sys import float_info, stderr
 from traceback import print_exception
 from types import ModuleType
@@ -113,12 +117,42 @@ class _FallbackCtpModule(ModuleType):
         return lambda *args, **kwargs: None
 
 
+def _ctp_package_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _expected_ctp_extension_names() -> list[str]:
+    return [f'_ctp{suffix}' for suffix in importlib.machinery.EXTENSION_SUFFIXES]
+
+
+def _available_ctp_extension_names() -> list[str]:
+    package_dir = _ctp_package_dir()
+    return sorted(
+        path.name
+        for path in package_dir.glob('_ctp*')
+        if path.is_file() and path.name != '_ctp_base.py'
+    )
+
+
+def _format_ctp_import_warning(import_error: Exception) -> str:
+    expected = _expected_ctp_extension_names()
+    available = _available_ctp_extension_names()
+    matching = [name for name in available if name in expected]
+    if matching:
+        reason = f'matching extension failed to load. matching={", ".join(matching)}'
+    else:
+        reason = 'no bundled extension matches this interpreter'
+    return (
+        'CTP C++ extension (_ctp) failed to load; '
+        f'{reason}; expected={", ".join(expected)}; '
+        f'available={", ".join(available) or "none"}; '
+        f'import_error={import_error}. '
+        'All CTP operations will silently no-op.'
+    )
+
+
 try:
-    if (
-        getattr(globals().get('__spec__'), 'parent', None)
-        or __package__
-        or '.' in __name__
-    ):
+    if getattr(globals().get('__spec__'), 'parent', None) or __package__ or '.' in __name__:
         from . import _ctp
     else:
         import _ctp
@@ -126,9 +160,7 @@ except Exception as _ctp_import_error:
     import warnings as _warnings
 
     _warnings.warn(
-        f'CTP C++ extension (_ctp) failed to load: {_ctp_import_error}. '
-        'All CTP operations will silently no-op. '
-        'If using Git LFS, run: git lfs install && git lfs pull',
+        _format_ctp_import_warning(_ctp_import_error),
         RuntimeWarning,
         stacklevel=1,
     )
@@ -147,6 +179,59 @@ def get_ctp_import_error():
     return None
 
 
+def get_ctp_native_diagnostics() -> dict[str, object]:
+    """Return actionable diagnostics for the vendored CTP native extension."""
+    expected = _expected_ctp_extension_names()
+    available = _available_ctp_extension_names()
+    matching = [name for name in available if name in expected]
+    native_loaded = is_ctp_native_loaded()
+    import_error = get_ctp_import_error()
+
+    if native_loaded:
+        reason = 'native_loaded'
+    elif not matching:
+        reason = 'missing_extension_for_platform'
+    else:
+        reason = 'matching_extension_failed_to_load'
+
+    return {
+        'native_loaded': native_loaded,
+        'reason': reason,
+        'package_dir': str(_ctp_package_dir()),
+        'python_version': '.'.join(str(part) for part in sys.version_info[:3]),
+        'platform': platform.platform(),
+        'machine': platform.machine(),
+        'extension_suffixes': list(importlib.machinery.EXTENSION_SUFFIXES),
+        'expected_extensions': expected,
+        'available_extensions': available,
+        'matching_extensions': matching,
+        'import_error': str(import_error) if import_error else '',
+    }
+
+
+def format_ctp_native_diagnostics() -> str:
+    """Format native-extension diagnostics for startup and health errors."""
+    diagnostics = get_ctp_native_diagnostics()
+    if diagnostics['native_loaded']:
+        return 'CTP C++ extension (_ctp) is loaded'
+
+    expected = ', '.join(str(item) for item in diagnostics['expected_extensions'])
+    available = ', '.join(str(item) for item in diagnostics['available_extensions']) or 'none'
+    matching = ', '.join(str(item) for item in diagnostics['matching_extensions']) or 'none'
+    base = (
+        'CTP C++ extension (_ctp) not available for '
+        f'{diagnostics["platform"]} / Python {diagnostics["python_version"]}; '
+        f'package_dir={diagnostics["package_dir"]}'
+    )
+    if diagnostics['reason'] == 'missing_extension_for_platform':
+        detail = f'no bundled extension matches this interpreter. expected={expected}; available={available}'
+    else:
+        detail = f'matching extension failed to load. matching={matching}; available={available}'
+    if diagnostics['import_error']:
+        detail = f'{detail}; import_error={diagnostics["import_error"]}'
+    return f'{base}; {detail}'
+
+
 def _swig_setattr_nondynamic_instance_variable(setter):
     def set_instance_attr(self, name, value):
         if name == 'this':
@@ -155,7 +240,8 @@ def _swig_setattr_nondynamic_instance_variable(setter):
             self.this.own(value)
         elif hasattr(self, name) and isinstance(getattr(type(self), name), property):
             setter(self, name, value)
-        else: raise AttributeError(f'You cannot add instance attributes to {self}')
+        else:
+            raise AttributeError(f'You cannot add instance attributes to {self}')
 
     return set_instance_attr
 
@@ -164,7 +250,8 @@ def _swig_setattr_nondynamic_class_variable(setter):
     def set_class_attr(cls, name, value):
         if hasattr(cls, name) and not isinstance(getattr(cls, name), property):
             setter(cls, name, value)
-        else: raise AttributeError(f'You cannot add class attributes to {cls}')
+        else:
+            raise AttributeError(f'You cannot add class attributes to {cls}')
 
     return set_class_attr
 
@@ -200,9 +287,7 @@ def _swig_repr(self):
         else:
             values.append(f'{key}: "{value}"')
 
-    return (
-        f'<{self.__class__.__module__}.{self.__class__.__name__}; {", ".join(values)}>'
-    )
+    return f'<{self.__class__.__module__}.{self.__class__.__name__}; {", ".join(values)}>'
 
 
 __all__ = [
@@ -214,6 +299,8 @@ __all__ = [
     '_SwigNonDynamicMeta',
     'is_ctp_native_loaded',
     'get_ctp_import_error',
+    'get_ctp_native_diagnostics',
+    'format_ctp_native_diagnostics',
     'print_exception',
     'stderr',
     'weakref',

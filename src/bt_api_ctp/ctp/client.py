@@ -1,29 +1,29 @@
 """
- / High-level CTP Client Wrappers
+/ High-level CTP Client Wrappers
 
- API，。3 。
+API，。3 。
 
- / Usage:
+/ Usage:
 
-    # 
-    from bt_api_py.ctp.client import MdClient
+   #
+   from bt_api_ctp.ctp.client import MdClient
 
-    def on_tick(data):
-        print(data.InstrumentID, data.LastPrice)
+   def on_tick(data):
+       print(data.InstrumentID, data.LastPrice)
 
-    client = MdClient("tcp://182.254.243.31:30011", "9999", "user", "pass")
-    client.on_tick = on_tick
-    client.subscribe(["IF2603", "IC2603"])
-    client.start()  # 
+   client = MdClient("tcp://182.254.243.31:30011", "9999", "user", "pass")
+   client.on_tick = on_tick
+   client.subscribe(["IF2603", "IC2603"])
+   client.start()  #
 
-    # 
-    from bt_api_py.ctp.client import TraderClient
+   #
+   from bt_api_ctp.ctp.client import TraderClient
 
-    client = TraderClient("tcp://182.254.243.31:30001", "9999", "user", "pass",
-                          app_id="simnow_client_test", auth_code="0000000000000000")
-    client.start()
-    client.wait_ready(timeout=15)
-    print(client.query_account())
+   client = TraderClient("tcp://182.254.243.31:30001", "9999", "user", "pass",
+                         app_id="simnow_client_test", auth_code="0000000000000000")
+   client.start()
+   client.wait_ready(timeout=15)
+   print(client.query_account())
 """
 
 from __future__ import annotations
@@ -36,11 +36,9 @@ import threading
 import time
 from contextlib import suppress
 
-from ._ctp_base import get_ctp_import_error, is_ctp_native_loaded
+from ._ctp_base import format_ctp_native_diagnostics, is_ctp_native_loaded
 
-_USE_EXTERNAL_CTP = str(
-    os.environ.get('BT_API_PY_USE_EXTERNAL_CTP') or ''
-).strip().lower() in {
+_USE_EXTERNAL_CTP = str(os.environ.get('BT_API_PY_USE_EXTERNAL_CTP') or '').strip().lower() in {
     '1',
     'true',
     'yes',
@@ -82,11 +80,11 @@ def _check_native_module():
     if _CTP_RUNTIME_SOURCE == 'external_ctp_python':
         return
     if not is_ctp_native_loaded():
-        err = get_ctp_import_error()
         raise ImportError(
-            f'CTP C++ extension (_ctp) not available: {err}. '
+            f'{format_ctp_native_diagnostics()}. '
             'Connections will silently fail. '
-            'If using Git LFS, run: git lfs install && git lfs pull'
+            'Install a native wheel matching this OS and Python ABI, or set '
+            'BT_API_PY_USE_EXTERNAL_CTP=1 with a compatible ctp package.'
         )
 
 
@@ -140,7 +138,7 @@ def _snapshot_rsp_info(rsp_info):
 
 
 # ===========================================================================
-#  MdClient - 
+#  MdClient -
 # ===========================================================================
 
 
@@ -196,9 +194,9 @@ class MdClient:
     """
 
     Args: front: ， "tcp://182.254.243.31:30011"
-        broker_id: 
-        user_id: 
-        password: 
+        broker_id:
+        user_id:
+        password:
     """
 
     def __init__(self, front, broker_id, user_id, password):
@@ -261,9 +259,9 @@ class MdClient:
     def stop(self):
         """
 
-        macOS  CTP C++ API  Release()  Join() 
+        macOS  CTP C++ API  Release()  Join()
          segfault。:
-        -  (daemon thread): ， daemon 
+        -  (daemon thread): ， daemon
         -  (Join ):  Release()
         """
         self._loggedin = False
@@ -278,7 +276,7 @@ class MdClient:
             except Exception:
                 pass
             #  daemon thread ， Release，
-            # daemon=True 
+            # daemon=True
 
     @property
     def is_ready(self):
@@ -287,7 +285,7 @@ class MdClient:
 
 
 # ===========================================================================
-#  TraderClient - 
+#  TraderClient -
 # ===========================================================================
 
 
@@ -397,9 +395,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 request_id=nRequestID,
             )
 
-    def OnRspSettlementInfoConfirm(
-        self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast
-    ):
+    def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
         """OnRspSettlementInfoConfirm method"""
         ok = pRspInfo is None or getattr(pRspInfo, 'ErrorID', 0) == 0
         if ok:
@@ -468,11 +464,11 @@ class TraderClient:
     """
 
     Args: front:
-        broker_id: 
-        user_id: 
-        password: 
+        broker_id:
+        user_id:
+        password:
         app_id:  AppID
-        auth_code: 
+        auth_code:
     """
 
     def __init__(
@@ -592,19 +588,22 @@ class TraderClient:
 
     def wait_order_event(self, timeout=5):
         """Wait for the next order callback snapshot."""
-        try: return self._order_events.get(timeout=timeout)
+        try:
+            return self._order_events.get(timeout=timeout)
         except queue.Empty:
             return None
 
     def wait_trade_event(self, timeout=5):
         """Wait for the next trade callback snapshot."""
-        try: return self._trade_events.get(timeout=timeout)
+        try:
+            return self._trade_events.get(timeout=timeout)
         except queue.Empty:
             return None
 
     def wait_error_event(self, timeout=5):
         """Wait for the next error callback snapshot."""
-        try: return self._error_events.get(timeout=timeout)
+        try:
+            return self._error_events.get(timeout=timeout)
         except queue.Empty:
             return None
 
@@ -651,16 +650,12 @@ class TraderClient:
         if self.on_trade:
             self.on_trade(trade_field)
 
-    def _push_error_event(
-        self, event_type, rsp_info=None, field=None, request_id=None
-    ) -> None:
+    def _push_error_event(self, event_type, rsp_info=None, field=None, request_id=None) -> None:
         payload = {
             'event': event_type,
             'request_id': request_id,
             'error_id': getattr(rsp_info, 'ErrorID', 0) if rsp_info is not None else 0,
-            'error_msg': getattr(rsp_info, 'ErrorMsg', '')
-            if rsp_info is not None
-            else '',
+            'error_msg': getattr(rsp_info, 'ErrorMsg', '') if rsp_info is not None else '',
             'field': _snapshot_ctp_field(field),
         }
         self._error_events.put(payload)
@@ -669,15 +664,15 @@ class TraderClient:
 
     @property
     def api(self):
-        """ CThostFtdcTraderApi ，"""
+        """CThostFtdcTraderApi ，"""
         return self._api
 
     def stop(self):
         """
 
-        macOS  CTP C++ API  Release()  Join() 
+        macOS  CTP C++ API  Release()  Join()
          segfault。:
-        -  (daemon thread): ， daemon 
+        -  (daemon thread): ， daemon
         -  (Join ):  Release()
         """
         self._ready = False
