@@ -17,6 +17,9 @@ class CtpAccountData(AccountData):
         self.asset_type = asset_type
         self.exchange_name = "CTP"
         self._initialized = False
+        # AutoInitMixin sets _initialized before calling init_data() to avoid
+        # re-entrancy. Keep a separate flag for completed payload parsing.
+        self._data_initialized = False
         self.broker_id = None
         self.account_id = None
         self.pre_balance = None
@@ -32,7 +35,7 @@ class CtpAccountData(AccountData):
         self.risk_degree = None
 
     def init_data(self):
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.account_info
         if isinstance(info, dict):
@@ -51,6 +54,7 @@ class CtpAccountData(AccountData):
             balance = float(self.balance or 0.0)
             margin = float(self.curr_margin or 0.0)
             self.risk_degree = margin / balance if balance > 0 else 0.0
+        self._data_initialized = True
         self._initialized = True
         return self
 

@@ -11,7 +11,7 @@ class _FakeFeed:
 
 def _stream_class(outcomes: list[bool]):
     class _FakeStream:
-        instances: list["_FakeStream"] = []
+        instances: list[_FakeStream] = []
 
         def __init__(self, *_args, **_kwargs) -> None:
             self.started = 0

@@ -5,11 +5,10 @@ import pathlib
 import shutil
 import subprocess
 import sys
-from typing import Iterable
+from collections.abc import Iterable
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
-
 
 ROOT = pathlib.Path(__file__).parent.resolve()
 PACKAGE_DIR = ROOT / "src" / "bt_api_ctp"
@@ -104,7 +103,9 @@ def _extension_kwargs(platform_dir: pathlib.Path) -> dict[str, object]:
     if sys.platform == "darwin":
         frameworks = _runtime_paths(platform_dir)
         include_dirs.insert(0, str(_mac_include_dir()))
-        include_dirs.extend(str(framework / "Versions" / "A" / "Headers") for framework in frameworks)
+        include_dirs.extend(
+            str(framework / "Versions" / "A" / "Headers") for framework in frameworks
+        )
         extra_compile_args.extend(["-std=c++11"])
         extra_link_args.extend(["-Wl,-rpath,@loader_path"])
         extra_link_args.extend(str(_mac_framework_binary(framework)) for framework in frameworks)
@@ -135,7 +136,9 @@ class BuildExt(build_ext):
         self._copy_runtime_libraries()
 
     def _validate_inputs(self) -> None:
-        missing = [path for path in [WRAPPER, *_runtime_paths(_platform_api_dir())] if not path.exists()]
+        missing = [
+            path for path in [WRAPPER, *_runtime_paths(_platform_api_dir())] if not path.exists()
+        ]
         if missing:
             formatted = "\n".join(f"  - {path}" for path in missing)
             raise RuntimeError(f"Required CTP build inputs are missing:\n{formatted}")

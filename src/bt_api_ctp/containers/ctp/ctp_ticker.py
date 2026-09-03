@@ -21,6 +21,7 @@ class CtpTickerData(TickerData):
         self.asset_type = asset_type
         self.exchange_name = "CTP"
         self._initialized = False
+        self._data_initialized = False
         self.instrument_id = None
         self.last_price_val = None
         self.pre_settlement_price = None
@@ -42,7 +43,7 @@ class CtpTickerData(TickerData):
         self.exchange_id = None
 
     def init_data(self):
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.ticker_info
         if isinstance(info, dict):
@@ -65,6 +66,7 @@ class CtpTickerData(TickerData):
             self.update_millisec = from_dict_get_int(info, "UpdateMillisec", 0)
             self.trading_day = from_dict_get_string(info, "TradingDay")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
+        self._data_initialized = True
         self._initialized = True
         return self
 

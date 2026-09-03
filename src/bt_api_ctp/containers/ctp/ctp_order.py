@@ -46,6 +46,7 @@ class CtpOrderData(OrderData):
         self.asset_type = asset_type
         self.exchange_name = "CTP"
         self._initialized = False
+        self._data_initialized = False
         self.instrument_id = None
         self.order_ref = None
         self.order_sys_id = None
@@ -64,7 +65,7 @@ class CtpOrderData(OrderData):
         self.session_id = None
 
     def init_data(self):
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.order_info
         if isinstance(info, dict):
@@ -87,6 +88,7 @@ class CtpOrderData(OrderData):
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
             self.front_id = ctp_int(info, "FrontID")
             self.session_id = ctp_int(info, "SessionID")
+        self._data_initialized = True
         self._initialized = True
         return self
 

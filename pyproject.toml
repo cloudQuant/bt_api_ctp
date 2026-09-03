@@ -74,6 +74,7 @@ quote-style = "double"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "ctp: CTP related tests",
+    "ticker: Tests covering ticker data and event handling",
     "network: Tests requiring network access",
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (may require external services)",

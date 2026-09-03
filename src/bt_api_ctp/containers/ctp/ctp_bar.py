@@ -21,6 +21,9 @@ class CtpBarData(BarData):
         self.asset_type = asset_type
         self.exchange_name = "CTP"
         self._initialized = False
+        # See CtpAccountData: this must not share AutoInitMixin's re-entrancy
+        # guard, otherwise the first getter can skip parsing the payload.
+        self._data_initialized = False
         self.open_time = None
         self.close_time = None
         self.open_price = None
@@ -33,7 +36,7 @@ class CtpBarData(BarData):
         self.settlement_price_val = None
 
     def init_data(self):
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.bar_info
         if isinstance(info, dict):
@@ -47,6 +50,7 @@ class CtpBarData(BarData):
             self.amount_val = from_dict_get_float(info, "amount", 0.0)
             self.open_interest = from_dict_get_float(info, "open_interest", 0.0)
             self.settlement_price_val = from_dict_get_float(info, "settlement_price")
+        self._data_initialized = True
         self._initialized = True
         return self
 
@@ -60,9 +64,11 @@ class CtpBarData(BarData):
         return self.asset_type or ""
 
     def get_server_time(self):
+        self._ensure_init()
         return self.close_time or ""
 
     def get_open_time(self):
+        self._ensure_init()
         return self.open_time or ""
 
     def get_open_price(self):
@@ -84,6 +90,7 @@ class CtpBarData(BarData):
         return float(self.amount_val or 0.0)
 
     def get_close_time(self):
+        self._ensure_init()
         return self.close_time or ""
 
     def get_bar_status(self):

@@ -53,7 +53,13 @@ class TestCtpImports:
             has_external_ctp = False
         if has_external_ctp:
             import os
-            if os.environ.get("BT_API_PY_USE_EXTERNAL_CTP", "").lower() in ("1", "true", "yes", "on"):
+
+            if os.environ.get("BT_API_PY_USE_EXTERNAL_CTP", "").lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
                 assert get_ctp_runtime_source() == "external_ctp_python"
             else:
                 assert get_ctp_runtime_source() == "vendored_bt_api_py"

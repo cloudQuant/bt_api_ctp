@@ -27,6 +27,7 @@ class CtpTradeData(TradeData):
         )
         self.exchange_name = "CTP"
         self._initialized = False
+        self._data_initialized = False
         self.instrument_id = None
         self.trade_id_value = None
         self.order_ref = None
@@ -44,7 +45,7 @@ class CtpTradeData(TradeData):
         self._all_data = None
 
     def init_data(self):
-        if self._initialized:
+        if self._data_initialized:
             return self
         info = self.trade_info
         if isinstance(info, dict):
@@ -66,6 +67,7 @@ class CtpTradeData(TradeData):
             self.trade_time = from_dict_get_string(info, "TradeTime")
             self.trade_time_text = from_dict_get_string(info, "TradeTime")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
+        self._data_initialized = True
         self._initialized = True
         return self
 

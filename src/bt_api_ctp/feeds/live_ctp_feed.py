@@ -278,7 +278,9 @@ class CtpRequestData(Feed):
         try:
             side, order_kind = str(order_type or "").lower().split("-", 1)
         except ValueError as exc:
-            raise ValueError(f"CTP order_type must be '<buy|sell>-limit' (got {order_type!r}).") from exc
+            raise ValueError(
+                f"CTP order_type must be '<buy|sell>-limit' (got {order_type!r})."
+            ) from exc
         if side not in CTP_DIRECTION_FLAG:
             raise ValueError(f"CTP order side must be buy or sell (got {side!r}).")
         if order_kind != "limit":
