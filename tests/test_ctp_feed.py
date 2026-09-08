@@ -25,6 +25,25 @@ import threading
 import pytest
 
 
+class _CompleteResult:
+    def __init__(self, records):
+        self.records = tuple(records)
+        self.complete = True
+        self.request_id = 1
+        self.connection_generation = 1
+        self.is_last_seen = True
+        self.error_code = None
+        self.error_message = ""
+        self.timed_out = False
+        self.unsupported = False
+
+    def as_dict(self, *, include_records=False):
+        result = {"complete": True, "record_count": len(self.records)}
+        if include_records:
+            result["records"] = list(self.records)
+        return result
+
+
 class TestCtpImports:
     """测试 CTP 子模块导入"""
 
@@ -112,7 +131,9 @@ class TestCtpImports:
 
         assert ExchangeRegistry.has_exchange("CTP___FUTURE")
         assert ExchangeRegistry.get_balance_handler("CTP___FUTURE") is not None
-        assert ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
+        assert (
+            ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
+        )
 
     def test_split_submodule_imports(self):
         """验证拆分后的子模块可以独立导入"""
@@ -126,7 +147,9 @@ class TestCtpImports:
 
     def test_split_submodule_backward_compat(self):
         """验证拆分子模块与原始包导入返回相同对象 (向后兼容)"""
-        from bt_api_ctp.ctp import CThostFtdcInputOrderField as CThostFtdcInputOrderFieldInit
+        from bt_api_ctp.ctp import (
+            CThostFtdcInputOrderField as CThostFtdcInputOrderFieldInit,
+        )
         from bt_api_ctp.ctp import CThostFtdcMdApi as CThostFtdcMdApiInit
         from bt_api_ctp.ctp.ctp_md_api import CThostFtdcMdApi as CThostFtdcMdApiSubmod
         from bt_api_ctp.ctp.ctp_structs_order import (
@@ -391,7 +414,9 @@ class TestCtpOrderThreadingRegression:
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
         seen_order_refs = []
-        client.on_order = lambda order_field: seen_order_refs.append(order_field.OrderRef)
+        client.on_order = lambda order_field: seen_order_refs.append(
+            order_field.OrderRef
+        )
         spi = _TraderSpi(client)
 
         spi.OnRtnOrder(MockOrderField())
@@ -424,15 +449,21 @@ class TestCtpOrderThreadingRegression:
             def ReqQryOrder(self, field, req_id):
                 self.field = field
                 self.req_id = req_id
-                self.client._last_orders.append(MockOrderField())
-                self.client._query_done.set()
+                self.client._handle_query_callback(
+                    "orders", MockOrderField(), None, req_id, True
+                )
                 return 0
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
-        client._ready = True
+        client._connected = True
+        client._authentication_state = "authenticated"
+        client._login_state = "logged_in"
+        client._query_interval = 0
         client._api = FakeApi(client)
 
-        rows = client.query_orders(instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01)
+        rows = client.query_orders(
+            instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01
+        )
 
         assert rows[0].OrderSysID == "SYS001"
         assert client._api.field.BrokerID == "9999"
@@ -456,7 +487,9 @@ class TestCtpOrderThreadingRegression:
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
         seen_errors = []
-        client.on_error = lambda rsp_info: seen_errors.append((rsp_info.ErrorID, rsp_info.ErrorMsg))
+        client.on_error = lambda rsp_info: seen_errors.append(
+            (rsp_info.ErrorID, rsp_info.ErrorMsg)
+        )
         spi = _TraderSpi(client)
 
         spi.OnErrRtnOrderInsert(MockInputOrder(), MockRspInfo())
@@ -485,12 +518,21 @@ class TestCtpOrderThreadingRegression:
             def __init__(self):
                 self.api = FakeApi()
                 self.is_ready = True
+                self.is_read_only_ready = True
+                self.is_trading_ready = True
                 self._req_id = 7
                 self._front_id = 11
                 self._session_id = 22
 
             def next_order_ref(self):
                 return "108"
+
+            def _next_request_id(self):
+                self._req_id += 1
+                return self._req_id
+
+            def _record_request(self, _request_type):
+                return None
 
         feed = CtpRequestDataFuture(
             queue.Queue(),
@@ -531,9 +573,10 @@ class TestCtpOrderThreadingRegression:
 
         class FakeTrader:
             is_ready = True
+            is_read_only_ready = True
 
-            def query_orders(self, **_kwargs):
-                return [
+            def query_orders_result(self, **_kwargs):
+                records = [
                     {
                         "InstrumentID": "IF2506",
                         "OrderRef": "open-1",
@@ -587,6 +630,7 @@ class TestCtpOrderThreadingRegression:
                         "ExchangeID": "CFFEX",
                     },
                 ]
+                return _CompleteResult(records)
 
         feed = CtpRequestDataFuture(
             queue.Queue(),
@@ -627,9 +671,18 @@ class TestCtpOrderThreadingRegression:
             def __init__(self):
                 self.api = FakeApi()
                 self.is_ready = True
+                self.is_read_only_ready = True
+                self.is_trading_ready = True
                 self._req_id = 7
                 self._front_id = 11
                 self._session_id = 22
+
+            def _next_request_id(self):
+                self._req_id += 1
+                return self._req_id
+
+            def _record_request(self, _request_type):
+                return None
 
         feed = CtpRequestDataFuture(
             queue.Queue(),

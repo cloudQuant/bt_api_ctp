@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import platform
 import sys
@@ -123,7 +124,9 @@ def _expected_ctp_extension_names() -> list[str]:
 def _available_ctp_extension_names() -> list[str]:
     package_dir = _ctp_package_dir()
     return sorted(
-        p.name for p in package_dir.glob("_ctp*") if p.is_file() and p.name != "_ctp_base.py"
+        p.name
+        for p in package_dir.glob("_ctp*")
+        if p.is_file() and p.name != "_ctp_base.py"
     )
 
 
@@ -145,7 +148,11 @@ def _format_ctp_import_warning(import_error: Exception) -> str:
 
 
 try:
-    if getattr(globals().get("__spec__"), "parent", None) or __package__ or "." in __name__:
+    if (
+        getattr(globals().get("__spec__"), "parent", None)
+        or __package__
+        or "." in __name__
+    ):
         from . import _ctp
     else:
         import _ctp
@@ -179,8 +186,20 @@ def get_ctp_native_diagnostics() -> dict[str, object]:
     expected = _expected_ctp_extension_names()
     available = _available_ctp_extension_names()
     matching = [name for name in available if name in expected]
+    matching_paths = [package_dir / name for name in matching]
+    matching_sha256 = {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in matching_paths
+    }
     native_loaded = is_ctp_native_loaded()
     import_error = get_ctp_import_error()
+    loaded_origin = str(getattr(_ctp, "__file__", "") or "")
+    loaded_path = Path(loaded_origin).resolve() if loaded_origin else None
+    loaded_sha256 = (
+        hashlib.sha256(loaded_path.read_bytes()).hexdigest()
+        if native_loaded and loaded_path is not None and loaded_path.is_file()
+        else ""
+    )
 
     if native_loaded:
         reason = "native_loaded"
@@ -200,6 +219,12 @@ def get_ctp_native_diagnostics() -> dict[str, object]:
         "expected_extensions": expected,
         "available_extensions": available,
         "matching_extensions": matching,
+        "matching_extension_paths": [str(path) for path in matching_paths],
+        "matching_extension_sha256": matching_sha256,
+        "loaded_module": str(getattr(_ctp, "__name__", "") or ""),
+        "loaded_module_path": str(loaded_path) if loaded_path is not None else "",
+        "loaded_module_sha256": loaded_sha256,
+        "loaded_module_loader": type(getattr(_ctp, "__loader__", None)).__name__,
         "import_error": str(import_error) if import_error else "",
     }
 
@@ -282,7 +307,9 @@ def _swig_repr(self):
         else:
             values.append(f'{key}: "{value}"')
 
-    return f"<{self.__class__.__module__}.{self.__class__.__name__}; {', '.join(values)}>"
+    return (
+        f"<{self.__class__.__module__}.{self.__class__.__name__}; {', '.join(values)}>"
+    )
 
 
 __all__ = [

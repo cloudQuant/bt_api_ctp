@@ -23,6 +23,15 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpMarketStream,
     CtpRequestDataFuture,
     CtpTradeStream,
+    CtpVolumeDeltaTracker,
+    _positive_ctp_price,
+    _safe_ctp_quote_number,
+    _validate_ctp_quote,
+)
+from bt_api_ctp.instrument import (
+    build_ctp_instrument_spec,
+    ctp_instrument_evidence_errors,
+    ctp_query_bundle_errors,
 )
 
 _CTP_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"})
@@ -60,25 +69,57 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
 def _ctp_tick_timestamp_datetime(
     row: CtpTickerData, fallback_time: float | None = None
 ) -> tuple[float, datetime]:
-    stamp = float(time.time() if fallback_time is None else fallback_time)
+    resolved_event_time = getattr(row, "event_time_utc", None)
+    if fallback_time is None and isinstance(resolved_event_time, datetime):
+        if resolved_event_time.tzinfo is None:
+            resolved_event_time = resolved_event_time.replace(tzinfo=timezone.utc)
+        return resolved_event_time.timestamp(), resolved_event_time
+    quality_flags = getattr(row, "quality_flags", None)
+    if not isinstance(quality_flags, list):
+        quality_flags = list(quality_flags or ())
+        row.quality_flags = quality_flags
+    recv_time = getattr(row, "recv_time_utc", None)
+    if fallback_time is None and isinstance(recv_time, datetime):
+        stamp = recv_time.timestamp()
+    else:
+        stamp = float(time.time() if fallback_time is None else fallback_time)
     tick_dt = datetime.fromtimestamp(stamp, timezone.utc)
-    day = str(row.trading_day or "")
+    day = str(getattr(row, "action_day", "") or "")
     update_time = str(row.update_time_val or "")
     if len(day) == 8 and day.isdigit() and update_time:
-        tick_dt = datetime.strptime(f"{day} {update_time}", "%Y%m%d %H:%M:%S").replace(
-            microsecond=int(row.update_millisec or 0) * 1000,
-            tzinfo=_CTP_TZ,
-        )
-        stamp = tick_dt.timestamp()
+        try:
+            local_dt = datetime.strptime(
+                f"{day} {update_time}", "%Y%m%d %H:%M:%S"
+            ).replace(
+                microsecond=int(row.update_millisec or 0) * 1000,
+                tzinfo=_CTP_TZ,
+            )
+        except (TypeError, ValueError):
+            quality_flags.append("INVALID_EVENT_TIME")
+            row.event_time_source = "receive_fallback"
+        else:
+            tick_dt = local_dt.astimezone(timezone.utc)
+            stamp = tick_dt.timestamp()
+            row.event_time_source = "action_day"
+    else:
+        quality_flags.append("AMBIGUOUS_EVENT_DATE")
+        row.event_time_source = "receive_fallback"
+    row.event_time_utc = tick_dt
     return stamp, tick_dt
 
 
 class CtpGatewayAdapter(BaseGatewayAdapter):
     def __init__(self, **kwargs: Any) -> None:
         normalized = dict(kwargs)
-        normalized["md_front"] = normalized.get("md_front") or normalized.get("md_address") or ""
-        normalized["td_front"] = normalized.get("td_front") or normalized.get("td_address") or ""
-        normalized["user_id"] = normalized.get("user_id") or normalized.get("investor_id") or ""
+        normalized["md_front"] = (
+            normalized.get("md_front") or normalized.get("md_address") or ""
+        )
+        normalized["td_front"] = (
+            normalized.get("td_front") or normalized.get("td_address") or ""
+        )
+        normalized["user_id"] = (
+            normalized.get("user_id") or normalized.get("investor_id") or ""
+        )
         super().__init__(**normalized)
         self.q: queue.Queue[Any] = queue.Queue()
         self._stream_kwargs = normalized
@@ -88,12 +129,16 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self._create_streams()
         self.aliases: dict[str, set[str]] = defaultdict(set)
         self.last_volume: dict[str, float] = {}
+        self._volume_tracker = CtpVolumeDeltaTracker()
         self.last_price: dict[str, float] = {}
+        self._quote_execution_eligible: dict[str, bool] = {}
         self._price_ticks: dict[str, float] = {}
         self._symbol_specs: dict[str, dict[str, Any]] = {}
         self.running = False
         self.thread: threading.Thread | None = None
-        self.timeout = float(normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0)
+        self.timeout = float(
+            normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0
+        )
         configured_attempts = normalized.get("gateway_startup_attempts")
         if configured_attempts is None:
             configured_attempts = 3 if self.timeout >= 30.0 else 1
@@ -104,9 +149,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         )
 
     def _create_streams(self) -> None:
-        self.market = CtpMarketStream(self.q, **self._stream_kwargs)
-        self.trade = CtpTradeStream(self.q, **self._stream_kwargs)
         self.feed = CtpRequestDataFuture(None, **self._stream_kwargs)
+        self.market = CtpMarketStream(self.q, **self._stream_kwargs)
+        self.trade = CtpTradeStream(
+            self.q, request_feed=self.feed, **self._stream_kwargs
+        )
 
     def _startup_stream_timeout(self) -> float:
         if self.startup_attempts <= 1:
@@ -114,13 +161,20 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         return max(5.0, self.timeout / (self.startup_attempts * 2.0))
 
     def _stop_startup_streams(self) -> None:
-        self.feed._trader = None
-        self.feed._connected = False
-        for stream in (self.market, self.trade):
+        for stream in (self.trade, self.market):
             try:
                 stream.stop()
             except Exception:
                 pass
+        disconnect = getattr(self.feed, "disconnect", None)
+        if callable(disconnect):
+            try:
+                disconnect()
+            except Exception:
+                pass
+        else:
+            self.feed._trader = None
+            self.feed._connected = False
 
     def connect(self) -> None:
         if self.running:
@@ -157,20 +211,37 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.running = False
         if self.thread is not None:
             self.thread.join(timeout=1.0)
-        self.feed._trader = None
-        self.feed._connected = False
         self.market.stop()
         self.trade.stop()
+        disconnect = getattr(self.feed, "disconnect", None)
+        if callable(disconnect):
+            disconnect()
+        else:
+            self.feed._trader = None
+            self.feed._connected = False
 
     def get_session_state(self) -> dict[str, Any]:
         """Return the current CTP authentication/login state when available."""
         trader = getattr(getattr(self, "trade", None), "trader_client", None)
+        feed = getattr(self, "feed", None)
         getter = getattr(trader, "get_session_state", None)
         if callable(getter):
             state = getter()
             if isinstance(state, dict):
-                return dict(state)
-        return {"auth_state": "unknown", "login_state": "unknown"}
+                result = dict(state)
+                result.update(
+                    environment=getattr(feed, "ctp_environment", "simnow"),
+                    environment_profile=getattr(feed, "ctp_env_profile", "unknown"),
+                    environment_readiness=getattr(feed, "ctp_env_readiness", "unknown"),
+                )
+                return result
+        return {
+            "auth_state": "unknown",
+            "login_state": "unknown",
+            "environment": "simnow",
+            "environment_profile": getattr(feed, "ctp_env_profile", "unknown"),
+            "environment_readiness": getattr(feed, "ctp_env_readiness", "unknown"),
+        }
 
     def subscribe_symbols(self, symbols: list[str]) -> dict[str, Any]:
         topics = []
@@ -188,12 +259,21 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         return {"symbols": done}
 
     def get_balance(self) -> dict[str, Any]:
-        rows = self.feed.get_account().get_data()
+        response = self.feed.get_account()
+        if not response.get_status():
+            raise RuntimeError("ctp account query incomplete")
+        rows = response.get_data()
         if not rows:
-            return {"cash": 0.0, "value": 0.0, "equity": 0.0, "margin": 0.0}
+            raise RuntimeError(
+                "ctp account query complete but returned no account snapshot"
+            )
         row = rows[0].init_data()
-        balance = float(getattr(row, "balance", None) or row.get_total_wallet_balance() or 0.0)
-        available = float(getattr(row, "available", None) or row.get_available_margin() or 0.0)
+        balance = float(
+            getattr(row, "balance", None) or row.get_total_wallet_balance() or 0.0
+        )
+        available = float(
+            getattr(row, "available", None) or row.get_available_margin() or 0.0
+        )
         used_margin = float(getattr(row, "curr_margin", None) or 0.0)
         position_profit = float(getattr(row, "position_profit", None) or 0.0)
         return {
@@ -217,8 +297,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         }
 
     def get_positions(self) -> list[dict[str, Any]]:
+        response = self.feed.get_position()
+        if not response.get_status():
+            raise RuntimeError("ctp positions query incomplete")
         out = []
-        for raw in self.feed.get_position().get_data() or []:
+        for raw in response.get_data() or []:
             row = raw.init_data()
             instrument = row.get_symbol_name()
             exchange_id = row.exchange_id
@@ -258,7 +341,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
     def get_open_orders(self) -> list[dict[str, Any]]:
         response = self.feed.get_open_orders()
         if not response.get_status():
-            return []
+            raise RuntimeError("ctp open-orders query incomplete")
         out = []
         for raw in response.get_data() or []:
             row = raw.init_data()
@@ -276,6 +359,19 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
 
     fetch_open_orders = get_open_orders
 
+    def enumerate_instruments(self, symbol: str | None = None) -> dict[str, Any]:
+        """Return the native instrument set together with terminal evidence."""
+        response = self.feed.get_instruments(symbol=symbol)
+        extra = dict(response.get_extra_data() or {})
+        return {
+            "complete": bool(response.get_status() and extra.get("query_complete")),
+            "evidence_complete": bool(
+                response.get_status() and extra.get("evidence_complete")
+            ),
+            "records": list(response.get_data() or []),
+            "query_result": extra.get("query_result", {}),
+        }
+
     def get_symbol_info(self, symbol: str) -> dict[str, Any]:
         instrument, exchange_id = _split(symbol)
         cache_keys = [key for key in (str(symbol or "").strip(), instrument) if key]
@@ -284,31 +380,95 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             if cached:
                 return dict(cached)
 
-        trader = getattr(self.feed, "trader_client", None) or getattr(self.feed, "_trader", None)
+        trader = getattr(self.feed, "trader_client", None) or getattr(
+            self.feed, "_trader", None
+        )
         if trader is None:
             return {}
 
-        instrument_info = _safe_query(
-            getattr(trader, "query_instrument", None),
-            instrument,
-            exchange_id=exchange_id,
-            timeout=2,
+        result_methods = (
+            getattr(trader, "query_instruments_result", None),
+            getattr(trader, "query_instrument_margin_rate_result", None),
+            getattr(trader, "query_instrument_commission_rate_result", None),
         )
-        margin_info = _safe_query(
-            getattr(trader, "query_instrument_margin_rate", None),
+        if all(callable(method) for method in result_methods):
+            instrument_result = _safe_query(
+                result_methods[0], instrument, exchange_id=exchange_id, timeout=2
+            )
+            margin_result = _safe_query(
+                result_methods[1], instrument, exchange_id=exchange_id, timeout=2
+            )
+            commission_result = _safe_query(
+                result_methods[2], instrument, exchange_id=exchange_id, timeout=2
+            )
+            results = (instrument_result, margin_result, commission_result)
+            if any(
+                result is None or not getattr(result, "complete", False)
+                for result in results
+            ):
+                return {}
+            session_getter = getattr(trader, "get_session_state", None)
+            current_session = session_getter() if callable(session_getter) else None
+            if ctp_query_bundle_errors(results, current_session=current_session) or any(
+                len(result.records) != 1 for result in results
+            ):
+                return {}
+            instrument_info = instrument_result.first
+            margin_info = margin_result.first
+            commission_info = commission_result.first
+            if ctp_instrument_evidence_errors(
+                instrument,
+                exchange_id,
+                instrument_info,
+                margin_info,
+                commission_info,
+            ):
+                return {}
+            evidence = {
+                "metadata_complete": True,
+                "evidence_complete": True,
+                "instrument_query": instrument_result.as_dict(include_records=False),
+                "margin_query": margin_result.as_dict(include_records=False),
+                "commission_query": commission_result.as_dict(include_records=False),
+            }
+        else:
+            # Compatibility for third-party TraderClient shims predating QueryResult.
+            instrument_info = _safe_query(
+                getattr(trader, "query_instrument", None),
+                instrument,
+                exchange_id=exchange_id,
+                timeout=2,
+            )
+            margin_info = _safe_query(
+                getattr(trader, "query_instrument_margin_rate", None),
+                instrument,
+                exchange_id=exchange_id,
+                timeout=2,
+            )
+            commission_info = _safe_query(
+                getattr(trader, "query_instrument_commission_rate", None),
+                instrument,
+                exchange_id=exchange_id,
+                timeout=2,
+            )
+            evidence = {
+                "metadata_complete": False,
+                "evidence_complete": False,
+                "metadata_evidence": "legacy_trader_client_without_query_result",
+            }
+        spec = build_ctp_instrument_spec(
             instrument,
-            exchange_id=exchange_id,
-            timeout=2,
+            exchange_id,
+            instrument_info,
+            margin_info,
+            commission_info,
         )
-        commission_info = _safe_query(
-            getattr(trader, "query_instrument_commission_rate", None),
-            instrument,
-            exchange_id=exchange_id,
-            timeout=2,
-        )
-        spec = _symbol_spec(instrument, exchange_id, instrument_info, margin_info, commission_info)
         if spec:
-            for key in cache_keys + [spec.get("instrument", ""), spec.get("symbol", "")]:
+            spec.update(evidence)
+            for key in cache_keys + [
+                spec.get("instrument", ""),
+                spec.get("symbol", ""),
+            ]:
                 if key:
                     self._symbol_specs[str(key)] = dict(spec)
         return spec
@@ -322,15 +482,33 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         if tick > 0:
             self._price_ticks[instrument] = tick
             return tick
-        return 1.0
+        raise RuntimeError(
+            f"CTP metadata incomplete for {instrument}: positive PriceTick required"
+        )
 
     def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = str(
-            payload.get("data_name") or payload.get("symbol") or payload.get("instrument") or ""
+            payload.get("data_name")
+            or payload.get("symbol")
+            or payload.get("instrument")
+            or ""
         ).strip()
         instrument, exchange_id = _split(name)
         if not instrument:
             raise ValueError("CTP order rejected: missing instrument.")
+        if getattr(self, "_quote_execution_eligible", {}).get(instrument) is False:
+            raise RuntimeError(
+                f"CTP order for {instrument} rejected: latest quote failed quality checks"
+            )
+        time_in_force = str(
+            payload.get("time_in_force") or payload.get("tif") or "GFD"
+        ).upper()
+        if time_in_force == "DAY":
+            time_in_force = "GFD"
+        if time_in_force != "GFD":
+            raise ValueError(
+                f"CTP time_in_force {time_in_force!r} is unsupported; iteration 22 requires GFD."
+            )
         side = str(payload.get("side") or "buy").lower()
         if side not in CTP_DIRECTION_FLAG:
             raise ValueError(f"CTP order side {payload.get('side')!r} is unsupported.")
@@ -341,31 +519,33 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             raise ValueError(f"CTP order type {requested_order_type!r} is unsupported.")
         offset = str(payload.get("offset") or "open").lower()
         if offset not in CTP_OFFSET_FLAG:
-            raise ValueError(f"CTP order offset {payload.get('offset')!r} is unsupported.")
+            raise ValueError(
+                f"CTP order offset {payload.get('offset')!r} is unsupported."
+            )
         volume = _positive_int_lot(
             payload["size"] if "size" in payload else payload.get("volume"),
             "size",
         )
         price = payload.get("price")
         if requested_order_type == "market":
-            last_price = self.last_price.get(instrument or name)
-            if not last_price or last_price <= 0:
+            try:
+                last_price = _positive_ctp_price(
+                    self.last_price.get(instrument or name), "reference price"
+                )
+            except ValueError as exc:
                 raise RuntimeError(
                     f"CTP order for {instrument or name} rejected: no recent tick price available"
-                )
+                ) from exc
             price_tick = self._get_price_tick(instrument or name)
             slippage = price_tick * 5
             price = (
-                (last_price + slippage) if side == "buy" else max(last_price - slippage, price_tick)
+                (last_price + slippage)
+                if side == "buy"
+                else max(last_price - slippage, price_tick)
             )
             price = round(price, 4)
         else:
-            try:
-                price = float(price)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("CTP limit order requires a positive price.") from exc
-            if price <= 0:
-                raise ValueError("CTP limit order requires a positive price.")
+            price = _positive_ctp_price(price)
         client_order_id = _first_non_empty(
             payload,
             "client_order_id",
@@ -381,6 +561,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             offset=offset,
             client_order_id=client_order_id,
             exchange_id=exchange_id or payload.get("exchange_id") or "",
+            time_in_force="GFD",
         )
         if not response.get_status():
             raise RuntimeError("ctp order failed")
@@ -407,7 +588,10 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
 
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         name = str(
-            payload.get("data_name") or payload.get("symbol") or payload.get("instrument") or ""
+            payload.get("data_name")
+            or payload.get("symbol")
+            or payload.get("instrument")
+            or ""
         ).strip()
         instrument, exchange_id = _split(name)
         response = self.feed.cancel_order(
@@ -453,41 +637,77 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
 
     def _tick(self, row: CtpTickerData) -> None:
         instrument = row.get_symbol_name() or ""
-        price = float(row.get_last_price() or 0.0)
-        if not instrument or price <= 0:
+        if not instrument:
+            if "MISSING_INSTRUMENT" not in row.quality_flags:
+                row.quality_flags.append("MISSING_INSTRUMENT")
             return
-        self.last_price[instrument] = price
-        total = float(row.get_last_volume() or 0.0)
-        prev = self.last_volume.get(instrument)
-        self.last_volume[instrument] = total
-        volume = max(total - prev, 0.0) if prev is not None else 0.0
+        quote_valid = _validate_ctp_quote(row)
         stamp, dt = _ctp_tick_timestamp_datetime(row)
+        total = _safe_ctp_quote_number(row.get_cumulative_volume())
+        generation = int(getattr(row, "connection_generation", 0) or 0)
+        if row.volume_semantics != "delta" or row.delta_volume is None:
+            if quote_valid:
+                tracker = getattr(self, "_volume_tracker", None)
+                if tracker is None:
+                    tracker = self._volume_tracker = CtpVolumeDeltaTracker()
+                tracker.apply(row)
+            else:
+                row.apply_volume_delta(0, complete=False, quality="INVALID_QUOTE")
+        volume = float(row.delta_volume or 0.0)
+        volume_complete = bool(row.volume_complete)
+        volume_quality = str(row.volume_quality or "UNKNOWN")
+        execution_eligible = quote_valid and not row.quality_flags
+        eligibility = getattr(self, "_quote_execution_eligible", None)
+        if eligibility is None:
+            eligibility = self._quote_execution_eligible = {}
+        eligibility[instrument] = execution_eligible
+        price = _safe_ctp_quote_number(row.get_last_price())
+        if quote_valid:
+            self.last_price[instrument] = price
+            self.last_volume[instrument] = total
         for alias in self.aliases.get(instrument) or {instrument}:
-            self.emit(
-                CHANNEL_MARKET,
-                GatewayTick(
-                    timestamp=stamp,
-                    symbol=alias,
-                    exchange=row.exchange_id or "",
-                    asset_type="futures",
-                    local_time=time.time(),
-                    price=price,
-                    volume=volume,
-                    datetime=dt,
-                    instrument_id=instrument,
-                    exchange_id=row.exchange_id or "",
-                    trading_day=row.trading_day or "",
-                    update_time=row.update_time_val or "",
-                    update_millisec=int(row.update_millisec or 0),
-                    bid_price=row.get_bid_price(),
-                    ask_price=row.get_ask_price(),
-                    bid_volume=float(row.get_bid_volume() or 0.0),
-                    ask_volume=float(row.get_ask_volume() or 0.0),
-                    openinterest=float(row.get_open_interest() or 0.0),
-                    turnover=float(row.turnover or 0.0),
-                    trade_id=f"{instrument}-{int(total)}",
-                ),
+            tick = GatewayTick(
+                timestamp=stamp,
+                symbol=alias,
+                exchange=row.exchange_id or "",
+                asset_type="futures",
+                local_time=row.recv_time_utc.timestamp(),
+                price=price,
+                volume=volume,
+                datetime=dt,
+                instrument_id=instrument,
+                exchange_id=row.exchange_id or "",
+                trading_day=row.trading_day or "",
+                action_day=row.action_day or "",
+                update_time=row.update_time_val or "",
+                update_millisec=int(row.update_millisec or 0),
+                bid_price=_safe_ctp_quote_number(row.get_bid_price()),
+                ask_price=_safe_ctp_quote_number(row.get_ask_price()),
+                bid_volume=_safe_ctp_quote_number(row.get_bid_volume()),
+                ask_volume=_safe_ctp_quote_number(row.get_ask_volume()),
+                openinterest=_safe_ctp_quote_number(row.get_open_interest()),
+                turnover=_safe_ctp_quote_number(row.turnover),
+                trade_id=f"{instrument}-{generation}-{row.ingest_seq}",
             )
+            for name, value in {
+                "schema_version": row.schema_version,
+                "volume_semantics": "delta",
+                "cum_volume": total,
+                "cumulative_volume": total,
+                "delta_volume": volume,
+                "volume_complete": volume_complete,
+                "volume_quality": volume_quality,
+                "event_time_utc": row.event_time_utc,
+                "recv_time_utc": row.recv_time_utc,
+                "recv_monotonic_ns": row.recv_monotonic_ns,
+                "connection_generation": generation,
+                "ingest_seq": row.ingest_seq,
+                "quality_flags": tuple(row.quality_flags),
+                "event_time_source": row.event_time_source,
+                "execution_eligible": execution_eligible,
+            }.items():
+                setattr(tick, name, value)
+            self.emit(CHANNEL_MARKET, tick)
 
 
 def _split(value: str) -> tuple[str, str]:
@@ -525,35 +745,11 @@ def _normalize_instrument(instrument: str, exchange_id: str = "") -> str:
         return text
     prefix, digits = match.groups()
     exchange = str(exchange_id or "").strip().upper()
-    if exchange == "CZCE" or (not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES):
+    if exchange == "CZCE" or (
+        not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES
+    ):
         return f"{prefix}{digits[-3:]}"
     return text
-
-
-def _field_value(source: Any, *names: str) -> Any:
-    for name in names:
-        if isinstance(source, dict) and name in source:
-            value = source.get(name)
-            if value not in (None, ""):
-                return value
-        if source is not None and hasattr(source, name):
-            try:
-                value = getattr(source, name)
-            except Exception:
-                continue
-            if value not in (None, ""):
-                return value
-    return None
-
-
-def _field_float(source: Any, *names: str) -> float | None:
-    value = _field_value(source, *names)
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _positive_float(value: Any, default: float = 0.0) -> float:
@@ -570,7 +766,9 @@ def _positive_int_lot(value: Any, field_name: str) -> int:
     try:
         lot = Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"CTP order {field_name} must be a positive integer lot.") from exc
+        raise ValueError(
+            f"CTP order {field_name} must be a positive integer lot."
+        ) from exc
     if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
         raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
     return int(lot)
@@ -597,90 +795,6 @@ def _safe_query(func: Any, *args: Any, **kwargs: Any) -> Any:
             return None
     except Exception:
         return None
-
-
-def _symbol_spec(
-    instrument: str,
-    exchange_id: str,
-    instrument_info: Any,
-    margin_info: Any,
-    commission_info: Any,
-) -> dict[str, Any]:
-    if not any((instrument_info, margin_info, commission_info)):
-        return {}
-    exchange = str(
-        _field_value(instrument_info, "ExchangeID")
-        or _field_value(margin_info, "ExchangeID")
-        or _field_value(commission_info, "ExchangeID")
-        or exchange_id
-        or ""
-    ).strip()
-    symbol = str(
-        _field_value(instrument_info, "InstrumentID")
-        or _field_value(margin_info, "InstrumentID")
-        or _field_value(commission_info, "InstrumentID")
-        or instrument
-        or ""
-    ).strip()
-    multiplier = _field_float(instrument_info, "VolumeMultiple", "contract_size", "multiplier")
-    price_tick = _field_float(instrument_info, "PriceTick", "price_tick", "tick_size")
-    long_margin_rate = _field_float(margin_info, "LongMarginRatioByMoney", "long_margin_rate")
-    short_margin_rate = _field_float(margin_info, "ShortMarginRatioByMoney", "short_margin_rate")
-    open_fee_rate = _field_float(commission_info, "OpenRatioByMoney", "open_fee_rate")
-    open_fee_amount = _field_float(commission_info, "OpenRatioByVolume", "open_fee_amount")
-    close_fee_rate = _field_float(commission_info, "CloseRatioByMoney", "close_fee_rate")
-    close_fee_amount = _field_float(commission_info, "CloseRatioByVolume", "close_fee_amount")
-    close_today_fee_rate = _field_float(
-        commission_info,
-        "CloseTodayRatioByMoney",
-        "close_today_fee_rate",
-    )
-    close_today_fee_amount = _field_float(
-        commission_info,
-        "CloseTodayRatioByVolume",
-        "close_today_fee_amount",
-    )
-    margin_rate = long_margin_rate if long_margin_rate is not None else short_margin_rate
-
-    spec: dict[str, Any] = {
-        "source": "ctp_gateway",
-        "symbol": symbol,
-        "instrument": symbol,
-        "exchange": exchange,
-        "exchange_id": exchange,
-        "product_id": _field_value(instrument_info, "ProductID"),
-        "price_tick": price_tick,
-        "tick_size": price_tick,
-        "multiplier": multiplier,
-        "contract_multiplier": multiplier,
-        "contract_size": multiplier,
-        "volume_multiple": multiplier,
-        "margin": margin_rate,
-        "margin_rate": margin_rate,
-        "long_margin_rate": long_margin_rate,
-        "short_margin_rate": short_margin_rate,
-        "long_margin_amount": _field_float(margin_info, "LongMarginRatioByVolume"),
-        "short_margin_amount": _field_float(margin_info, "ShortMarginRatioByVolume"),
-        "open_fee_rate": open_fee_rate,
-        "open_commission_rate": open_fee_rate,
-        "commission_rate": open_fee_rate,
-        "open_fee_amount": open_fee_amount,
-        "open_commission_amount": open_fee_amount,
-        "commission_amount": open_fee_amount,
-        "close_fee_rate": close_fee_rate,
-        "close_commission_rate": close_fee_rate,
-        "close_fee_amount": close_fee_amount,
-        "close_commission_amount": close_fee_amount,
-        "close_yesterday_fee_rate": close_fee_rate,
-        "close_yesterday_commission_rate": close_fee_rate,
-        "close_yesterday_fee_amount": close_fee_amount,
-        "close_yesterday_commission_amount": close_fee_amount,
-        "close_today_fee_rate": close_today_fee_rate,
-        "close_today_commission_rate": close_today_fee_rate,
-        "close_today_fee_amount": close_today_fee_amount,
-        "close_today_commission_amount": close_today_fee_amount,
-    }
-    return {key: value for key, value in spec.items() if value not in (None, "")}
 
 
 def _alias(aliases: dict[str, set[str]], instrument: str) -> str:
@@ -711,6 +825,8 @@ def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         "data_name": _alias(aliases, instrument),
         "instrument": instrument,
         "exchange_id": row.get_order_exchange_id(),
+        "trading_day": row.get_trading_day(),
+        "account_id": row.get_account_id(),
         "front_id": row.front_id,
         "session_id": row.session_id,
         "status": _status(row.get_order_status()),
@@ -740,9 +856,14 @@ def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         "data_name": _alias(aliases, instrument),
         "instrument": instrument,
         "exchange_id": row.exchange_id,
+        "trading_day": row.get_trading_day(),
+        "account_id": row.get_account_id(),
         "side": row.get_trade_side(),
         "offset": row.get_trade_offset(),
         "price": row.get_trade_price(),
         "size": row.get_trade_volume(),
+        "fee": row.trade_fee,
+        "fee_currency": row.get_trade_fee_symbol(),
+        "fee_unresolved": not row.trade_fee_verified,
         "id_source": "exchange" if trade_id else "unknown",
     }

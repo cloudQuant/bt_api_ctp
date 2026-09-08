@@ -234,7 +234,9 @@ def test_ctp_gateway_positions_include_contract_specs_and_exchange_pnl(monkeypat
     assert row["margin_value"] == pytest.approx(1_440_000.0)
 
 
-def test_ctp_gateway_balance_uses_balance_as_equity_and_curr_margin_as_used_margin(monkeypatch):
+def test_ctp_gateway_balance_uses_balance_as_equity_and_curr_margin_as_used_margin(
+    monkeypatch,
+):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)
@@ -254,13 +256,16 @@ def test_ctp_gateway_balance_uses_balance_as_equity_and_curr_margin_as_used_marg
     assert balance["profit"] == pytest.approx(5_000.0)
 
 
-def test_ctp_gateway_place_order_preserves_request_id_and_exchange_prefixed_symbol(monkeypatch):
+def test_ctp_gateway_place_order_preserves_request_id_and_exchange_prefixed_symbol(
+    monkeypatch,
+):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)
 
     adapter = adapter_module.CtpGatewayAdapter()
     adapter.last_price["rb2501"] = 3500.0
+    adapter._price_ticks["rb2501"] = 1.0
 
     result = adapter.place_order(
         {
@@ -335,11 +340,26 @@ def test_ctp_gateway_get_open_orders_returns_remaining_orders(monkeypatch):
 @pytest.mark.parametrize(
     ("payload", "error"),
     [
-        ({"symbol": "IF2506.CFFEX", "side": "buy", "size": 1.5, "price": 4000}, "positive integer"),
-        ({"symbol": "IF2506.CFFEX", "side": "buy", "size": 0, "price": 4000}, "positive integer"),
-        ({"symbol": "IF2506.CFFEX", "side": "buy", "size": 1, "price": 0}, "positive price"),
         (
-            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1, "offset": "bad", "price": 4000},
+            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1.5, "price": 4000},
+            "positive integer",
+        ),
+        (
+            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 0, "price": 4000},
+            "positive integer",
+        ),
+        (
+            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1, "price": 0},
+            "positive price",
+        ),
+        (
+            {
+                "symbol": "IF2506.CFFEX",
+                "side": "buy",
+                "size": 1,
+                "offset": "bad",
+                "price": 4000,
+            },
             "offset",
         ),
         ({"symbol": "IF2506.CFFEX", "side": "hold", "size": 1, "price": 4000}, "side"),

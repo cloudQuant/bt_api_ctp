@@ -12,7 +12,7 @@ def test_ctp_tick_timestamp_datetime_uses_exchange_timezone() -> None:
         "Row",
         (),
         {
-            "trading_day": "20260623",
+            "action_day": "20260623",
             "update_time_val": "08:22:00",
             "update_millisec": 500,
         },
@@ -41,7 +41,7 @@ def test_ctp_tick_timestamp_datetime_fallback_is_utc_aware() -> None:
         "Row",
         (),
         {
-            "trading_day": "",
+            "action_day": "",
             "update_time_val": "",
             "update_millisec": 0,
         },

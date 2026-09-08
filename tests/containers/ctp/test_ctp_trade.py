@@ -182,15 +182,15 @@ class TestCtpTradeData:
         assert trade.get_trade_time() == "14:30:00"
 
     def test_get_trade_fee(self):
-        """Test get_trade_fee returns 0.0 when no fee data is provided."""
+        """Unknown native trade fees remain unknown rather than zero."""
         trade = CtpTradeData({}, symbol_name="rb2505")
         trade.init_data()
-        assert trade.get_trade_fee() == 0.0
+        assert trade.get_trade_fee() is None
 
     def test_get_trade_fee_symbol(self):
-        """Test get_trade_fee_symbol returns CNY."""
+        """Unknown native trade fees have no proven booking currency."""
         trade = CtpTradeData({}, symbol_name="rb2505")
-        assert trade.get_trade_fee_symbol() == "CNY"
+        assert trade.get_trade_fee_symbol() == ""
 
     def test_get_all_data(self):
         """Test get_all_data."""

@@ -40,8 +40,11 @@ class CtpTradeData(TradeData):
         self.trade_time = None
         self.trade_time_text = None
         self.exchange_id = None
-        self.trade_fee = 0.0
-        self.trade_fee_symbol = "CNY"
+        self.trading_day = None
+        self.account_id = None
+        self.trade_fee = None
+        self.trade_fee_symbol = ""
+        self.trade_fee_verified = False
         self._all_data = None
 
     def init_data(self):
@@ -67,6 +70,10 @@ class CtpTradeData(TradeData):
             self.trade_time = from_dict_get_string(info, "TradeTime")
             self.trade_time_text = from_dict_get_string(info, "TradeTime")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
+            self.trading_day = from_dict_get_string(info, "TradingDay")
+            self.account_id = from_dict_get_string(
+                info, "AccountID"
+            ) or from_dict_get_string(info, "InvestorID")
         self._data_initialized = True
         self._initialized = True
         return self
@@ -107,13 +114,17 @@ class CtpTradeData(TradeData):
     def get_trade_time(self) -> str | None:
         return self.trade_time
 
-    def get_trade_fee(self) -> float:
-        return float(self.trade_fee or 0.0)
+    def get_trade_fee(self) -> float | None:
+        self._ensure_init()
+        if not self.trade_fee_verified or self.trade_fee is None:
+            return None
+        return float(self.trade_fee)
 
     def get_trade_fee_symbol(self) -> str:
         return self.trade_fee_symbol or ""
 
     def get_all_data(self) -> dict[str, Any]:
+        self._ensure_init()
         if self._all_data is None:
             self._all_data = {
                 "exchange_name": self.exchange_name,
@@ -127,5 +138,18 @@ class CtpTradeData(TradeData):
                 "trade_date": self.trade_date,
                 "trade_time": self.trade_time,
                 "exchange_id": self.exchange_id,
+                "trading_day": self.trading_day,
+                "account_id": self.account_id,
+                "trade_fee": self.trade_fee,
+                "trade_fee_verified": self.trade_fee_verified,
+                "fee_unresolved": not self.trade_fee_verified,
             }
         return self._all_data
+
+    def get_trading_day(self) -> str:
+        self._ensure_init()
+        return self.trading_day or ""
+
+    def get_account_id(self) -> str:
+        self._ensure_init()
+        return self.account_id or ""

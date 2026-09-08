@@ -63,6 +63,8 @@ class CtpOrderData(OrderData):
         self.exchange_id = None
         self.front_id = None
         self.session_id = None
+        self.trading_day = None
+        self.account_id = None
 
     def init_data(self):
         if self._data_initialized:
@@ -75,19 +77,27 @@ class CtpOrderData(OrderData):
             direction_key = ctp_dict_code(info, "Direction", "0") or "0"
             self.direction = CTP_DIRECTION_MAP.get(direction_key, "buy")
             offset_char = from_dict_get_string(info, "CombOffsetFlag", "0") or "0"
-            self.offset = CTP_OFFSET_MAP.get(offset_char[0] if offset_char else "0", "open")
+            self.offset = CTP_OFFSET_MAP.get(
+                offset_char[0] if offset_char else "0", "open"
+            )
             self.limit_price = from_dict_get_float(info, "LimitPrice", 0.0)
             self.volume_total_original = ctp_int(info, "VolumeTotalOriginal", 0)
             self.volume_traded = ctp_int(info, "VolumeTraded", 0)
             self.volume_total = ctp_int(info, "VolumeTotal", 0)
             status_key = ctp_dict_code(info, "OrderStatus", "a") or "a"
-            self.order_status = CTP_ORDER_STATUS_MAP.get(status_key, OrderStatus.SUBMITTED)
+            self.order_status = CTP_ORDER_STATUS_MAP.get(
+                status_key, OrderStatus.SUBMITTED
+            )
             self.insert_time = from_dict_get_string(info, "InsertTime")
             self.update_time = from_dict_get_string(info, "UpdateTime")
             self.status_msg = from_dict_get_string(info, "StatusMsg")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
             self.front_id = ctp_int(info, "FrontID")
             self.session_id = ctp_int(info, "SessionID")
+            self.trading_day = from_dict_get_string(info, "TradingDay")
+            self.account_id = from_dict_get_string(
+                info, "AccountID"
+            ) or from_dict_get_string(info, "InvestorID")
         self._data_initialized = True
         self._initialized = True
         return self
@@ -145,3 +155,11 @@ class CtpOrderData(OrderData):
 
     def get_order_time_in_force(self) -> str:
         return "GFD"
+
+    def get_trading_day(self) -> str:
+        self._ensure_init()
+        return self.trading_day or ""
+
+    def get_account_id(self) -> str:
+        self._ensure_init()
+        return self.account_id or ""

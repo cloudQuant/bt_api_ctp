@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import warnings
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
+from math import isfinite
+from sys import float_info
 from typing import Any
-
-try:
-    from dotenv import find_dotenv, load_dotenv
-except ImportError:
-    find_dotenv = None
-    load_dotenv = None
 
 from bt_api_base.containers.orders.order import OrderStatus
 from bt_api_base.containers.requestdatas.request_data import RequestData
@@ -30,9 +26,19 @@ from bt_api_ctp.ctp.ctp_structs_order import (
     CThostFtdcInputOrderActionField,
     CThostFtdcInputOrderField,
 )
-from bt_api_ctp.ctp_env_selector import apply_ctp_env
+from bt_api_ctp.ctp_env_selector import (
+    official_simnow_fronts,
+    select_ctp_environment,
+    verify_official_simnow_profile,
+)
 from bt_api_ctp.exchange_data import CtpExchangeDataFuture
 from bt_api_ctp.feeds.base_stream import BaseDataStream, ConnectionState
+from bt_api_ctp.instrument import (
+    build_ctp_instrument_spec,
+    ctp_instrument_evidence_errors,
+    ctp_query_bundle_errors,
+)
+from bt_api_ctp.query import QueryResult
 
 CTP_OFFSET_FLAG = {
     "open": "0",
@@ -47,62 +53,236 @@ CTP_DIRECTION_FLAG = {"buy": "0", "sell": "1"}
 _ctp_field_logger = get_logger("ctp_field_converter")
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _query_evidence(result: QueryResult[Any]) -> dict[str, Any]:
+    evidence = result.as_dict(include_records=False)
+    return {
+        "query_result": evidence,
+        "query_complete": result.complete,
+        "evidence_complete": result.complete,
+        "query_request_id": result.request_id,
+        "query_connection_generation": result.connection_generation,
+        "query_is_last_seen": result.is_last_seen,
+        "query_error_code": result.error_code,
+        "query_error_message": result.error_message,
+        "query_timed_out": result.timed_out,
+        "query_unsupported": result.unsupported,
+    }
+
+
 def _positive_int_lot(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or value in (None, ""):
         raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
     try:
         lot = Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"CTP order {field_name} must be a positive integer lot.") from exc
+        raise ValueError(
+            f"CTP order {field_name} must be a positive integer lot."
+        ) from exc
     if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
         raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
     return int(lot)
 
 
-def _load_ctp_env() -> None:
-    if load_dotenv is None:
-        return
-    env_file = Path(__file__).resolve().parents[4] / ".env"
-    if env_file.exists():
-        load_dotenv(env_file, override=False)
-        return
-    if find_dotenv is None:
-        return
-    env_path = find_dotenv(usecwd=True)
-    if env_path:
-        load_dotenv(env_path, override=False)
+_CTP_INVALID_FLOAT_THRESHOLD = Decimal(str(float_info.max)) / 2
+_CTP_QUOTE_INVALID_FLOAT_THRESHOLD = float_info.max / 2
+
+
+def _positive_ctp_price(value: Any, field_name: str = "price") -> float:
+    """Reject non-finite values and CTP's DBL_MAX missing-value sentinel."""
+    if isinstance(value, bool) or value in (None, ""):
+        raise ValueError(
+            f"CTP order {field_name} must be a positive price with a finite value."
+        )
+    try:
+        price = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(
+            f"CTP order {field_name} must be a positive price with a finite value."
+        ) from exc
+    if (
+        not price.is_finite()
+        or price <= 0
+        or abs(price) >= _CTP_INVALID_FLOAT_THRESHOLD
+    ):
+        raise ValueError(
+            f"CTP order {field_name} must be a positive price with a finite value."
+        )
+    return float(price)
+
+
+def _append_quote_quality_flag(row: CtpTickerData, flag: str) -> None:
+    if flag not in row.quality_flags:
+        row.quality_flags.append(flag)
+
+
+def _valid_ctp_quote_number(value: Any, *, positive: bool = False) -> bool:
+    if isinstance(value, bool) or value in (None, ""):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not isfinite(number) or abs(number) >= _CTP_QUOTE_INVALID_FLOAT_THRESHOLD:
+        return False
+    return number > 0 if positive else number >= 0
+
+
+def _raw_quote_value(row: CtpTickerData, field_name: str, fallback: Any) -> Any:
+    raw = getattr(row, "ticker_info", None)
+    if isinstance(raw, dict):
+        return raw.get(field_name)
+    return fallback
+
+
+def _validate_ctp_quote(row: CtpTickerData) -> bool:
+    """Flag malformed required fields before they can update trusted state."""
+    row.init_data()
+    valid = True
+    for field_name, raw_name, value in (
+        ("LAST_PRICE", "LastPrice", row.get_last_price()),
+        ("BID_PRICE", "BidPrice1", row.get_bid_price()),
+        ("ASK_PRICE", "AskPrice1", row.get_ask_price()),
+    ):
+        if not _valid_ctp_quote_number(
+            _raw_quote_value(row, raw_name, value), positive=True
+        ):
+            _append_quote_quality_flag(row, f"INVALID_{field_name}")
+            valid = False
+    for field_name, raw_name, value in (
+        ("BID_VOLUME", "BidVolume1", row.get_bid_volume()),
+        ("ASK_VOLUME", "AskVolume1", row.get_ask_volume()),
+        ("CUM_VOLUME", "Volume", row.get_cumulative_volume()),
+        ("OPEN_INTEREST", "OpenInterest", row.get_open_interest()),
+    ):
+        if not _valid_ctp_quote_number(_raw_quote_value(row, raw_name, value)):
+            _append_quote_quality_flag(row, f"INVALID_{field_name}")
+            valid = False
+    bid = row.get_bid_price()
+    ask = row.get_ask_price()
+    if _valid_ctp_quote_number(bid, positive=True) and _valid_ctp_quote_number(
+        ask, positive=True
+    ):
+        if float(bid) > float(ask):
+            _append_quote_quality_flag(row, "CROSSED_BOOK")
+            valid = False
+        elif float(bid) == float(ask):
+            _append_quote_quality_flag(row, "LOCKED_BOOK")
+    if row.get_bid_volume() == 0 or row.get_ask_volume() == 0:
+        _append_quote_quality_flag(row, "ZERO_DEPTH")
+    return valid
+
+
+def _safe_ctp_quote_number(value: Any) -> float:
+    """Return a finite transport value while retaining invalidity in quality flags."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not isfinite(number) or abs(number) >= _CTP_QUOTE_INVALID_FLOAT_THRESHOLD:
+        return 0.0
+    return number
 
 
 def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    _load_ctp_env()
     resolved = dict(kwargs)
-    broker_id = str(resolved.get("broker_id") or os.environ.get("CTP_BROKER_ID") or "").strip()
+    broker_id = str(
+        resolved.get("broker_id") or os.environ.get("CTP_BROKER_ID") or ""
+    ).strip()
     user_id = str(
         resolved.get("user_id")
         or resolved.get("investor_id")
         or os.environ.get("CTP_USER_ID")
         or ""
     ).strip()
-    password = str(resolved.get("password") or os.environ.get("CTP_PASSWORD") or "").strip()
+    password = str(
+        resolved.get("password") or os.environ.get("CTP_PASSWORD") or ""
+    ).strip()
     auth_code = str(
-        resolved.get("auth_code") or os.environ.get("CTP_AUTH_CODE") or "0000000000000000"
+        resolved.get("auth_code")
+        or os.environ.get("CTP_AUTH_CODE")
+        or "0000000000000000"
     ).strip()
     app_id = str(
         resolved.get("app_id") or os.environ.get("CTP_APP_ID") or "simnow_client_test"
     ).strip()
     td_front = str(resolved.get("td_front") or resolved.get("td_address") or "").strip()
     md_front = str(resolved.get("md_front") or resolved.get("md_address") or "").strip()
+    had_partial_explicit_front = bool(td_front) != bool(md_front)
+    claimed_profile = (
+        str(resolved.get("ctp_env_profile") or resolved.get("ctp_profile") or "")
+        .strip()
+        .lower()
+    )
+    if claimed_profile and bool(td_front) != bool(md_front):
+        raise ValueError(
+            "claimed CTP profile requires both td_front and md_front, or neither"
+        )
+    if claimed_profile and not td_front and not md_front:
+        td_front, md_front = official_simnow_fronts(claimed_profile)
+    required_profile = (
+        str(
+            resolved.get("require_ctp_profile")
+            or resolved.get("ctp_required_profile")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    if required_profile and (td_front or md_front) and not claimed_profile:
+        raise RuntimeError(
+            "required CTP profile cannot be proven from explicit fronts without "
+            "ctp_env_profile"
+        )
+    if claimed_profile and required_profile:
+        required_matches = (
+            claimed_profile == required_profile
+            or (required_profile == "set1" and claimed_profile.startswith("set1_"))
+            or (required_profile == "set2" and claimed_profile.startswith("set2_"))
+        )
+        if not required_matches:
+            raise RuntimeError(
+                f"required CTP profile {required_profile!r}, configured {claimed_profile!r}"
+            )
     env_name = ""
+    selected_environment = "custom"
+    env_readiness = "explicit_front_override" if td_front and md_front else "unknown"
     if not td_front or not md_front:
         static_td = str(os.environ.get("CTP_TD_FRONT") or "").strip()
         static_md = str(os.environ.get("CTP_MD_FRONT") or "").strip()
         if os.environ.get("CTP_ENV") or not static_td or not static_md:
-            selected_td, selected_md, env_name = apply_ctp_env()
-            td_front = td_front or selected_td
-            md_front = md_front or selected_md
+            selection = select_ctp_environment(require_profile=required_profile)
+            td_front = td_front or selection.td_front
+            md_front = md_front or selection.md_front
+            env_name = selection.profile
+            env_readiness = selection.readiness
+            selected_environment = selection.environment
         else:
             td_front = td_front or static_td
             md_front = md_front or static_md
+            env_name = "custom_front_override"
+            env_readiness = "explicit_front_override"
+        if had_partial_explicit_front:
+            env_name = "mixed_front_override"
+            env_readiness = "mixed_front_unverified"
+            selected_environment = "custom"
+    elif claimed_profile:
+        if not verify_official_simnow_profile(td_front, md_front, claimed_profile):
+            raise ValueError(
+                f"claimed CTP profile {claimed_profile!r} does not match its official fronts"
+            )
+        env_name = claimed_profile
+        env_readiness = "explicit_official_pair"
+        selected_environment = "simnow"
+    else:
+        env_name = "custom_front_override"
     resolved.update(
         {
             "broker_id": broker_id,
@@ -112,6 +292,9 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
             "app_id": app_id,
             "td_front": td_front,
             "md_front": md_front,
+            "ctp_environment": selected_environment,
+            "ctp_env_profile": env_name,
+            "ctp_env_readiness": env_readiness,
         }
     )
     return resolved, env_name
@@ -143,6 +326,47 @@ def _ctp_field_to_dict(field):
     return result
 
 
+class CtpVolumeDeltaTracker:
+    """The single SDK authority for CTP cumulative-volume conversion."""
+
+    def __init__(self) -> None:
+        self._state: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def apply(self, row: CtpTickerData) -> CtpTickerData:
+        row.init_data()
+        instrument = row.get_symbol_name() or ""
+        key = (str(row.exchange_id or ""), instrument)
+        total = float(row.get_cumulative_volume() or 0.0)
+        scope = (
+            int(row.connection_generation or 0),
+            str(row.trading_day or ""),
+        )
+        previous = self._state.get(key)
+        delta = 0.0
+        complete = False
+        quality = "BASELINE"
+        if previous is not None:
+            if previous["scope"] != scope:
+                quality = "CONNECTION_OR_TRADING_DAY_RESET"
+            elif row.ingest_seq and row.ingest_seq <= previous["ingest_seq"]:
+                quality = "OUT_OF_ORDER"
+                row.quality_flags.append("OUT_OF_ORDER")
+            elif total < previous["cum_volume"]:
+                quality = "VOLUME_RESET"
+                row.quality_flags.append("VOLUME_GAP")
+            else:
+                delta = total - previous["cum_volume"]
+                complete = True
+                quality = "CONTINUOUS"
+        if quality != "OUT_OF_ORDER":
+            self._state[key] = {
+                "scope": scope,
+                "cum_volume": total,
+                "ingest_seq": int(row.ingest_seq or 0),
+            }
+        return row.apply_volume_delta(delta, complete=complete, quality=quality)
+
+
 class CtpRequestData(Feed):
     @classmethod
     def _capabilities(cls):
@@ -156,6 +380,7 @@ class CtpRequestData(Feed):
             Capability.GET_BALANCE,
             Capability.GET_ACCOUNT,
             Capability.GET_POSITION,
+            Capability.GET_EXCHANGE_INFO,
             Capability.MARKET_STREAM,
             Capability.ACCOUNT_STREAM,
         }
@@ -163,6 +388,9 @@ class CtpRequestData(Feed):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         super().__init__(data_queue)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
+        self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
+        self.ctp_environment = resolved_kwargs.get("ctp_environment", "custom")
         self.data_queue = data_queue
         self.broker_id = resolved_kwargs.get("broker_id", "")
         self.user_id = resolved_kwargs.get("user_id", "")
@@ -176,8 +404,12 @@ class CtpRequestData(Feed):
         self._params = CtpExchangeDataFuture()
         self.request_logger = get_logger("ctp_feed")
         self._trader = None
+        self._connect_lock = threading.Lock()
         self._connected = False
         self._connect_timeout = resolved_kwargs.get("connect_timeout", 15)
+        self.auto_settlement_confirm = _as_bool(
+            resolved_kwargs.get("auto_settlement_confirm"), default=True
+        )
 
     def translate_error(self, raw_response):
         if isinstance(raw_response, dict) and raw_response.get("ErrorID", 0) != 0:
@@ -185,29 +417,50 @@ class CtpRequestData(Feed):
         return None
 
     def _ensure_connected(self):
-        if self._trader is None or not self._trader.is_ready:
+        if self._trader is None or not self._trader.is_read_only_ready:
             self.connect()
-        if not self._trader or not self._trader.is_ready:
-            raise BtConnectionError("CTP", "TraderClient not ready after connect()")
+        if not self._trader or not self._trader.is_read_only_ready:
+            raise BtConnectionError(
+                "CTP", "TraderClient not read-only ready after connect()"
+            )
+
+    def _ensure_trading_ready(self):
+        self._ensure_connected()
+        if not self._trader or not self._trader.is_trading_ready:
+            raise BtConnectionError(
+                "CTP",
+                "TraderClient settlement is unconfirmed; order writes are disabled",
+            )
 
     def connect(self):
-        if self._trader is not None and self._trader.is_ready:
-            return
-        self._trader = ctp_client.TraderClient(
-            self.td_front,
-            self.broker_id,
-            self.user_id,
-            self.password,
-            app_id=self.app_id,
-            auth_code=self.auth_code,
-        )
-        self._trader.start(block=False)
-        self._connected = self._trader.wait_ready(timeout=self._connect_timeout)
+        with self._connect_lock:
+            trader = self._trader
+            if trader is None:
+                trader = ctp_client.TraderClient(
+                    self.td_front,
+                    self.broker_id,
+                    self.user_id,
+                    self.password,
+                    app_id=self.app_id,
+                    auth_code=self.auth_code,
+                    auto_settlement_confirm=self.auto_settlement_confirm,
+                )
+                self._trader = trader
+                trader.start(block=False)
+            if getattr(trader, "is_read_only_ready", False):
+                self._connected = True
+                return
+            wait_ready = getattr(trader, "wait_ready", None)
+            self._connected = bool(
+                callable(wait_ready) and wait_ready(timeout=self._connect_timeout)
+            )
 
     def disconnect(self):
-        if self._trader is not None:
-            self._trader.stop()
+        with self._connect_lock:
+            trader = self._trader
             self._trader = None
+        if trader is not None:
+            trader.stop()
         self._connected = False
 
     def _make_request_data(
@@ -227,12 +480,31 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data([], "get_account", symbol, extra_data, status=False)
-        raw = trader.query_account(timeout=5)
-        if raw is None:
-            return self._make_request_data([], "get_account", symbol, extra_data, status=False)
-        row = CtpAccountData(_ctp_field_to_dict(raw), symbol, self.asset_type, True)
-        return self._make_request_data([row], "get_account", symbol, extra_data)
+            return self._make_request_data(
+                [], "get_account", symbol, extra_data, status=False
+            )
+        result = trader.query_account_result(timeout=kwargs.get("timeout", 5))
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = [
+            CtpAccountData(_ctp_field_to_dict(raw), symbol, self.asset_type, True)
+            for raw in result.records
+        ]
+        snapshot_complete = result.complete and len(rows) == 1
+        payload["account_snapshot_complete"] = snapshot_complete
+        if result.complete and not rows:
+            payload["account_snapshot_error"] = "complete_query_returned_no_account"
+        elif result.complete and len(rows) > 1:
+            payload["account_snapshot_error"] = (
+                "complete_query_returned_multiple_accounts"
+            )
+        return self._make_request_data(
+            rows if snapshot_complete else [],
+            "get_account",
+            symbol,
+            payload,
+            status=snapshot_complete,
+        )
 
     def get_balance(self, symbol=None, extra_data=None, **kwargs):
         return self.get_account(symbol, extra_data, **kwargs)
@@ -241,23 +513,40 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data([], "get_position", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [], "get_position", symbol, extra_data, status=False
+            )
+        result = trader.query_positions_result(timeout=kwargs.get("timeout", 5))
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
         rows = []
-        for raw in trader.query_positions(timeout=5):
+        for raw in result.records:
             data = _ctp_field_to_dict(raw)
             rows.append(
-                CtpPositionData(data, data.get("InstrumentID", symbol), self.asset_type, True)
+                CtpPositionData(
+                    data, data.get("InstrumentID", symbol), self.asset_type, True
+                )
             )
-        return self._make_request_data(rows, "get_position", symbol, extra_data)
+        return self._make_request_data(
+            rows if result.complete else [],
+            "get_position",
+            symbol,
+            payload,
+            status=result.complete,
+        )
 
     def get_tick(self, symbol, extra_data=None, **kwargs):
         return self._make_request_data([], "get_tick", symbol, extra_data, status=False)
 
     def get_depth(self, symbol, count=5, extra_data=None, **kwargs):
-        return self._make_request_data([], "get_depth", symbol, extra_data, status=False)
+        return self._make_request_data(
+            [], "get_depth", symbol, extra_data, status=False
+        )
 
     def get_kline(self, symbol, period, count=100, extra_data=None, **kwargs):
-        return self._make_request_data([], "get_kline", symbol, extra_data, status=False)
+        return self._make_request_data(
+            [], "get_kline", symbol, extra_data, status=False
+        )
 
     def make_order(
         self,
@@ -271,10 +560,12 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
-        self._ensure_connected()
+        self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
-            return self._make_request_data([], "make_order", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [], "make_order", symbol, extra_data, status=False
+            )
         try:
             side, order_kind = str(order_type or "").lower().split("-", 1)
         except ValueError as exc:
@@ -310,22 +601,19 @@ class CtpRequestData(Feed):
         field.IsAutoSuspend = 0
         field.UserForceClose = 0
         field.ContingentCondition = "1"
-        limit_price = float(price) if price else 0.0
-        if limit_price <= 0:
-            raise ValueError(
-                f"CTP order for {symbol} rejected: price must be positive (got {price!r})."
-            )
+        limit_price = _positive_ctp_price(price)
         field.OrderPriceType = "2"
         field.TimeCondition = "3"
         field.VolumeCondition = "1"
-        time_in_force = str(kwargs.get("time_in_force", "GTC")).upper()
-        if time_in_force in {"IOC", "FOK"}:
-            field.TimeCondition = "1"
-            if time_in_force == "FOK":
-                field.VolumeCondition = "3"
-                field.MinVolume = order_volume
-        elif time_in_force not in {"GTC", "DAY"}:
-            raise ValueError(f"CTP time_in_force {time_in_force!r} is unsupported.")
+        time_in_force = str(
+            kwargs.get("time_in_force") or kwargs.get("tif") or "GFD"
+        ).upper()
+        if time_in_force == "DAY":
+            time_in_force = "GFD"
+        if time_in_force != "GFD":
+            raise ValueError(
+                f"CTP time_in_force {time_in_force!r} is unsupported; iteration 22 requires GFD."
+            )
         field.LimitPrice = limit_price
         if client_order_id is not None:
             field.OrderRef = str(client_order_id)
@@ -333,19 +621,23 @@ class CtpRequestData(Feed):
             field.OrderRef = trader.next_order_ref()
         else:
             field.OrderRef = str(trader._req_id + 1)
-        next_req_id = trader._req_id + 1
+        next_req_id = trader._next_request_id()
         field.RequestID = next_req_id
-        trader._req_id = next_req_id
         api = trader.api
         if api is None:
-            return self._make_request_data([], "make_order", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [], "make_order", symbol, extra_data, status=False
+            )
+        trader._record_request("order_insert")
         ret = api.ReqOrderInsert(field, next_req_id)
         order_dict = _ctp_field_to_dict(field)
         order_dict["_ret"] = ret
         order_dict["FrontID"] = getattr(trader, "_front_id", 0)
         order_dict["SessionID"] = getattr(trader, "_session_id", 0)
         if ret != 0:
-            return self._make_request_data([], "make_order", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [], "make_order", symbol, extra_data, status=False
+            )
         return self._make_request_data(
             [CtpOrderData(order_dict, symbol, self.asset_type, True)],
             "make_order",
@@ -354,10 +646,12 @@ class CtpRequestData(Feed):
         )
 
     def cancel_order(self, symbol, order_id=None, extra_data=None, **kwargs):
-        self._ensure_connected()
+        self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
-            return self._make_request_data([], "cancel_order", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [], "cancel_order", symbol, extra_data, status=False
+            )
         field = CThostFtdcInputOrderActionField()
         field.BrokerID = self.broker_id
         field.InvestorID = self.user_id
@@ -375,11 +669,14 @@ class CtpRequestData(Feed):
             field.OrderRef = str(order_ref)
             field.FrontID = int(front_id) if front_id else trader._front_id
             field.SessionID = int(session_id) if session_id else trader._session_id
-        trader._req_id += 1
+        request_id = trader._next_request_id()
         api = trader.api
         if api is None:
-            return self._make_request_data([], "cancel_order", symbol, extra_data, status=False)
-        ret = api.ReqOrderAction(field, trader._req_id)
+            return self._make_request_data(
+                [], "cancel_order", symbol, extra_data, status=False
+            )
+        trader._record_request("order_action")
+        ret = api.ReqOrderAction(field, request_id)
         return self._make_request_data(
             [_ctp_field_to_dict(field)],
             "cancel_order",
@@ -390,21 +687,27 @@ class CtpRequestData(Feed):
 
     def query_order(self, symbol=None, order_id=None, extra_data=None, **kwargs):
         trader = self._trader
-        if trader is None or not getattr(trader, "is_ready", False):
-            return self._make_request_data([], "query_order", symbol, extra_data, status=False)
-        rows = []
-        for raw in trader.query_orders(
+        if trader is None or not getattr(trader, "is_read_only_ready", False):
+            return self._make_request_data(
+                [], "query_order", symbol, extra_data, status=False
+            )
+        result = trader.query_orders_result(
             instrument_id=symbol or "",
             exchange_id=kwargs.get("exchange_id", ""),
             order_sys_id=order_id or "",
             timeout=kwargs.get("timeout", 5),
-        ):
+        )
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = []
+        for raw in result.records:
             data = raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
             # OrderRef is local to a front/session and is not an OrderSysID.
             # The native query filters OrderSysID; filter the alternative
             # client reference here before returning public order containers.
             if any(
-                kwargs.get(key) is not None and str(data.get(native_key, "")) != str(kwargs[key])
+                kwargs.get(key) is not None
+                and str(data.get(native_key, "")) != str(kwargs[key])
                 for key, native_key in (
                     ("order_ref", "OrderRef"),
                     ("front_id", "FrontID"),
@@ -412,13 +715,29 @@ class CtpRequestData(Feed):
                 )
             ):
                 continue
-            rows.append(CtpOrderData(data, data.get("InstrumentID", symbol), self.asset_type, True))
-        return self._make_request_data(rows, "query_order", symbol, extra_data)
+            rows.append(
+                CtpOrderData(
+                    data, data.get("InstrumentID", symbol), self.asset_type, True
+                )
+            )
+        return self._make_request_data(
+            rows if result.complete else [],
+            "query_order",
+            symbol,
+            payload,
+            status=result.complete,
+        )
 
     def get_open_orders(self, symbol=None, extra_data=None, **kwargs):
         response = self.query_order(symbol=symbol, extra_data=extra_data, **kwargs)
         if not response.get_status():
-            return self._make_request_data([], "get_open_orders", symbol, extra_data, status=False)
+            return self._make_request_data(
+                [],
+                "get_open_orders",
+                symbol,
+                response.get_extra_data(),
+                status=False,
+            )
         rows = []
         for row in response.get_data() or []:
             order = row.init_data()
@@ -433,7 +752,9 @@ class CtpRequestData(Feed):
                 continue
             if int(order.volume_total or 0) > 0:
                 rows.append(order)
-        return self._make_request_data(rows, "get_open_orders", symbol, extra_data)
+        return self._make_request_data(
+            rows, "get_open_orders", symbol, response.get_extra_data()
+        )
 
     def get_deals(
         self,
@@ -444,17 +765,329 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
-        return self._make_request_data([], "get_deals", symbol, extra_data, status=False)
+        trader = self._trader
+        if trader is None or not getattr(trader, "is_read_only_ready", False):
+            return self._make_request_data(
+                [], "get_deals", symbol, extra_data, status=False
+            )
+        result = trader.query_trades_result(
+            instrument_id=symbol or "",
+            exchange_id=kwargs.get("exchange_id", ""),
+            trade_id=kwargs.get("trade_id", ""),
+            start_time=start_time or "",
+            end_time=end_time or "",
+            timeout=kwargs.get("timeout", 5),
+        )
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = []
+        for raw in result.records:
+            data = raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            rows.append(
+                CtpTradeData(
+                    data, data.get("InstrumentID", symbol), self.asset_type, True
+                )
+            )
+        total_records = len(rows)
+        truncated = False
+        if count is not None:
+            limit = max(int(count), 0)
+            truncated = total_records > limit
+            rows = rows[-limit:] if limit else []
+        snapshot_complete = result.complete and not truncated
+        payload.update(
+            trade_snapshot_complete=snapshot_complete,
+            trade_record_count=total_records,
+            returned_trade_record_count=len(rows),
+            records_truncated=truncated,
+            evidence_complete=snapshot_complete,
+        )
+        return self._make_request_data(
+            rows if snapshot_complete else [],
+            "get_deals",
+            symbol,
+            payload,
+            status=snapshot_complete,
+        )
+
+    def get_instruments(self, symbol=None, extra_data=None, **kwargs):
+        self._ensure_connected()
+        trader = self._trader
+        if trader is None:
+            return self._make_request_data(
+                [], "get_instruments", symbol, extra_data, status=False
+            )
+        result = trader.query_instruments_result(
+            instrument_id=symbol or "",
+            exchange_id=kwargs.get("exchange_id", ""),
+            timeout=kwargs.get("timeout", 5),
+        )
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = [
+            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            for raw in result.records
+        ]
+        return self._make_request_data(
+            rows if result.complete else [],
+            "get_instruments",
+            symbol,
+            payload,
+            status=result.complete,
+        )
+
+    def get_instrument_margin_rate(self, symbol, extra_data=None, **kwargs):
+        self._ensure_connected()
+        result = self._trader.query_instrument_margin_rate_result(
+            symbol,
+            exchange_id=kwargs.get("exchange_id", ""),
+            hedge_flag=kwargs.get("hedge_flag", "1"),
+            timeout=kwargs.get("timeout", 5),
+        )
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = [
+            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            for raw in result.records
+        ]
+        return self._make_request_data(
+            rows if result.complete else [],
+            "get_instrument_margin_rate",
+            symbol,
+            payload,
+            status=result.complete,
+        )
+
+    def get_instrument_commission_rate(self, symbol, extra_data=None, **kwargs):
+        self._ensure_connected()
+        result = self._trader.query_instrument_commission_rate_result(
+            symbol,
+            exchange_id=kwargs.get("exchange_id", ""),
+            timeout=kwargs.get("timeout", 5),
+        )
+        payload = dict(extra_data or {})
+        payload.update(_query_evidence(result))
+        rows = [
+            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            for raw in result.records
+        ]
+        return self._make_request_data(
+            rows if result.complete else [],
+            "get_instrument_commission_rate",
+            symbol,
+            payload,
+            status=result.complete,
+        )
+
+    def get_exchange_info(self, symbol=None, extra_data=None, **kwargs):
+        """Bridge terminal instrument/margin/fee queries to one strict public spec."""
+        if not symbol:
+            response = self.get_instruments(
+                symbol=None, extra_data=extra_data, **kwargs
+            )
+            payload = dict(response.get_extra_data() or {})
+            payload.update(
+                metadata_complete=False,
+                metadata_evidence="instrument_enumeration_has_no_account_fee_or_margin_join",
+            )
+            records = []
+            for raw in response.get_data() or []:
+                record = dict(raw) if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+                record.update(metadata_complete=False, evidence_complete=False)
+                records.append(record)
+            return self._make_request_data(
+                records,
+                "get_exchange_info",
+                symbol,
+                payload,
+                status=response.get_status(),
+            )
+
+        text = str(symbol).strip()
+        exchange_id = str(kwargs.get("exchange_id") or "").strip().upper()
+        instrument = text
+        for separator in (".", "_"):
+            if separator not in text:
+                continue
+            left, right = (part.strip() for part in text.split(separator, 1))
+            if left.upper() in {"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"}:
+                exchange_id, instrument = left.upper(), right
+            elif right.upper() in {"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"}:
+                instrument, exchange_id = left, right.upper()
+            break
+
+        timeout = kwargs.get("timeout", 5)
+        hedge_flag = kwargs.get("hedge_flag", "1")
+        instrument_result = self.query_instruments_result(
+            instrument_id=instrument,
+            exchange_id=exchange_id,
+            timeout=timeout,
+        )
+        margin_result = self.query_instrument_margin_rate_result(
+            instrument,
+            exchange_id=exchange_id,
+            hedge_flag=hedge_flag,
+            timeout=timeout,
+        )
+        commission_result = self.query_instrument_commission_rate_result(
+            instrument,
+            exchange_id=exchange_id,
+            timeout=timeout,
+        )
+        results = (instrument_result, margin_result, commission_result)
+        payload = dict(extra_data or {})
+        payload["component_queries"] = {
+            result.request_type: result.as_dict(include_records=False)
+            for result in results
+        }
+        record_complete = all(
+            result.complete and len(result.records) == 1 for result in results
+        )
+        session_getter = getattr(self._trader, "get_session_state", None)
+        current_session = session_getter() if callable(session_getter) else None
+        bundle_errors = ctp_query_bundle_errors(
+            results, current_session=current_session
+        )
+        if not record_complete or bundle_errors:
+            payload["metadata_error"] = (
+                "query_record_incomplete"
+                if not record_complete
+                else ",".join(bundle_errors)
+            )
+            payload.update(metadata_complete=False, evidence_complete=False)
+            return self._make_request_data(
+                [], "get_exchange_info", text, payload, status=False
+            )
+
+        spec = build_ctp_instrument_spec(
+            instrument,
+            exchange_id,
+            instrument_result.records[0],
+            margin_result.records[0],
+            commission_result.records[0],
+        )
+        evidence_errors = ctp_instrument_evidence_errors(
+            instrument,
+            exchange_id,
+            instrument_result.records[0],
+            margin_result.records[0],
+            commission_result.records[0],
+        )
+        metadata_complete = not evidence_errors
+        if evidence_errors:
+            payload["metadata_error"] = ",".join(evidence_errors)
+        spec.update(
+            symbol=text,
+            instrument=instrument,
+            metadata_complete=metadata_complete,
+            evidence_complete=metadata_complete,
+        )
+        payload.update(
+            metadata_complete=metadata_complete,
+            evidence_complete=metadata_complete,
+        )
+        return self._make_request_data(
+            [spec] if metadata_complete else [],
+            "get_exchange_info",
+            text,
+            payload,
+            status=metadata_complete,
+        )
 
     @property
     def trader_client(self):
         return self._trader
+
+    def get_environment_info(self) -> dict[str, Any]:
+        official_simnow = self.ctp_environment == "simnow" and str(
+            self.ctp_env_profile or ""
+        ).startswith("set")
+        return {
+            "environment": "demo" if official_simnow else "unknown",
+            "simulated": True if official_simnow else None,
+            "verified": official_simnow,
+            "profile": self.ctp_env_profile,
+            "readiness": self.ctp_env_readiness,
+        }
+
+    def get_session_state(self) -> dict[str, Any]:
+        if self._trader is None:
+            return {
+                "connected": False,
+                "auth_state": "disconnected",
+                "login_state": "disconnected",
+                "settlement_state": "unknown",
+                "read_only_ready": False,
+                "trading_ready": False,
+                "request_counts": {},
+                "environment_profile": self.ctp_env_profile,
+                "environment_readiness": self.ctp_env_readiness,
+            }
+        result = self._trader.get_session_state()
+        result.update(
+            environment_profile=self.ctp_env_profile,
+            environment_readiness=self.ctp_env_readiness,
+        )
+        return result
+
+    def get_request_counts(self) -> dict[str, int]:
+        if self._trader is None:
+            return {}
+        return self._trader.get_request_counts()
+
+    def confirm_settlement(self, timeout: float = 5.0) -> bool:
+        self._ensure_connected()
+        return bool(self._trader.confirm_settlement(timeout=timeout))
+
+    def verify_settlement_confirmation(self, timeout: float = 5.0) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.verify_settlement_confirmation(timeout=timeout)
+
+    def query_account_result(self, timeout: float = 5.0) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_account_result(timeout=timeout)
+
+    def query_positions_result(self, timeout: float = 5.0) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_positions_result(timeout=timeout)
+
+    def query_orders_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_orders_result(**kwargs)
+
+    query_order_result = query_orders_result
+
+    def query_trades_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_trades_result(**kwargs)
+
+    def query_instruments_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_instruments_result(**kwargs)
+
+    def query_instrument_margin_rate_result(
+        self, *args: Any, **kwargs: Any
+    ) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_instrument_margin_rate_result(*args, **kwargs)
+
+    def query_instrument_commission_rate_result(
+        self, *args: Any, **kwargs: Any
+    ) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_instrument_commission_rate_result(*args, **kwargs)
+
+    def query_settlement_confirmation_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_settlement_confirmation_result(**kwargs)
 
 
 class CtpMarketStream(BaseDataStream):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
+        self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.md_front = resolved_kwargs.get("md_front", "")
         self.broker_id = resolved_kwargs.get("broker_id", "")
         self.user_id = resolved_kwargs.get("user_id", "")
@@ -462,6 +1095,10 @@ class CtpMarketStream(BaseDataStream):
         self.topics = resolved_kwargs.get("topics", [])
         self.asset_type = resolved_kwargs.get("asset_type", "FUTURE")
         self._md_client = None
+        self._ingest_seq = 0
+        self._observed_client_generation = 0
+        self._connection_generation = 0
+        self._volume_tracker = CtpVolumeDeltaTracker()
 
     def connect(self):
         self.state = ConnectionState.CONNECTING
@@ -488,7 +1125,29 @@ class CtpMarketStream(BaseDataStream):
     def _on_tick(self, tick_field):
         tick_dict = _ctp_field_to_dict(tick_field)
         symbol = tick_dict.get("InstrumentID", "")
-        self.push_data(CtpTickerData(tick_dict, symbol, self.asset_type, True))
+        client_generation = int(
+            getattr(self._md_client, "connection_generation", 0) or 0
+        )
+        if client_generation != self._observed_client_generation:
+            self._observed_client_generation = client_generation
+            self._connection_generation += 1
+            self._ingest_seq = 0
+        self._ingest_seq += 1
+        row = CtpTickerData(
+            tick_dict,
+            symbol,
+            self.asset_type,
+            True,
+            connection_generation=self._connection_generation,
+            ingest_seq=self._ingest_seq,
+        )
+        row.init_data()
+        row.resolve_event_time()
+        if _validate_ctp_quote(row):
+            self._volume_tracker.apply(row)
+        else:
+            row.apply_volume_delta(0, complete=False, quality="INVALID_QUOTE")
+        self.push_data(row)
 
     def _on_error(self, rsp_info):
         self.state = ConnectionState.ERROR
@@ -518,43 +1177,71 @@ class CtpMarketStream(BaseDataStream):
 
 class CtpTradeStream(BaseDataStream):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
+        self._request_feed = kwargs.pop("request_feed", None)
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
+        self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.td_front = resolved_kwargs.get("td_front", "")
         self.broker_id = resolved_kwargs.get("broker_id", "")
         self.user_id = resolved_kwargs.get("user_id", "")
         self.password = resolved_kwargs.get("password", "")
         self.auth_code = resolved_kwargs.get("auth_code", "0000000000000000")
         self.app_id = resolved_kwargs.get("app_id", "simnow_client_test")
+        self.auto_settlement_confirm = _as_bool(
+            resolved_kwargs.get("auto_settlement_confirm"), default=True
+        )
         self.asset_type = resolved_kwargs.get("asset_type", "FUTURE")
         self._trader = None
+        self._owns_trader = False
 
     def connect(self):
         self.state = ConnectionState.CONNECTING
-        self._trader = ctp_client.TraderClient(
-            self.td_front,
-            self.broker_id,
-            self.user_id,
-            self.password,
-            app_id=self.app_id,
-            auth_code=self.auth_code,
-        )
+        if self._request_feed is not None:
+            self._request_feed.connect()
+            self._trader = self._request_feed.trader_client
+            self._owns_trader = False
+            if self._trader is None:
+                self.state = ConnectionState.ERROR
+                raise BtConnectionError(
+                    "CTP", "shared request feed has no TraderClient"
+                )
+        else:
+            self._trader = ctp_client.TraderClient(
+                self.td_front,
+                self.broker_id,
+                self.user_id,
+                self.password,
+                app_id=self.app_id,
+                auth_code=self.auth_code,
+                auto_settlement_confirm=self.auto_settlement_confirm,
+            )
+            self._owns_trader = True
         self._trader.on_order = self._on_order
         self._trader.on_trade = self._on_trade
         self._trader.on_login = self._on_login
         self._trader.on_error = self._on_error
-        self._trader.start(block=False)
+        if self._owns_trader:
+            self._trader.start(block=False)
+        elif getattr(self._trader, "is_read_only_ready", False):
+            self.state = ConnectionState.AUTHENTICATED
 
     def _on_login(self, login_field):
         self.state = ConnectionState.AUTHENTICATED
 
     def _on_order(self, order_field):
         order_dict = _ctp_field_to_dict(order_field)
+        session = self._trader.get_session_state() if self._trader is not None else {}
+        order_dict.setdefault("TradingDay", session.get("trading_day", ""))
+        order_dict.setdefault("InvestorID", self.user_id)
         symbol = order_dict.get("InstrumentID", "")
         self.push_data(CtpOrderData(order_dict, symbol, self.asset_type, True))
 
     def _on_trade(self, trade_field):
         trade_dict = _ctp_field_to_dict(trade_field)
+        session = self._trader.get_session_state() if self._trader is not None else {}
+        trade_dict.setdefault("TradingDay", session.get("trading_day", ""))
+        trade_dict.setdefault("InvestorID", self.user_id)
         symbol = trade_dict.get("InstrumentID", "")
         self.push_data(CtpTradeData(trade_dict, symbol, self.asset_type, True))
 
@@ -563,8 +1250,19 @@ class CtpTradeStream(BaseDataStream):
 
     def disconnect(self):
         if self._trader is not None:
-            self._trader.stop()
+            if self._owns_trader:
+                self._trader.stop()
+            else:
+                for callback_name, callback in (
+                    ("on_order", self._on_order),
+                    ("on_trade", self._on_trade),
+                    ("on_login", self._on_login),
+                    ("on_error", self._on_error),
+                ):
+                    if getattr(self._trader, callback_name, None) == callback:
+                        setattr(self._trader, callback_name, None)
             self._trader = None
+        self._owns_trader = False
         self.state = ConnectionState.DISCONNECTED
 
     def subscribe_topics(self, topics):
@@ -594,5 +1292,6 @@ __all__ = [
     "CtpRequestData",
     "CtpRequestDataFuture",
     "CtpTradeStream",
+    "CtpVolumeDeltaTracker",
     "_ctp_field_to_dict",
 ]
