@@ -318,6 +318,14 @@ class CtpRequestData(Feed):
         field.OrderPriceType = "2"
         field.TimeCondition = "3"
         field.VolumeCondition = "1"
+        time_in_force = str(kwargs.get("time_in_force", "GTC")).upper()
+        if time_in_force in {"IOC", "FOK"}:
+            field.TimeCondition = "1"
+            if time_in_force == "FOK":
+                field.VolumeCondition = "3"
+                field.MinVolume = order_volume
+        elif time_in_force not in {"GTC", "DAY"}:
+            raise ValueError(f"CTP time_in_force {time_in_force!r} is unsupported.")
         field.LimitPrice = limit_price
         if client_order_id is not None:
             field.OrderRef = str(client_order_id)
@@ -392,6 +400,18 @@ class CtpRequestData(Feed):
             timeout=kwargs.get("timeout", 5),
         ):
             data = raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
+            # OrderRef is local to a front/session and is not an OrderSysID.
+            # The native query filters OrderSysID; filter the alternative
+            # client reference here before returning public order containers.
+            if any(
+                kwargs.get(key) is not None and str(data.get(native_key, "")) != str(kwargs[key])
+                for key, native_key in (
+                    ("order_ref", "OrderRef"),
+                    ("front_id", "FrontID"),
+                    ("session_id", "SessionID"),
+                )
+            ):
+                continue
             rows.append(CtpOrderData(data, data.get("InstrumentID", symbol), self.asset_type, True))
         return self._make_request_data(rows, "query_order", symbol, extra_data)
 
