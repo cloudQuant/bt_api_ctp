@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import warnings
+from contextlib import suppress
 from decimal import Decimal, InvalidOperation
 from math import isfinite
 from sys import float_info
@@ -407,6 +408,7 @@ class CtpRequestData(Feed):
         self._connect_lock = threading.Lock()
         self._connected = False
         self._connect_timeout = resolved_kwargs.get("connect_timeout", 15)
+        self._execution_gate_capability: object | None = None
         self.auto_settlement_confirm = _as_bool(
             resolved_kwargs.get("auto_settlement_confirm"), default=True
         )
@@ -415,6 +417,118 @@ class CtpRequestData(Feed):
         if isinstance(raw_response, dict) and raw_response.get("ErrorID", 0) != 0:
             return raw_response
         return None
+
+    def configure_execution_gate(self, capability: object) -> dict[str, Any]:
+        """Install the SDK-owned gate without changing legacy feed behavior."""
+
+        if capability is None:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_execution_gate_capability_required"
+            )
+        with self._connect_lock:
+            installed = self._execution_gate_capability
+            if installed is not None and installed is not capability:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_already_configured"
+                )
+            self._execution_gate_capability = capability
+            trader = self._trader
+            if trader is not None:
+                method = getattr(trader, "configure_execution_gate", None)
+                if not callable(method):
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_execution_gate_native_contract_unavailable"
+                    )
+                return dict(method(capability))
+        return self.get_execution_gate_state()
+
+    def arm_execution_gate(
+        self,
+        capability: object,
+        proof: Any,
+    ) -> dict[str, Any]:
+        """Arm the existing native session for one proof-bound instrument."""
+
+        with self._connect_lock:
+            if capability is not self._execution_gate_capability:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_capability_mismatch"
+                )
+            trader = self._trader
+            method = getattr(trader, "arm_execution_gate", None)
+            if trader is None or not callable(method):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            return dict(
+                method(
+                    capability,
+                    proof,
+                    environment_profile=self.ctp_env_profile,
+                )
+            )
+
+    def disarm_execution_gate(
+        self,
+        capability: object,
+        reason: str = "execution_arm_revoked",
+    ) -> dict[str, Any]:
+        """Idempotently revoke managed writes while retaining read access."""
+
+        with self._connect_lock:
+            if capability is not self._execution_gate_capability:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_capability_mismatch"
+                )
+            trader = self._trader
+            if trader is None:
+                return self.get_execution_gate_state()
+            method = getattr(trader, "disarm_execution_gate", None)
+            if not callable(method):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            return dict(method(capability, reason))
+
+    def get_execution_gate_state(self) -> dict[str, Any]:
+        """Return gate evidence without returning its opaque capability."""
+
+        trader = self._trader
+        method = getattr(trader, "get_execution_gate_state", None)
+        if callable(method):
+            return dict(method())
+        return {
+            "managed": self._execution_gate_capability is not None,
+            "armed": False,
+            "connection_generation": None,
+            "trading_day": None,
+            "instrument": None,
+            "environment_profile": None,
+            "proof_sha256": None,
+            "revocation_reason": None,
+        }
+
+    def _ensure_execution_permitted(
+        self,
+        capability: object | None,
+        symbol: Any,
+        exchange_id: Any = None,
+    ) -> None:
+        if self._execution_gate_capability is None:
+            return
+        trader = self._trader
+        method = getattr(trader, "require_execution_write", None)
+        state_reader = getattr(trader, "get_execution_gate_state", None)
+        if trader is None or not callable(method) or not callable(state_reader):
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_execution_gate_native_contract_unavailable"
+            )
+        state = state_reader()
+        if not isinstance(state, dict) or state.get("managed") is not True:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_execution_gate_native_contract_unavailable"
+            )
+        method(capability, symbol, exchange_id)
 
     def _ensure_connected(self):
         if self._trader is None or not self._trader.is_read_only_ready:
@@ -445,6 +559,8 @@ class CtpRequestData(Feed):
                     auth_code=self.auth_code,
                     auto_settlement_confirm=self.auto_settlement_confirm,
                 )
+                if self._execution_gate_capability is not None:
+                    trader.configure_execution_gate(self._execution_gate_capability)
                 self._trader = trader
                 trader.start(block=False)
             if getattr(trader, "is_read_only_ready", False):
@@ -459,7 +575,13 @@ class CtpRequestData(Feed):
         with self._connect_lock:
             trader = self._trader
             self._trader = None
+            capability = self._execution_gate_capability
         if trader is not None:
+            if capability is not None:
+                with suppress(Exception):
+                    trader.disarm_execution_gate(
+                        capability, "ctp_execution_gate_feed_disconnected"
+                    )
             trader.stop()
         self._connected = False
 
@@ -560,12 +682,16 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
+        execution_capability = kwargs.pop("_execution_capability", None)
+        exchange_id = kwargs.get("exchange_id", "")
+        self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
             return self._make_request_data(
                 [], "make_order", symbol, extra_data, status=False
             )
+        self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         try:
             side, order_kind = str(order_type or "").lower().split("-", 1)
         except ValueError as exc:
@@ -584,7 +710,6 @@ class CtpRequestData(Feed):
         order_volume = _positive_int_lot(volume, "volume")
         direction = CTP_DIRECTION_FLAG[side]
         offset_flag = CTP_OFFSET_FLAG[offset_text]
-        exchange_id = kwargs.get("exchange_id", "")
         field = CThostFtdcInputOrderField()
         field.BrokerID = self.broker_id
         field.InvestorID = self.user_id
@@ -623,13 +748,25 @@ class CtpRequestData(Feed):
             field.OrderRef = str(trader._req_id + 1)
         next_req_id = trader._next_request_id()
         field.RequestID = next_req_id
-        api = trader.api
-        if api is None:
-            return self._make_request_data(
-                [], "make_order", symbol, extra_data, status=False
+        submit = getattr(trader, "submit_order_insert", None)
+        if callable(submit):
+            ret = submit(
+                field,
+                next_req_id,
+                execution_capability=execution_capability,
             )
-        trader._record_request("order_insert")
-        ret = api.ReqOrderInsert(field, next_req_id)
+        else:
+            if self._execution_gate_capability is not None:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            api = trader.api
+            if api is None:
+                return self._make_request_data(
+                    [], "make_order", symbol, extra_data, status=False
+                )
+            trader._record_request("order_insert")
+            ret = api.ReqOrderInsert(field, next_req_id)
         order_dict = _ctp_field_to_dict(field)
         order_dict["_ret"] = ret
         order_dict["FrontID"] = getattr(trader, "_front_id", 0)
@@ -646,18 +783,21 @@ class CtpRequestData(Feed):
         )
 
     def cancel_order(self, symbol, order_id=None, extra_data=None, **kwargs):
+        execution_capability = kwargs.pop("_execution_capability", None)
+        exchange_id = kwargs.get("exchange_id", "")
+        self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
             return self._make_request_data(
                 [], "cancel_order", symbol, extra_data, status=False
             )
+        self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         field = CThostFtdcInputOrderActionField()
         field.BrokerID = self.broker_id
         field.InvestorID = self.user_id
         field.InstrumentID = symbol
         field.ActionFlag = "0"
-        exchange_id = kwargs.get("exchange_id", "")
         if exchange_id:
             field.ExchangeID = exchange_id
         order_ref = kwargs.get("order_ref", "")
@@ -670,13 +810,25 @@ class CtpRequestData(Feed):
             field.FrontID = int(front_id) if front_id else trader._front_id
             field.SessionID = int(session_id) if session_id else trader._session_id
         request_id = trader._next_request_id()
-        api = trader.api
-        if api is None:
-            return self._make_request_data(
-                [], "cancel_order", symbol, extra_data, status=False
+        submit = getattr(trader, "submit_order_action", None)
+        if callable(submit):
+            ret = submit(
+                field,
+                request_id,
+                execution_capability=execution_capability,
             )
-        trader._record_request("order_action")
-        ret = api.ReqOrderAction(field, request_id)
+        else:
+            if self._execution_gate_capability is not None:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            api = trader.api
+            if api is None:
+                return self._make_request_data(
+                    [], "cancel_order", symbol, extra_data, status=False
+                )
+            trader._record_request("order_action")
+            ret = api.ReqOrderAction(field, request_id)
         return self._make_request_data(
             [_ctp_field_to_dict(field)],
             "cancel_order",
@@ -1019,7 +1171,8 @@ class CtpRequestData(Feed):
                 "settlement_state": "unknown",
                 "read_only_ready": False,
                 "trading_ready": False,
-                "request_counts": {},
+                "settlement_readback_verified": False,
+                "request_counts": ctp_client.empty_ctp_request_counts(),
                 "environment_profile": self.ctp_env_profile,
                 "environment_readiness": self.ctp_env_readiness,
             }
@@ -1032,10 +1185,40 @@ class CtpRequestData(Feed):
 
     def get_request_counts(self) -> dict[str, int]:
         if self._trader is None:
-            return {}
+            return ctp_client.empty_ctp_request_counts()
         return self._trader.get_request_counts()
 
-    def confirm_settlement(self, timeout: float = 5.0) -> bool:
+    def confirm_settlement(
+        self,
+        timeout: float = 5.0,
+        *,
+        _execution_capability: object | None = None,
+    ) -> bool:
+        with self._connect_lock:
+            installed = self._execution_gate_capability
+            trader = self._trader
+            if installed is not None:
+                if _execution_capability is not installed:
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_execution_gate_capability_mismatch"
+                    )
+                method = getattr(trader, "confirm_settlement", None)
+                state_reader = getattr(trader, "get_execution_gate_state", None)
+                if trader is None or not callable(method) or not callable(state_reader):
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_execution_gate_native_contract_unavailable"
+                    )
+                state = state_reader()
+                if not isinstance(state, dict) or state.get("managed") is not True:
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_execution_gate_native_contract_unavailable"
+                    )
+                return bool(
+                    method(
+                        timeout=timeout,
+                        _execution_capability=_execution_capability,
+                    )
+                )
         self._ensure_connected()
         return bool(self._trader.confirm_settlement(timeout=timeout))
 
