@@ -4689,6 +4689,57 @@ static size_t iconv(iconv_t cd, char **inbuf, size_t *inbytesleft, char **outbuf
 #include "iconv.h"
 #endif
 
+#include <stdexcept>
+
+#if defined(BT_API_CTP_DARWIN_ARM64_AUDITED_TRADER_ABI)
+#include <cstddef>
+#include <cstring>
+#include <limits>
+
+namespace {
+constexpr std::size_t kReqUserLoginVtableSlot = 14;
+constexpr std::size_t kLoginEnvelopePayloadCapacity = 0x22c - 0x20;
+using ReqUserLoginWithPayload = int (*)(
+    CThostFtdcTraderApi*, CThostFtdcReqUserLoginField*, int, int, char*);
+static_assert(
+    sizeof(CThostFtdcReqUserLoginField) <= kLoginEnvelopePayloadCapacity,
+    "CThostFtdcReqUserLoginField must fit the audited login envelope");
+static_assert(
+    sizeof(CThostFtdcReqUserLoginField) <= std::numeric_limits<int>::max(),
+    "CThostFtdcReqUserLoginField length must fit int");
+}  // namespace
+
+#endif
+
+int bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(
+    CThostFtdcTraderApi* api,
+    CThostFtdcReqUserLoginField* field,
+    int request_id) {
+#if defined(BT_API_CTP_DARWIN_ARM64_AUDITED_TRADER_ABI)
+    if (api == nullptr || field == nullptr) {
+        throw std::invalid_argument("CTP login API and field are required");
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, static_cast<void*>(api), sizeof(vtable));
+    if (vtable == nullptr || vtable[kReqUserLoginVtableSlot] == nullptr) {
+        throw std::runtime_error("audited CTP login vtable slot is unavailable");
+    }
+    const auto request = reinterpret_cast<ReqUserLoginWithPayload>(
+        vtable[kReqUserLoginVtableSlot]);
+    return request(
+        api,
+        field,
+        request_id,
+        static_cast<int>(sizeof(*field)),
+        reinterpret_cast<char*>(field));
+#else
+    (void)api;
+    (void)field;
+    (void)request_id;
+    throw std::runtime_error("audited Darwin arm64 CTP login ABI shim is unavailable");
+#endif
+}
+
 
 /* Cached iconv handle for GBK→UTF-8 conversion (avoids repeated open/close) */
 static iconv_t _ctp_iconv_handle = (iconv_t)-1;
@@ -493476,6 +493527,68 @@ SWIGINTERN PyObject *CThostFtdcTraderApi_swigregister(PyObject *SWIGUNUSEDPARM(s
   return SWIG_Py_Void();
 }
 
+SWIGINTERN PyObject *_wrap_bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(PyObject *self, PyObject *args) {
+  PyObject *resultobj = 0;
+  CThostFtdcTraderApi *arg1 = 0 ;
+  CThostFtdcReqUserLoginField *arg2 = 0 ;
+  int arg3 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+  void *argp2 = 0 ;
+  int res2 = 0 ;
+  int val3 ;
+  int ecode3 = 0 ;
+  PyObject *swig_obj[3] ;
+  int result;
+
+  (void)self;
+  if (!SWIG_Python_UnpackTuple(args, "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716", 3, 3, swig_obj)) SWIG_fail;
+  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_CThostFtdcTraderApi, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716" "', argument " "1"" of type '" "CThostFtdcTraderApi *""'");
+  }
+  arg1 = reinterpret_cast< CThostFtdcTraderApi * >(argp1);
+  res2 = SWIG_ConvertPtr(swig_obj[1], &argp2,SWIGTYPE_p_CThostFtdcReqUserLoginField, 0 |  0 );
+  if (!SWIG_IsOK(res2)) {
+    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716" "', argument " "2"" of type '" "CThostFtdcReqUserLoginField *""'");
+  }
+  arg2 = reinterpret_cast< CThostFtdcReqUserLoginField * >(argp2);
+  ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
+  if (!SWIG_IsOK(ecode3)) {
+    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716" "', argument " "3"" of type '" "int""'");
+  }
+  arg3 = static_cast< int >(val3);
+  {
+    try {
+      {
+        SWIG_PYTHON_THREAD_BEGIN_ALLOW;
+        result = (int)bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(arg1,arg2,arg3);
+        SWIG_PYTHON_THREAD_END_ALLOW;
+      }
+    } catch(Swig::DirectorPureVirtualException &e) {
+      /* Call to pure virtual method, raise not implemented error */
+      PyErr_SetString(PyExc_NotImplementedError, "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(CThostFtdcTraderApi *,CThostFtdcReqUserLoginField *,int) not implemented");
+      SWIG_fail;
+    } catch(Swig::DirectorException &e) {
+      /* Fail if there is a problem in the director proxy transport */
+      SWIG_fail;
+    } catch(std::exception& e) {
+      /* Convert standard error to Exception */
+      PyErr_SetString(PyExc_Exception, const_cast<char*>(e.what()));
+      SWIG_fail;
+    } catch(...) {
+      /* Final catch all, results in runtime error */
+      PyErr_SetString(PyExc_RuntimeError, "Unknown error caught in CTP SWIG wrapper...");
+      SWIG_fail;
+    }
+  }
+  resultobj = SWIG_From_int(static_cast< int >(result));
+  return resultobj;
+fail:
+  return NULL;
+}
+
+
 static PyMethodDef SwigMethods[] = {
 	 { "CThostFtdcDisseminationField_SequenceSeries_set", _wrap_CThostFtdcDisseminationField_SequenceSeries_set, METH_VARARGS, NULL},
 	 { "CThostFtdcDisseminationField_SequenceSeries_get", _wrap_CThostFtdcDisseminationField_SequenceSeries_get, METH_O, NULL},
@@ -505805,6 +505918,7 @@ static PyMethodDef SwigMethods[] = {
 	 { "CThostFtdcTraderApi_ReqQryInvestorProdRULEMargin", _wrap_CThostFtdcTraderApi_ReqQryInvestorProdRULEMargin, METH_VARARGS, NULL},
 	 { "CThostFtdcTraderApi_ReqQryInvestorPortfSetting", _wrap_CThostFtdcTraderApi_ReqQryInvestorPortfSetting, METH_VARARGS, NULL},
 	 { "CThostFtdcTraderApi_swigregister", CThostFtdcTraderApi_swigregister, METH_O, NULL},
+	 { "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716", _wrap_bt_api_ctp_req_user_login_darwin_arm64_v677_20240716, METH_VARARGS, NULL},
 	 { NULL, NULL, 0, NULL }
 };
 
@@ -509904,4 +510018,3 @@ SWIGINTERN int SWIG_mod_exec(PyObject *m) {
   SWIG_PYTHON_INITIALIZE_THREADS;
   return 0;
 }
-

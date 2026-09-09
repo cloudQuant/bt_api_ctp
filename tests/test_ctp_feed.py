@@ -15,11 +15,7 @@ CTP Feed 集成测试
 
 from __future__ import annotations
 
-import importlib
-import os
 import queue
-import subprocess
-import sys
 import threading
 
 import pytest
@@ -61,46 +57,23 @@ class TestCtpImports:
         assert MdClient is not None
         assert TraderClient is not None
 
-    def test_ctp_client_prefers_external_runtime_when_installed(self):
-        """验证安装了 ctp-python 时优先使用外部 runtime（需要设置环境变量）。"""
-        from bt_api_ctp.ctp.client import get_ctp_runtime_source
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        (
+            ("BT_API_PY_CTP_RUNTIME", "openctp_ctp"),
+            ("BT_API_PY_CTP_RUNTIME", "external_ctp_python"),
+            ("BT_API_PY_USE_OPENCTP_CTP", "1"),
+            ("BT_API_PY_USE_EXTERNAL_CTP", "true"),
+        ),
+    )
+    def test_ctp_client_runtime_is_always_vendored(self, monkeypatch, name, value):
+        """External-binding environment overrides must not replace the bundled ABI."""
+        from bt_api_ctp.ctp import client as client_module
 
-        try:
-            ctp_module = importlib.import_module("ctp")
-            has_external_ctp = hasattr(ctp_module, "CThostFtdcMdApi")
-        except ImportError:
-            has_external_ctp = False
-        if has_external_ctp:
-            import os
+        monkeypatch.setenv(name, value)
 
-            if os.environ.get("BT_API_PY_USE_EXTERNAL_CTP", "").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                assert get_ctp_runtime_source() == "external_ctp_python"
-            else:
-                assert get_ctp_runtime_source() == "vendored_bt_api_py"
-        else:
-            assert get_ctp_runtime_source() == "vendored_bt_api_py"
-
-    def test_openctp_runtime_preflight_does_not_abort_interpreter(self):
-        """openctp_ctp runtime is probed in a child process before main-process import."""
-        env = dict(os.environ)
-        env["BT_API_PY_CTP_RUNTIME"] = "openctp_ctp"
-        result = subprocess.run(
-            [sys.executable, "-c", "import bt_api_ctp.ctp.client"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-
-        assert result.returncode not in {-6, 134}
-        if result.returncode != 0:
-            assert "openctp_ctp" in f"{result.stderr}\n{result.stdout}"
+        assert client_module._select_ctp_runtime_source() == "vendored_bt_api_py"
+        assert client_module.get_ctp_runtime_source() == "vendored_bt_api_py"
 
     def test_ctp_feed_import(self):
         """验证 CTP Feed 类可以正常导入"""

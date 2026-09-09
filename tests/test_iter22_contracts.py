@@ -944,6 +944,145 @@ def test_instrument_query_exposes_expiry_without_inventing_trading_day_ranking()
     assert row["prior_day_ranking_evidence_complete"] is False
 
 
+def test_instrument_query_submits_exact_product_filter() -> None:
+    client = _read_ready(TraderClient("tcp://test", "9999", "account", "secret"))
+    submitted = {}
+
+    class Api:
+        def ReqQryInstrument(self, field, request_id):
+            submitted["instrument_id"] = field.InstrumentID
+            submitted["exchange_id"] = field.ExchangeID
+            submitted["product_id"] = field.ProductID
+            client._handle_query_callback(
+                "instruments",
+                {"InstrumentID": "SA601", "ProductID": "SA"},
+                None,
+                request_id,
+                True,
+            )
+            return 0
+
+    client._api = Api()
+    result = client.query_instruments_result(
+        exchange_id="CZCE",
+        product_id="SA",
+        timeout=0.01,
+    )
+
+    assert result.complete is True
+    assert submitted == {
+        "instrument_id": "",
+        "exchange_id": "CZCE",
+        "product_id": "SA",
+    }
+    assert client.get_request_counts()["query_instruments"] == 1
+
+
+def test_instrument_product_filter_fails_closed_when_native_field_is_not_writable(
+    monkeypatch,
+) -> None:
+    class FieldWithoutProductID:
+        def __setattr__(self, name, value):
+            if name == "ProductID":
+                raise AttributeError("ProductID is unavailable")
+            super().__setattr__(name, value)
+
+    client = _read_ready(TraderClient("tcp://test", "9999", "account", "secret"))
+    client._api = SimpleNamespace(
+        ReqQryInstrument=lambda *_args: pytest.fail("unfiltered native query submitted")
+    )
+    monkeypatch.setattr(
+        client_module, "CThostFtdcQryInstrumentField", FieldWithoutProductID
+    )
+
+    result = client.query_instruments_result(product_id="SA", timeout=0.01)
+
+    assert result.complete is False
+    assert result.unsupported is True
+    assert result.error_code == -3
+    assert result.error_message == "native_instrument_filter_unsupported:ProductID"
+    assert client.get_request_counts()["query_instruments"] == 0
+
+
+def test_instrument_product_filter_is_forwarded_by_typed_and_public_feed_proxies() -> (
+    None
+):
+    seen = []
+
+    class Trader:
+        is_read_only_ready = True
+
+        @staticmethod
+        def query_instruments_result(**kwargs):
+            seen.append(kwargs)
+            return _result(
+                "instruments",
+                ({"InstrumentID": "SA601", "ProductID": "SA"},),
+            )
+
+    feed = CtpRequestDataFuture()
+    feed._trader = Trader()
+
+    typed_result = feed.query_instruments_result(
+        exchange_id="CZCE",
+        product_id="SA",
+        timeout=2,
+    )
+    public_result = feed.get_instruments(
+        exchange_id="CZCE",
+        product_id="SA",
+        timeout=3,
+    )
+
+    assert typed_result.complete is True
+    assert public_result.get_status() is True
+    assert seen == [
+        {
+            "instrument_id": "",
+            "exchange_id": "CZCE",
+            "product_id": "SA",
+            "timeout": 2,
+        },
+        {
+            "instrument_id": "",
+            "exchange_id": "CZCE",
+            "product_id": "SA",
+            "timeout": 3,
+        },
+    ]
+
+
+def test_instrument_feed_proxies_preserve_legacy_query_when_filter_is_omitted() -> None:
+    seen = []
+
+    class LegacyTrader:
+        is_read_only_ready = True
+
+        @staticmethod
+        def query_instruments_result(*, instrument_id, exchange_id, timeout):
+            seen.append(
+                {
+                    "instrument_id": instrument_id,
+                    "exchange_id": exchange_id,
+                    "timeout": timeout,
+                }
+            )
+            return _result("instruments", ())
+
+    feed = CtpRequestDataFuture()
+    feed._trader = LegacyTrader()
+
+    typed_result = feed.query_instruments_result(exchange_id="CZCE", timeout=2)
+    public_result = feed.get_instruments(exchange_id="CZCE", timeout=3)
+
+    assert typed_result.complete is True
+    assert public_result.get_status() is True
+    assert seen == [
+        {"instrument_id": "", "exchange_id": "CZCE", "timeout": 2},
+        {"instrument_id": "", "exchange_id": "CZCE", "timeout": 3},
+    ]
+
+
 def test_query_timeout_and_late_callback_never_become_empty_success() -> None:
     client = _read_ready(TraderClient("tcp://test", "9999", "account", "secret"))
     client._api = SimpleNamespace(ReqQryTradingAccount=lambda _field, _request_id: 0)
@@ -1320,6 +1459,29 @@ def test_auth_failure_does_not_submit_login() -> None:
     assert client.get_session_state()["auth_state"] == "failed"
     assert client.get_session_state()["login_state"] == "disconnected"
     assert submitted == []
+
+
+def test_login_abi_rejection_records_its_stable_error_code(monkeypatch) -> None:
+    client = TraderClient("tcp://test", "9999", "account", "secret")
+    client._api = object()
+    client._authentication_state = "authenticating"
+    client._connection_generation = 1
+    client._authentication_request_id = 1
+    client._authentication_connection_generation = 1
+
+    def reject_login(*_args):
+        raise client_module.CtpNativeAbiError("ctp_trader_login_abi_unverified")
+
+    monkeypatch.setattr(client_module, "_submit_trader_user_login", reject_login)
+
+    _TraderSpi(client).OnRspAuthenticate(None, None, 1, True)
+
+    state = client.get_session_state()
+    assert state["login_state"] == "failed"
+    assert state["last_error"] == {
+        "error": "login_submit_failed",
+        "detail": "ctp_trader_login_abi_unverified",
+    }
 
 
 def test_auth_and_login_responses_are_fenced_across_same_spi_reconnect() -> None:
@@ -2041,11 +2203,7 @@ def test_native_diagnostics_expose_only_matching_extension_hashes() -> None:
     assert diagnostics["native_loaded"] in {True, False}
     assert set(hashes) == set(paths)
     assert all(len(value) == 64 for value in hashes.values())
-    assert diagnostics["runtime_source"] in {
-        "vendored_bt_api_py",
-        "external_ctp_python",
-        "external_openctp_ctp",
-    }
+    assert diagnostics["runtime_source"] == "vendored_bt_api_py"
     if diagnostics["native_loaded"]:
         loaded_path = Path(diagnostics["loaded_module_path"])
         assert loaded_path.is_file()
@@ -2129,21 +2287,110 @@ def test_ctp_package_identity_excludes_caches_and_detects_source_drift(
     assert changed_sha256 != first_sha256
 
 
-def test_native_check_fails_closed_when_selected_runtime_has_only_python_modules(
+def test_native_check_fails_closed_when_vendored_runtime_has_only_python_modules(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(client_module, "_CTP_RUNTIME_SOURCE", "external_ctp_python")
+    monkeypatch.setattr(client_module, "_CTP_RUNTIME_SOURCE", "vendored_bt_api_py")
     monkeypatch.setattr(
         client_module,
         "_selected_runtime_modules",
-        lambda: {"ctp": "/tmp/ctp/__init__.py"},
+        lambda: {"bt_api_ctp.ctp": "/tmp/bt_api_ctp/ctp/__init__.py"},
     )
+    monkeypatch.setattr(client_module, "_is_vendored_ctp_native_loaded", lambda: False)
 
     diagnostics = client_module.get_ctp_native_diagnostics()
     assert diagnostics["native_loaded"] is False
     assert diagnostics["native_module_paths"] == {}
     with pytest.raises(ImportError, match="no verified native extension"):
         client_module._check_native_module()
+
+
+def test_submit_trader_user_login_uses_verified_bundled_shim(monkeypatch) -> None:
+    calls = []
+
+    class Api:
+        def ReqUserLogin(self, _field, _request_id):
+            raise AssertionError("verified Darwin arm64 login must use the shim")
+
+    api = Api()
+    field = object()
+
+    def guarded_submit(received_api, received_field, received_request_id):
+        calls.append((received_api, received_field, received_request_id))
+        return 23
+
+    monkeypatch.setattr(
+        client_module,
+        "_is_vendored_native_trader_api",
+        lambda candidate: candidate is api,
+    )
+    monkeypatch.setattr(
+        client_module._ctp_base,
+        "_submit_public_trader_user_login",
+        guarded_submit,
+    )
+
+    assert client_module._submit_trader_user_login(api, field, 17) == 23
+    assert calls == [(api, field, 17)]
+
+
+def test_submit_trader_user_login_fails_closed_when_shim_is_unverified(
+    monkeypatch,
+) -> None:
+    class Api:
+        def __init__(self) -> None:
+            self.direct_calls = []
+
+        def ReqUserLogin(self, field, request_id):
+            self.direct_calls.append((field, request_id))
+            return 0
+
+    api = Api()
+    field = object()
+    monkeypatch.setattr(
+        client_module, "_is_vendored_native_trader_api", lambda _api: True
+    )
+
+    def reject_login(*_args):
+        raise client_module.CtpNativeAbiError("ctp_trader_login_abi_unverified")
+
+    monkeypatch.setattr(
+        client_module._ctp_base,
+        "_submit_public_trader_user_login",
+        reject_login,
+    )
+
+    with pytest.raises(
+        client_module.CtpNativeAbiError,
+        match="ctp_trader_login_abi_unverified",
+    ):
+        client_module._submit_trader_user_login(api, field, 19)
+
+    assert api.direct_calls == []
+
+
+def test_submit_trader_user_login_uses_mock_fallback(monkeypatch) -> None:
+    class MockApi:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def ReqUserLogin(self, field, request_id):
+            self.calls.append((field, request_id))
+            return 29
+
+    api = MockApi()
+    field = object()
+    monkeypatch.setattr(
+        client_module, "_is_vendored_native_trader_api", lambda _api: False
+    )
+    monkeypatch.setattr(
+        client_module._ctp_base,
+        "_submit_public_trader_user_login",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected ABI guard")),
+    )
+
+    assert client_module._submit_trader_user_login(api, field, 23) == 29
+    assert api.calls == [(field, 23)]
 
 
 def test_missing_price_tick_never_falls_back_to_one() -> None:

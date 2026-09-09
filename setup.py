@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,13 @@ API_VERSION = "6.7.7"
 API_DIR = CTP_DIR / "api" / API_VERSION
 WRAPPER = CTP_DIR / "ctp_wrap.cpp"
 
+# CTP's macOS arm64 6.7.7 framework has a private four-argument
+# ``ReqUserLogin`` implementation while its shipped header declares two
+# arguments.  The shim is deliberately compiled only for this audited bundle.
+_AUDITED_DARWIN_ARM64_TRADER_SHA256 = (
+    "e22611e2b844c0eeefe1df85f9c7008d6931c37c13ef10f68db73efb5e0d4be7"
+)
+
 
 def _platform_name() -> str:
     if sys.platform == "darwin":
@@ -25,7 +34,9 @@ def _platform_name() -> str:
         return "linux"
     if sys.platform == "win32":
         return "windows"
-    raise RuntimeError(f"Unsupported platform for bt_api_ctp wheel build: {sys.platform}")
+    raise RuntimeError(
+        f"Unsupported platform for bt_api_ctp wheel build: {sys.platform}"
+    )
 
 
 def _platform_api_dir() -> pathlib.Path:
@@ -44,6 +55,47 @@ def _copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst, symlinks=True)
+
+
+def _sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _darwin_build_architectures() -> set[str]:
+    if sys.platform != "darwin":
+        return set()
+    flags = os.environ.get("ARCHFLAGS", "").split()
+    requested = {
+        flags[index + 1].lower()
+        for index, flag in enumerate(flags[:-1])
+        if flag == "-arch"
+    }
+    return requested or {platform.machine().lower()}
+
+
+def _is_darwin_arm64_build() -> bool:
+    return _darwin_build_architectures() in ({"arm64"}, {"aarch64"})
+
+
+def _validate_darwin_arm64_trader_framework(platform_dir: pathlib.Path) -> None:
+    architectures = _darwin_build_architectures()
+    if {"arm64", "aarch64"} & architectures and len(architectures) != 1:
+        raise RuntimeError(
+            "Refusing multi-architecture Darwin build for the audited "
+            "ReqUserLogin ABI shim."
+        )
+    if not _is_darwin_arm64_build():
+        return
+    binary = _mac_framework_binary(platform_dir / "thosttraderapi_se.framework")
+    if _sha256_file(binary) != _AUDITED_DARWIN_ARM64_TRADER_SHA256:
+        raise RuntimeError(
+            "Refusing unverified Darwin arm64 Trader framework for the "
+            "ReqUserLogin ABI shim."
+        )
 
 
 def _runtime_paths(platform_dir: pathlib.Path) -> list[pathlib.Path]:
@@ -99,6 +151,7 @@ def _extension_kwargs(platform_dir: pathlib.Path) -> dict[str, object]:
     libraries: list[str] = []
     extra_compile_args: list[str] = []
     extra_link_args: list[str] = []
+    define_macros: list[tuple[str, str]] = []
 
     if sys.platform == "darwin":
         frameworks = _runtime_paths(platform_dir)
@@ -108,8 +161,12 @@ def _extension_kwargs(platform_dir: pathlib.Path) -> dict[str, object]:
         )
         extra_compile_args.extend(["-std=c++11"])
         extra_link_args.extend(["-Wl,-rpath,@loader_path"])
-        extra_link_args.extend(str(_mac_framework_binary(framework)) for framework in frameworks)
+        extra_link_args.extend(
+            str(_mac_framework_binary(framework)) for framework in frameworks
+        )
         extra_link_args.append(str(_mac_libiconv_stub()))
+        if _is_darwin_arm64_build():
+            define_macros.append(("BT_API_CTP_DARWIN_ARM64_AUDITED_TRADER_ABI", "1"))
     elif sys.platform.startswith("linux"):
         library_dirs.append(str(platform_dir))
         libraries.extend(["thostmduserapi_se", "thosttraderapi_se"])
@@ -126,6 +183,7 @@ def _extension_kwargs(platform_dir: pathlib.Path) -> dict[str, object]:
         "libraries": libraries,
         "extra_compile_args": extra_compile_args,
         "extra_link_args": extra_link_args,
+        "define_macros": define_macros,
     }
 
 
@@ -137,11 +195,17 @@ class BuildExt(build_ext):
 
     def _validate_inputs(self) -> None:
         missing = [
-            path for path in [WRAPPER, *_runtime_paths(_platform_api_dir())] if not path.exists()
+            path
+            for path in [
+                WRAPPER,
+                *_runtime_paths(_platform_api_dir()),
+            ]
+            if not path.exists()
         ]
         if missing:
             formatted = "\n".join(f"  - {path}" for path in missing)
             raise RuntimeError(f"Required CTP build inputs are missing:\n{formatted}")
+        _validate_darwin_arm64_trader_framework(_platform_api_dir())
 
     def _copy_runtime_libraries(self) -> None:
         output_dir = pathlib.Path(self.get_ext_fullpath("bt_api_ctp.ctp._ctp")).parent

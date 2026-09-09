@@ -3,7 +3,14 @@
 
 from __future__ import annotations
 
-from ._ctp_base import _ctp, _swig_repr, print_exception, stderr, weakref
+from ._ctp_base import (
+    _ctp,
+    _submit_public_trader_user_login,
+    _swig_repr,
+    print_exception,
+    stderr,
+    weakref,
+)
 
 
 class CThostFtdcTraderSpi:
@@ -833,7 +840,7 @@ class CThostFtdcTraderApi:
         return _ctp.CThostFtdcTraderApi_SubmitUserSystemInfo(self, pUserSystemInfo)
 
     def ReqUserLogin(self, pReqUserLoginField, nRequestID):
-        return _ctp.CThostFtdcTraderApi_ReqUserLogin(self, pReqUserLoginField, nRequestID)
+        return _submit_public_trader_user_login(self, pReqUserLoginField, nRequestID)
 
     def ReqUserLogout(self, pUserLogout, nRequestID):
         return _ctp.CThostFtdcTraderApi_ReqUserLogout(self, pUserLogout, nRequestID)

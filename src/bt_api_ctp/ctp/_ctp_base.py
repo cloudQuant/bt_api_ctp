@@ -12,6 +12,20 @@ from sys import float_info, stderr
 from traceback import print_exception
 from types import ModuleType
 
+_AUDITED_DARWIN_ARM64_TRADER_VERSION = "v6.7.7_MacOS_20240716 15:00:00"
+_AUDITED_DARWIN_ARM64_TRADER_SHA256 = (
+    "e22611e2b844c0eeefe1df85f9c7008d6931c37c13ef10f68db73efb5e0d4be7"
+)
+_DARWIN_ARM64_LOGIN_SHIM = "bt_api_ctp_req_user_login_darwin_arm64_v677_20240716"
+
+
+class CtpNativeAbiError(RuntimeError):
+    """Fail closed when a native CTP ABI prerequisite cannot be verified."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
 
 # Import the low-level C/C++ module.
 class _FallbackSwigHandle:
@@ -172,6 +186,58 @@ def is_ctp_native_loaded() -> bool:
     return not isinstance(_ctp, _FallbackCtpModule)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def _is_darwin_arm64() -> bool:
+    return sys.platform == "darwin" and platform.machine().lower() in {
+        "arm64",
+        "aarch64",
+    }
+
+
+def _has_audited_darwin_arm64_login_shim() -> bool:
+    """Check the exact native Trader bundle supported by the login ABI shim."""
+    if not is_ctp_native_loaded():
+        return False
+    shim = getattr(_ctp, _DARWIN_ARM64_LOGIN_SHIM, None)
+    version_getter = getattr(_ctp, "CThostFtdcTraderApi_GetApiVersion", None)
+    if not callable(shim) or not callable(version_getter):
+        return False
+    try:
+        version = str(version_getter())
+    except Exception:
+        return False
+    framework = (
+        _ctp_package_dir()
+        / "thosttraderapi_se.framework"
+        / "Versions"
+        / "A"
+        / "thosttraderapi_se"
+    )
+    return (
+        version == _AUDITED_DARWIN_ARM64_TRADER_VERSION
+        and _sha256_file(framework) == _AUDITED_DARWIN_ARM64_TRADER_SHA256
+    )
+
+
+def _submit_public_trader_user_login(api, field, request_id: int):
+    """Dispatch the public Trader login entrypoint without the bad Darwin ABI."""
+    if not (_is_darwin_arm64() and is_ctp_native_loaded()):
+        return _ctp.CThostFtdcTraderApi_ReqUserLogin(api, field, request_id)
+    if not _has_audited_darwin_arm64_login_shim():
+        raise CtpNativeAbiError("ctp_trader_login_abi_unverified")
+    return getattr(_ctp, _DARWIN_ARM64_LOGIN_SHIM)(api, field, request_id)
+
+
 def get_ctp_import_error():
     """Return the import error if using fallback module, else None."""
     if isinstance(_ctp, _FallbackCtpModule):
@@ -319,6 +385,7 @@ __all__ = [
     "_swig_setattr_nondynamic_class_variable",
     "_swig_add_metaclass",
     "_SwigNonDynamicMeta",
+    "CtpNativeAbiError",
     "is_ctp_native_loaded",
     "get_ctp_import_error",
     "print_exception",

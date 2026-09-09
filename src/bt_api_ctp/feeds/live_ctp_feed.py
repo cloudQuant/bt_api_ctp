@@ -30,6 +30,7 @@ from bt_api_ctp.ctp.ctp_structs_order import (
 from bt_api_ctp.ctp_env_selector import (
     official_simnow_fronts,
     select_ctp_environment,
+    select_reachable_ctp_environment,
     verify_official_simnow_profile,
 )
 from bt_api_ctp.exchange_data import CtpExchangeDataFuture
@@ -216,18 +217,30 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
     ).strip()
     td_front = str(resolved.get("td_front") or resolved.get("td_address") or "").strip()
     md_front = str(resolved.get("md_front") or resolved.get("md_address") or "").strip()
+    static_td = str(os.environ.get("CTP_TD_FRONT") or "").strip()
+    static_md = str(os.environ.get("CTP_MD_FRONT") or "").strip()
     had_partial_explicit_front = bool(td_front) != bool(md_front)
     claimed_profile = (
-        str(resolved.get("ctp_env_profile") or resolved.get("ctp_profile") or "")
+        str(
+            resolved.get("ctp_env_profile")
+            or resolved.get("ctp_profile")
+            or os.environ.get("CTP_ENV_PROFILE")
+            or ""
+        )
         .strip()
         .lower()
     )
-    if claimed_profile and bool(td_front) != bool(md_front):
+    auto_detect_fronts = _as_bool(resolved.get("auto_detect_fronts"), default=False)
+    supplied_td = td_front or static_td
+    supplied_md = md_front or static_md
+    if (
+        claimed_profile
+        and not auto_detect_fronts
+        and bool(supplied_td) != bool(supplied_md)
+    ):
         raise ValueError(
             "claimed CTP profile requires both td_front and md_front, or neither"
         )
-    if claimed_profile and not td_front and not md_front:
-        td_front, md_front = official_simnow_fronts(claimed_profile)
     required_profile = (
         str(
             resolved.get("require_ctp_profile")
@@ -252,12 +265,39 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
             raise RuntimeError(
                 f"required CTP profile {required_profile!r}, configured {claimed_profile!r}"
             )
+    front_probe_timeout = resolved.get("front_probe_timeout", 3.0)
     env_name = ""
     selected_environment = "custom"
     env_readiness = "explicit_front_override" if td_front and md_front else "unknown"
+    auto_detected_selection = False
+    if auto_detect_fronts:
+        if bool(td_front) != bool(md_front):
+            raise ValueError(
+                "auto-detected CTP front override requires both td_front and md_front"
+            )
+        if not td_front and not md_front:
+            # Process-wide CTP_TD/MD variables are compatibility state, not a
+            # per-call override. Re-probe from the frozen profile family so a
+            # pair selected before a VPN/network change cannot silently win.
+            selection = select_reachable_ctp_environment(
+                str(resolved.get("ctp_env") or ""),
+                profile=claimed_profile or None,
+                require_profile=required_profile or None,
+                front_probe_timeout=front_probe_timeout,
+            )
+            td_front = selection.td_front
+            md_front = selection.md_front
+            claimed_profile = selection.profile
+            env_name = selection.profile
+            env_readiness = selection.readiness
+            selected_environment = selection.environment
+            auto_detected_selection = True
+    elif claimed_profile and not td_front and not md_front and static_td and static_md:
+        td_front, md_front = static_td, static_md
+    elif claimed_profile and not td_front and not md_front:
+        td_front, md_front = official_simnow_fronts(claimed_profile)
+
     if not td_front or not md_front:
-        static_td = str(os.environ.get("CTP_TD_FRONT") or "").strip()
-        static_md = str(os.environ.get("CTP_MD_FRONT") or "").strip()
         if os.environ.get("CTP_ENV") or not static_td or not static_md:
             selection = select_ctp_environment(require_profile=required_profile)
             td_front = td_front or selection.td_front
@@ -280,7 +320,11 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
                 f"claimed CTP profile {claimed_profile!r} does not match its official fronts"
             )
         env_name = claimed_profile
-        env_readiness = "explicit_official_pair"
+        env_readiness = (
+            "tcp_pair_reachable"
+            if auto_detected_selection
+            else "explicit_official_pair"
+        )
         selected_environment = "simnow"
     else:
         env_name = "custom_front_override"
@@ -969,11 +1013,15 @@ class CtpRequestData(Feed):
             return self._make_request_data(
                 [], "get_instruments", symbol, extra_data, status=False
             )
-        result = trader.query_instruments_result(
-            instrument_id=symbol or "",
-            exchange_id=kwargs.get("exchange_id", ""),
-            timeout=kwargs.get("timeout", 5),
-        )
+        query_kwargs = {
+            "instrument_id": symbol or "",
+            "exchange_id": kwargs.get("exchange_id", ""),
+            "timeout": kwargs.get("timeout", 5),
+        }
+        product_id = kwargs.get("product_id", "")
+        if product_id:
+            query_kwargs["product_id"] = product_id
+        result = trader.query_instruments_result(**query_kwargs)
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
         rows = [
@@ -1244,9 +1292,24 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         return self._trader.query_trades_result(**kwargs)
 
-    def query_instruments_result(self, **kwargs: Any) -> QueryResult[Any]:
+    def query_instruments_result(
+        self,
+        instrument_id: str = "",
+        exchange_id: str = "",
+        product_id: str = "",
+        timeout: float = 5,
+        **kwargs: Any,
+    ) -> QueryResult[Any]:
         self._ensure_connected()
-        return self._trader.query_instruments_result(**kwargs)
+        query_kwargs = {
+            "instrument_id": instrument_id,
+            "exchange_id": exchange_id,
+            "timeout": timeout,
+            **kwargs,
+        }
+        if product_id:
+            query_kwargs["product_id"] = product_id
+        return self._trader.query_instruments_result(**query_kwargs)
 
     def query_instrument_margin_rate_result(
         self, *args: Any, **kwargs: Any

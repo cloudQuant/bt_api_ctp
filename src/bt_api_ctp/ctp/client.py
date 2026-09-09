@@ -34,7 +34,6 @@ import json
 import os
 import queue
 import re
-import subprocess
 import sys
 import tempfile
 import threading
@@ -51,14 +50,34 @@ from typing import Any, Callable
 
 from bt_api_ctp.query import QueryResult
 
+from . import _ctp_base
+from ._ctp_base import (
+    CtpNativeAbiError,
+)
 from ._ctp_base import (
     get_ctp_native_diagnostics as _get_vendored_ctp_native_diagnostics,
 )
 from ._ctp_base import (
     is_ctp_native_loaded as _is_vendored_ctp_native_loaded,
 )
+from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
+from .ctp_structs_common import (
+    CThostFtdcReqAuthenticateField,
+    CThostFtdcReqUserLoginField,
+    CThostFtdcSettlementInfoConfirmField,
+)
+from .ctp_structs_query import (
+    CThostFtdcQryInstrumentCommissionRateField,
+    CThostFtdcQryInstrumentField,
+    CThostFtdcQryInstrumentMarginRateField,
+    CThostFtdcQryInvestorPositionField,
+    CThostFtdcQryOrderField,
+    CThostFtdcQrySettlementInfoConfirmField,
+    CThostFtdcQryTradeField,
+    CThostFtdcQryTradingAccountField,
+)
+from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
-_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 CTP_REQUEST_COUNT_KEYS = (
     "authenticate",
     "login",
@@ -74,6 +93,82 @@ CTP_REQUEST_COUNT_KEYS = (
     "query_commission_rate",
     "query_settlement_confirmation",
 )
+
+
+# The CTP vendor API owns a native callback thread after ``Init()``.  On the
+# macOS framework, calling ``Release()`` while a separate Python thread is
+# blocked in ``Join()`` is unsafe.  A live native API still owns only a raw
+# pointer to its SWIG director, however, so dropping ``_spi`` first turns the
+# next callback into a use-after-free crash.  Keep a detached session alive
+# after unregistering its callback from the native API.  The Join observer
+# releases it once the vendor reports that its native thread has stopped.
+#
+# This registry is deliberately module-scoped rather than stored on a client:
+# callers commonly discard a stopped feed/client before interpreter shutdown,
+# while the vendor Join thread can still be alive.  There is no documented
+# asynchronous CTP shutdown primitive that can safely replace this deferred
+# lifetime on the audited macOS framework.  Entries must nevertheless be
+# removed once Join returns so reconnects cannot retain completed sessions.
+_RETIRED_CTP_NATIVE_SESSIONS_LOCK = threading.Lock()
+_RETIRED_CTP_NATIVE_SESSIONS: list[tuple[Any, Any, threading.Thread | None]] = []
+
+
+def _retain_live_ctp_native_session(
+    api: Any, spi: Any, join_thread: threading.Thread | None
+) -> None:
+    """Retain a live CTP API and its SWIG director after logical disconnect."""
+
+    if api is None:
+        return
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        if any(
+            existing_api is api for existing_api, _, _ in _RETIRED_CTP_NATIVE_SESSIONS
+        ):
+            return
+        _RETIRED_CTP_NATIVE_SESSIONS.append((api, spi, join_thread))
+
+
+def _set_retired_ctp_native_session_join_thread(
+    api: Any, join_thread: threading.Thread
+) -> bool:
+    """Associate a late-created Join observer with a retained native session."""
+
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        for index, (existing_api, spi, _existing_thread) in enumerate(
+            _RETIRED_CTP_NATIVE_SESSIONS
+        ):
+            if existing_api is api:
+                _RETIRED_CTP_NATIVE_SESSIONS[index] = (api, spi, join_thread)
+                return True
+    return False
+
+
+def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
+    """Release one retained session only after its native ``Join`` returned.
+
+    The entry is removed while holding the registry lock so concurrent Join
+    observers cannot issue a second ``Release``.  Its local tuple keeps the
+    API and SPI strongly referenced until the release call has completed.
+    """
+
+    retained: tuple[Any, Any, threading.Thread | None] | None = None
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        for index, entry in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
+            if entry[0] is api:
+                retained = _RETIRED_CTP_NATIVE_SESSIONS.pop(index)
+                break
+    if retained is None:
+        return False
+
+    # Join has returned, so the vendor callback thread is no longer live and
+    # Release is safe on the audited macOS framework.  Do not call
+    # RegisterSpi(None) again: stop() already made the documented detach
+    # attempt before the session entered this registry.
+    with suppress(Exception):
+        api.Release()
+    return True
+
+
 _CTP_EXECUTION_GATE_PROOF_FIELDS = (
     "account_fingerprint",
     "trading_day",
@@ -243,136 +338,18 @@ def empty_ctp_request_counts() -> dict[str, int]:
     return dict.fromkeys(CTP_REQUEST_COUNT_KEYS, 0)
 
 
-def _env_text(name: str) -> str:
-    return str(os.environ.get(name) or "").strip().lower()
-
-
 def _select_ctp_runtime_source() -> str:
-    requested = _env_text("BT_API_PY_CTP_RUNTIME")
-    if requested in {"vendored", "bundled", "bt_api_ctp", "bt_api_py", ""}:
-        return "vendored_bt_api_py"
-    if requested in {"ctp", "external_ctp", "external_ctp_python"}:
-        return "external_ctp_python"
-    if requested in {"openctp", "openctp_ctp", "external_openctp_ctp"}:
-        return "external_openctp_ctp"
-    if _env_text("BT_API_PY_USE_OPENCTP_CTP") in _TRUE_ENV_VALUES:
-        return "external_openctp_ctp"
-    if _env_text("BT_API_PY_USE_EXTERNAL_CTP") in _TRUE_ENV_VALUES:
-        return "external_ctp_python"
+    """Use only bt_api_ctp's bundled native extension at runtime.
+
+    Switching a stateful CTP session between unrelated Python bindings changes
+    callback ownership and native ABI assumptions.  The package therefore owns
+    its runtime rather than accepting external ``ctp`` or ``openctp_ctp``
+    process overrides.
+    """
     return "vendored_bt_api_py"
 
 
-def _probe_external_runtime_import(runtime_source: str) -> None:
-    if runtime_source == "external_ctp_python":
-        code = (
-            "import ctp; "
-            "from ctp import CThostFtdcMdApi, CThostFtdcTraderApi; "
-            "print('ctp import ok')"
-        )
-        runtime_name = "ctp"
-    else:
-        code = (
-            "from openctp_ctp import mdapi, tdapi; "
-            "assert mdapi.CThostFtdcMdApi and tdapi.CThostFtdcTraderApi; "
-            "print('openctp_ctp import ok')"
-        )
-        runtime_name = "openctp_ctp"
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ImportError(
-            f"external CTP runtime {runtime_name} import preflight timed out"
-        ) from exc
-
-    if result.returncode != 0:
-        stderr_tail = (result.stderr or "")[-2000:]
-        stdout_tail = (result.stdout or "")[-500:]
-        raise ImportError(
-            f"external CTP runtime {runtime_name} failed import preflight "
-            f"(returncode={result.returncode}). stderr={stderr_tail!r} stdout={stdout_tail!r}"
-        )
-
-
-def _probe_openctp_import() -> None:
-    """Compatibility wrapper for callers that exercised the old helper."""
-    _probe_external_runtime_import("external_openctp_ctp")
-
-
 _CTP_RUNTIME_SOURCE = _select_ctp_runtime_source()
-
-if _CTP_RUNTIME_SOURCE == "external_ctp_python":
-    _probe_external_runtime_import(_CTP_RUNTIME_SOURCE)
-    from ctp import (
-        CThostFtdcMdApi,
-        CThostFtdcMdSpi,
-        CThostFtdcQryInstrumentCommissionRateField,
-        CThostFtdcQryInstrumentField,
-        CThostFtdcQryInstrumentMarginRateField,
-        CThostFtdcQryInvestorPositionField,
-        CThostFtdcQryOrderField,
-        CThostFtdcQrySettlementInfoConfirmField,
-        CThostFtdcQryTradeField,
-        CThostFtdcQryTradingAccountField,
-        CThostFtdcReqAuthenticateField,
-        CThostFtdcReqUserLoginField,
-        CThostFtdcSettlementInfoConfirmField,
-        CThostFtdcTraderApi,
-        CThostFtdcTraderSpi,
-    )
-elif _CTP_RUNTIME_SOURCE == "external_openctp_ctp":
-    _probe_openctp_import()
-    from openctp_ctp import mdapi as _openctp_mdapi
-    from openctp_ctp import tdapi as _openctp_tdapi
-
-    CThostFtdcMdApi = _openctp_mdapi.CThostFtdcMdApi
-    CThostFtdcMdSpi = _openctp_mdapi.CThostFtdcMdSpi
-    CThostFtdcQryInstrumentCommissionRateField = (
-        _openctp_tdapi.CThostFtdcQryInstrumentCommissionRateField
-    )
-    CThostFtdcQryInstrumentField = _openctp_tdapi.CThostFtdcQryInstrumentField
-    CThostFtdcQryInstrumentMarginRateField = (
-        _openctp_tdapi.CThostFtdcQryInstrumentMarginRateField
-    )
-    CThostFtdcQryInvestorPositionField = (
-        _openctp_tdapi.CThostFtdcQryInvestorPositionField
-    )
-    CThostFtdcQryOrderField = _openctp_tdapi.CThostFtdcQryOrderField
-    CThostFtdcQrySettlementInfoConfirmField = (
-        _openctp_tdapi.CThostFtdcQrySettlementInfoConfirmField
-    )
-    CThostFtdcQryTradeField = _openctp_tdapi.CThostFtdcQryTradeField
-    CThostFtdcQryTradingAccountField = _openctp_tdapi.CThostFtdcQryTradingAccountField
-    CThostFtdcReqAuthenticateField = _openctp_tdapi.CThostFtdcReqAuthenticateField
-    CThostFtdcReqUserLoginField = _openctp_tdapi.CThostFtdcReqUserLoginField
-    CThostFtdcSettlementInfoConfirmField = (
-        _openctp_tdapi.CThostFtdcSettlementInfoConfirmField
-    )
-    CThostFtdcTraderApi = _openctp_tdapi.CThostFtdcTraderApi
-    CThostFtdcTraderSpi = _openctp_tdapi.CThostFtdcTraderSpi
-else:
-    from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
-    from .ctp_structs_common import (
-        CThostFtdcReqAuthenticateField,
-        CThostFtdcReqUserLoginField,
-        CThostFtdcSettlementInfoConfirmField,
-    )
-    from .ctp_structs_query import (
-        CThostFtdcQryInstrumentCommissionRateField,
-        CThostFtdcQryInstrumentField,
-        CThostFtdcQryInstrumentMarginRateField,
-        CThostFtdcQryInvestorPositionField,
-        CThostFtdcQryOrderField,
-        CThostFtdcQrySettlementInfoConfirmField,
-        CThostFtdcQryTradeField,
-        CThostFtdcQryTradingAccountField,
-    )
-    from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
 
 def _is_native_extension_path(path: Path) -> bool:
@@ -387,6 +364,25 @@ def _sha256_file(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _is_vendored_native_trader_api(api: Any) -> bool:
+    if _CTP_RUNTIME_SOURCE != "vendored_bt_api_py":
+        return False
+    try:
+        return isinstance(api, CThostFtdcTraderApi)
+    except TypeError:
+        return False
+
+
+def _submit_trader_user_login(
+    api: Any, field: CThostFtdcReqUserLoginField, request_id: int
+) -> Any:
+    """Submit Trader login through the shared public ABI guard."""
+
+    if not _is_vendored_native_trader_api(api):
+        return api.ReqUserLogin(field, request_id)
+    return _ctp_base._submit_public_trader_user_login(api, field, request_id)
 
 
 def _ctp_python_package_identity(
@@ -427,10 +423,6 @@ def _ctp_python_package_identity(
 
 
 def _runtime_module_prefix() -> str:
-    if _CTP_RUNTIME_SOURCE == "external_ctp_python":
-        return "ctp"
-    if _CTP_RUNTIME_SOURCE == "external_openctp_ctp":
-        return "openctp_ctp"
     return "bt_api_ctp.ctp"
 
 
@@ -477,11 +469,7 @@ def get_ctp_native_diagnostics() -> dict[str, Any]:
             ("CThostFtdcTraderSpi", CThostFtdcTraderSpi),
         )
     }
-    native_loaded = (
-        _is_vendored_ctp_native_loaded()
-        if _CTP_RUNTIME_SOURCE == "vendored_bt_api_py"
-        else bool(native_modules)
-    )
+    native_loaded = _is_vendored_ctp_native_loaded()
     loaded_paths = sorted(set(native_modules.values()))
     selected_path = loaded_paths[0] if loaded_paths else ""
     diagnostics_override = {
@@ -646,44 +634,83 @@ class _QueryAccumulator:
 
 
 class _MdSpi(CThostFtdcMdSpi):
-    def __init__(self, client):
+    def __init__(self, client, native_api=None):
         super().__init__()
         self._c = client
+        self._native_api = native_api
+
+    def _is_current_locked(self) -> bool:
+        if self._native_api is None:
+            # Offline unit tests can construct an unbound SPI directly.
+            return True
+        return self._c._spi is self and self._c._api is self._native_api
+
+    def _is_current(self) -> bool:
+        with self._c._state_lock:
+            return self._is_current_locked()
 
     def OnFrontConnected(self):
-        self._c._connection_generation += 1
-        self._c._connected = True
-        field = CThostFtdcReqUserLoginField()
-        field.BrokerID = self._c.broker_id
-        field.UserID = self._c.user_id
-        field.Password = self._c.password
-        self._c._api.ReqUserLogin(field, 1)
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            self._c._connection_generation += 1
+            self._c._connected = True
+            field = CThostFtdcReqUserLoginField()
+            field.BrokerID = self._c.broker_id
+            field.UserID = self._c.user_id
+            field.Password = self._c.password
+            api = self._c._api
+        if api is not None:
+            api.ReqUserLogin(field, 1)
 
     def OnFrontDisconnected(self, nReason):
-        self._c._connected = False
-        self._c._loggedin = False
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            self._c._connected = False
+            self._c._loggedin = False
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
-        if pRspInfo and pRspInfo.ErrorID == 0:
-            self._c._loggedin = True
-            if self._c._pending_instruments:
-                self._c._api.SubscribeMarketData(self._c._pending_instruments)
-            if self._c.on_login:
-                self._c.on_login(pRspUserLogin)
-        else:
-            if self._c.on_error:
-                self._c.on_error(pRspInfo)
+        subscribe = None
+        callback = None
+        error_callback = None
+        error_info = None
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            if pRspInfo and pRspInfo.ErrorID == 0:
+                self._c._loggedin = True
+                if self._c._pending_instruments:
+                    subscribe = (self._c._api, list(self._c._pending_instruments))
+                callback = self._c.on_login
+            else:
+                error_callback = self._c.on_error
+                error_info = pRspInfo
+        if subscribe is not None and subscribe[0] is not None:
+            subscribe[0].SubscribeMarketData(subscribe[1])
+        if callback is not None:
+            callback(pRspUserLogin)
+        if error_callback is not None:
+            error_callback(error_info)
 
     def OnRtnDepthMarketData(self, pDepthMarketData):
-        if self._c.on_tick:
-            self._c.on_tick(pDepthMarketData)
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            callback = self._c.on_tick
+        if callback is not None:
+            callback(pDepthMarketData)
 
     def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
         pass
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
-        if self._c.on_error:
-            self._c.on_error(pRspInfo)
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            callback = self._c.on_error
+        if callback is not None:
+            callback(pRspInfo)
 
 
 class MdClient:
@@ -713,12 +740,153 @@ class MdClient:
         self._api = None
         self._spi = None
         self._thread = None
+        self._join_active = False
+        self._native_init_started = False
+        self._lifecycle_generation = 0
+        self._starting_generation: int | None = None
+        self._startup_cancel_event = threading.Event()
+        self._state_lock = threading.RLock()
+
+    def _reserve_start_generation(self) -> int:
+        """Reserve one startup generation before creating the native API."""
+
+        with self._state_lock:
+            if self._api is not None or self._starting_generation is not None:
+                raise RuntimeError("ctp_md_client_already_started")
+            self._lifecycle_generation += 1
+            generation = self._lifecycle_generation
+            self._starting_generation = generation
+            self._startup_cancel_event.clear()
+            return generation
+
+    def _clear_start_reservation(self, generation: int) -> None:
+        with self._state_lock:
+            if self._starting_generation == generation:
+                self._starting_generation = None
+
+    def _is_start_current_locked(self, api: Any, spi: Any, generation: int) -> bool:
+        return (
+            self._lifecycle_generation == generation
+            and self._starting_generation == generation
+            and self._api is api
+            and self._spi is spi
+            and not self._startup_cancel_event.is_set()
+        )
+
+    def _run_startup_call(
+        self,
+        api: Any,
+        spi: Any,
+        generation: int,
+        callback: Callable[[], Any],
+        *,
+        starts_native_thread: bool = False,
+    ) -> tuple[bool, bool]:
+        """Run one native startup call with pre/post cancellation fences.
+
+        Holding the lifecycle lock only for an individual native call lets a
+        concurrent ``stop`` take effect between registration calls.  The
+        pre/post checks ensure it cannot be followed by a later
+        ``RegisterFront`` or ``Init`` from the cancelled generation.
+        """
+
+        with self._state_lock:
+            if not self._is_start_current_locked(api, spi, generation):
+                return False, False
+            if starts_native_thread:
+                # A re-entrant stop from Init() must treat the API as live
+                # before the vendor is allowed to create its callback thread.
+                self._native_init_started = True
+                self._join_active = True
+            # stop() sets its event before it waits for this lock.  Repeat the
+            # precondition immediately before entering native code so a stop
+            # that arrived during the preceding bookkeeping cancels this step.
+            if not self._is_start_current_locked(api, spi, generation):
+                if starts_native_thread:
+                    self._native_init_started = False
+                    self._join_active = False
+                return False, False
+            callback()
+            return True, self._is_start_current_locked(api, spi, generation)
+
+    def _abort_startup(
+        self,
+        api: Any,
+        spi: Any,
+        generation: int,
+        *,
+        native_init_may_be_live: bool = False,
+    ) -> bool:
+        """Clean up a failed startup only while this generation owns it."""
+
+        release_now = False
+        observe_join = False
+        with self._state_lock:
+            if not self._is_start_current_locked(api, spi, generation):
+                return False
+            native_live = native_init_may_be_live or self._native_init_started
+            if native_live:
+                _retain_live_ctp_native_session(api, spi, self._thread)
+                observe_join = True
+            else:
+                release_now = True
+            self._api = None
+            self._spi = None
+            self._thread = None
+            self._join_active = False
+            self._native_init_started = False
+            self._starting_generation = None
+            self._lifecycle_generation += 1
+
+        if observe_join:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            self._start_join_observer(api)
+        elif release_now:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            with suppress(Exception):
+                api.Release()
+        return True
+
+    def _join_native_api(self, api: Any) -> None:
+        join_returned = False
+        try:
+            api.Join()
+            join_returned = True
+        finally:
+            if join_returned:
+                with self._state_lock:
+                    if self._api is api:
+                        self._join_active = False
+                        self._native_init_started = False
+                    if self._thread is threading.current_thread():
+                        self._thread = None
+                _release_retired_ctp_native_session_after_join(api)
+
+    def _start_join_observer(self, api: Any) -> bool:
+        """Start one Join observer for either the current or retired session."""
+
+        thread = threading.Thread(
+            target=self._join_native_api, args=(api,), daemon=True
+        )
+        with self._state_lock:
+            if self._api is api:
+                self._thread = thread
+                self._join_active = True
+            elif not _set_retired_ctp_native_session_join_thread(api, thread):
+                return False
+        thread.start()
+        return True
 
     def subscribe(self, instruments):
         """订阅合约列表（可在 start 前或后调用）"""
-        self._pending_instruments = list(instruments)
-        if self._loggedin and self._api:
-            self._api.SubscribeMarketData(self._pending_instruments)
+        with self._state_lock:
+            self._pending_instruments = list(instruments)
+            api = self._api if self._loggedin else None
+            pending_instruments = list(self._pending_instruments)
+        if api is not None:
+            api.SubscribeMarketData(pending_instruments)
 
     def start(self, block=True):
         """启动连接
@@ -727,62 +895,172 @@ class MdClient:
             block: True=阻塞直到断开, False=后台线程运行
         """
         _check_native_module()
+        generation = self._reserve_start_generation()
         flow = _flow_dir(f"md_{self.broker_id}_{self.user_id}")
-        self._api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
-        self._spi = _MdSpi(self)
-        self._api.RegisterSpi(self._spi)
-        self._api.RegisterFront(self.front)
-        self._api.Init()
+        try:
+            api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
+        except Exception:
+            self._clear_start_reservation(generation)
+            raise
+        spi = _MdSpi(self, api)
+        with self._state_lock:
+            if (
+                self._starting_generation != generation
+                or self._lifecycle_generation != generation
+                or self._startup_cancel_event.is_set()
+            ):
+                cancelled_before_registration = True
+            else:
+                cancelled_before_registration = False
+                self._api = api
+                self._spi = spi
+                self._native_init_started = False
+                self._join_active = False
+        if cancelled_before_registration:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            with suppress(Exception):
+                api.Release()
+            return
+
+        init_invoked = False
+
+        def init_native_api() -> None:
+            nonlocal init_invoked
+            init_invoked = True
+            api.Init()
+
+        try:
+            invoked, active = self._run_startup_call(
+                api, spi, generation, lambda: api.RegisterSpi(spi)
+            )
+            if not invoked or not active:
+                self._abort_startup(api, spi, generation)
+                return
+            invoked, active = self._run_startup_call(
+                api, spi, generation, lambda: api.RegisterFront(self.front)
+            )
+            if not invoked or not active:
+                self._abort_startup(api, spi, generation)
+                return
+            invoked, active = self._run_startup_call(
+                api,
+                spi,
+                generation,
+                init_native_api,
+                starts_native_thread=True,
+            )
+            if not invoked:
+                self._abort_startup(api, spi, generation)
+                return
+            if not active:
+                # stop() detached this API while Init was running.  It is
+                # retained already; attach a Join observer so the registry is
+                # released when the native thread exits.
+                self._start_join_observer(api)
+                return
+        except Exception:
+            # Init is a void vendor call, but if a binding raises after it was
+            # entered, fail safe and retain until Join proves native shutdown.
+            handled = self._abort_startup(
+                api,
+                spi,
+                generation,
+                native_init_may_be_live=init_invoked,
+            )
+            if init_invoked and not handled:
+                # A concurrent stop may have set the cancellation fence while
+                # Init raised.  Attach the observer whether it already
+                # retained the session or is about to do so.
+                self._start_join_observer(api)
+            raise
 
         if block:
+            with self._state_lock:
+                current = self._is_start_current_locked(api, spi, generation)
+            if not current:
+                self._start_join_observer(api)
+                return
             try:
-                self._api.Join()
+                self._join_native_api(api)
             except KeyboardInterrupt:
                 pass
             finally:
                 self.stop()
-        else:
-            self._thread = threading.Thread(target=self._api.Join, daemon=True)
-            self._thread.start()
+            return
+
+        self._start_join_observer(api)
 
     def wait_ready(self, timeout=15):
         """等待登录就绪"""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self._loggedin:
-                return True
+            with self._state_lock:
+                if self._loggedin:
+                    return True
             time.sleep(0.2)
-        return self._loggedin
+        with self._state_lock:
+            return self._loggedin
 
     def stop(self):
-        """停止并释放资源
+        """Stop a CTP market-data session without freeing a live SWIG director.
 
-        macOS 上 CTP C++ API 的 Release() 在 Join() 仍然运行于
-        另一个线程时会触发 segfault。因此:
-        - 非阻塞模式 (daemon thread): 仅置空引用，让 daemon 线程随进程退出
-        - 阻塞模式 (Join 已返回): 安全调用 Release()
+        The vendor macOS framework is unsafe if ``Release()`` races a live
+        ``Join()``.  Detach the native callback first, then retain the API,
+        director and Join thread until Join returns.  Once it has returned,
+        the Join observer releases the retained session immediately.
         """
-        self._loggedin = False
-        self._connected = False
-        api = self._api
-        self._api = None
-        self._spi = None
-        if api is not None and (self._thread is None or not self._thread.is_alive()):
-            try:
+
+        # Set this before waiting for a native registration call's lock.  It
+        # is the post-call fence that prevents RegisterFront/Init from running
+        # when stop races RegisterSpi on another thread.
+        self._startup_cancel_event.set()
+        with self._state_lock:
+            # A stop issued while CreateFtdc* is still running must cancel the
+            # reserved generation before start() can register it.
+            self._lifecycle_generation += 1
+            self._starting_generation = None
+            self._loggedin = False
+            self._connected = False
+            api = self._api
+            spi = self._spi
+            join_thread = self._thread
+            native_may_be_live = self._native_init_started or self._join_active
+            join_active = native_may_be_live and (
+                self._join_active
+                or (join_thread is not None and join_thread.is_alive())
+            )
+            if api is None:
+                return
+            if join_active:
+                _retain_live_ctp_native_session(api, spi, join_thread)
+            self._api = None
+            self._spi = None
+            self._thread = None
+            self._join_active = False
+            self._native_init_started = False
+
+        if join_active:
+            # RegisterSpi(None) is the vendor's documented callback
+            # registration API; retaining ``spi`` above also protects a
+            # callback already in flight while the registration is changed.
+            with suppress(Exception):
                 api.RegisterSpi(None)
-                api.Release()
-            except Exception:
-                pass
-            # 如果 daemon thread 还活着，不调用 Release，
-            # daemon=True 线程会在进程退出时自动终止
+            return
+
+        with suppress(Exception):
+            api.RegisterSpi(None)
+            api.Release()
 
     @property
     def is_ready(self):
-        return self._connected and self._loggedin
+        with self._state_lock:
+            return self._connected and self._loggedin
 
     @property
     def connection_generation(self):
-        return self._connection_generation
+        with self._state_lock:
+            return self._connection_generation
 
 
 # ===========================================================================
@@ -914,7 +1192,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
             return
         api, field, request_id, generation = login_submission
         try:
-            ret = api.ReqUserLogin(field, request_id)
+            ret = _submit_trader_user_login(api, field, request_id)
         except Exception as exc:
             with self._c._query_state_lock:
                 if (
@@ -925,7 +1203,11 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     self._c._login_state = "failed"
                     self._c._last_session_error = {
                         "error": "login_submit_failed",
-                        "detail": type(exc).__name__,
+                        "detail": (
+                            exc.code
+                            if isinstance(exc, CtpNativeAbiError)
+                            else type(exc).__name__
+                        ),
                     }
             return
         if ret not in (None, 0):
@@ -1198,6 +1480,11 @@ class TraderClient:
         self._session_native_api = None
         self._spi = None
         self._thread = None
+        self._join_active = False
+        self._native_init_started = False
+        self._lifecycle_generation = 0
+        self._starting_generation: int | None = None
+        self._startup_cancel_event = threading.Event()
         self._settlement_done = threading.Event()
         self._settlement_request_id: int | None = None
         self._settlement_connection_generation: int | None = None
@@ -1857,46 +2144,233 @@ class TraderClient:
         with self._query_state_lock:
             return dict(self._request_counts)
 
+    def _reserve_start_generation(self) -> int:
+        """Reserve one startup generation before creating the native API."""
+
+        with self._query_state_lock:
+            # Preserve the managed-gate revocation contract even when this is
+            # a rejected re-entrant start attempt.
+            self._revoke_execution_gate_locked("ctp_execution_gate_client_start")
+            if self._api is not None or self._starting_generation is not None:
+                raise RuntimeError("ctp_trader_client_already_started")
+            self._lifecycle_generation += 1
+            generation = self._lifecycle_generation
+            self._starting_generation = generation
+            self._startup_cancel_event.clear()
+            return generation
+
+    def _clear_start_reservation(self, generation: int) -> None:
+        with self._query_state_lock:
+            if self._starting_generation == generation:
+                self._starting_generation = None
+
+    def _is_start_current_locked(self, api: Any, spi: Any, generation: int) -> bool:
+        return (
+            self._lifecycle_generation == generation
+            and self._starting_generation == generation
+            and self._api is api
+            and self._spi is spi
+            and not self._startup_cancel_event.is_set()
+        )
+
+    def _run_startup_call(
+        self,
+        api: Any,
+        spi: Any,
+        generation: int,
+        callback: Callable[[], Any],
+        *,
+        starts_native_thread: bool = False,
+    ) -> tuple[bool, bool]:
+        """Run one native startup call with pre/post cancellation fences."""
+
+        with self._query_state_lock:
+            if not self._is_start_current_locked(api, spi, generation):
+                return False, False
+            if starts_native_thread:
+                # A re-entrant stop from Init() must treat the API as live
+                # before the vendor is allowed to create its callback thread.
+                self._native_init_started = True
+                self._join_active = True
+            # stop() sets its event before it waits for this lock.  Repeat the
+            # precondition immediately before entering native code so a stop
+            # that arrived during the preceding bookkeeping cancels this step.
+            if not self._is_start_current_locked(api, spi, generation):
+                if starts_native_thread:
+                    self._native_init_started = False
+                    self._join_active = False
+                return False, False
+            callback()
+            return True, self._is_start_current_locked(api, spi, generation)
+
+    def _abort_startup(
+        self,
+        api: Any,
+        spi: Any,
+        generation: int,
+        *,
+        native_init_may_be_live: bool = False,
+    ) -> bool:
+        """Clean up a failed startup only while this generation owns it."""
+
+        release_now = False
+        observe_join = False
+        with self._query_state_lock:
+            if not self._is_start_current_locked(api, spi, generation):
+                return False
+            native_live = native_init_may_be_live or self._native_init_started
+            if native_live:
+                _retain_live_ctp_native_session(api, spi, self._thread)
+                observe_join = True
+            else:
+                release_now = True
+            self._api = None
+            self._thread = None
+            self._join_active = False
+            self._native_init_started = False
+            self._starting_generation = None
+            self._lifecycle_generation += 1
+
+        if observe_join:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            self._start_join_observer(api)
+        elif release_now:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            with suppress(Exception):
+                api.Release()
+        return True
+
+    def _join_native_api(self, api: Any) -> None:
+        join_returned = False
+        try:
+            api.Join()
+            join_returned = True
+        finally:
+            if join_returned:
+                with self._query_state_lock:
+                    if self._api is api:
+                        self._join_active = False
+                        self._native_init_started = False
+                    if self._thread is threading.current_thread():
+                        self._thread = None
+                _release_retired_ctp_native_session_after_join(api)
+
+    def _start_join_observer(self, api: Any) -> bool:
+        """Start one Join observer for either the current or retired session."""
+
+        thread = threading.Thread(
+            target=self._join_native_api, args=(api,), daemon=True
+        )
+        with self._query_state_lock:
+            if self._api is api:
+                self._thread = thread
+                self._join_active = True
+            elif not _set_retired_ctp_native_session_join_thread(api, thread):
+                return False
+        thread.start()
+        return True
+
     def start(self, block=False):
         """启动连接（默认后台运行）"""
         _check_native_module()
-        with self._query_state_lock:
-            self._revoke_execution_gate_locked("ctp_execution_gate_client_start")
-            if self._api is not None:
-                raise RuntimeError("ctp_trader_client_already_started")
+        generation = self._reserve_start_generation()
         flow = _flow_dir(f"td_{self.broker_id}_{self.user_id}")
-        api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
-        with self._query_state_lock:
-            self._api = api
-            spi = _TraderSpi(self, api)
-            self._spi = spi
         try:
-            api.RegisterSpi(spi)
-            api.SubscribePrivateTopic(2)
-            api.SubscribePublicTopic(2)
-            api.RegisterFront(self.front)
-            api.Init()
+            api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
         except Exception:
-            with self._query_state_lock:
-                if self._api is api:
-                    self._api = None
+            self._clear_start_reservation(generation)
+            raise
+        spi = _TraderSpi(self, api)
+        with self._query_state_lock:
+            if (
+                self._starting_generation != generation
+                or self._lifecycle_generation != generation
+                or self._startup_cancel_event.is_set()
+            ):
+                cancelled_before_registration = True
+            else:
+                cancelled_before_registration = False
+                self._api = api
+                self._spi = spi
+                self._native_init_started = False
+                self._join_active = False
+        if cancelled_before_registration:
             with suppress(Exception):
                 api.RegisterSpi(None)
+            with suppress(Exception):
                 api.Release()
+            return
+
+        init_invoked = False
+
+        def init_native_api() -> None:
+            nonlocal init_invoked
+            init_invoked = True
+            api.Init()
+
+        try:
+            startup_calls = (
+                lambda: api.RegisterSpi(spi),
+                lambda: api.SubscribePrivateTopic(2),
+                lambda: api.SubscribePublicTopic(2),
+                lambda: api.RegisterFront(self.front),
+            )
+            for startup_call in startup_calls:
+                invoked, active = self._run_startup_call(
+                    api, spi, generation, startup_call
+                )
+                if not invoked or not active:
+                    self._abort_startup(api, spi, generation)
+                    return
+            invoked, active = self._run_startup_call(
+                api,
+                spi,
+                generation,
+                init_native_api,
+                starts_native_thread=True,
+            )
+            if not invoked:
+                self._abort_startup(api, spi, generation)
+                return
+            if not active:
+                # stop() detached this API while Init was running.  It is
+                # retained already; attach a Join observer so the registry is
+                # released when the native thread exits.
+                self._start_join_observer(api)
+                return
+        except Exception:
+            # Init is a void vendor call, but if a binding raises after it was
+            # entered, fail safe and retain until Join proves native shutdown.
+            handled = self._abort_startup(
+                api,
+                spi,
+                generation,
+                native_init_may_be_live=init_invoked,
+            )
+            if init_invoked and not handled:
+                # A concurrent stop may have set the cancellation fence while
+                # Init raised.  Attach the observer whether it already
+                # retained the session or is about to do so.
+                self._start_join_observer(api)
             raise
 
         if block:
+            with self._query_state_lock:
+                current = self._is_start_current_locked(api, spi, generation)
+            if not current:
+                self._start_join_observer(api)
+                return
             try:
-                api.Join()
+                self._join_native_api(api)
             except KeyboardInterrupt:
                 pass
             finally:
                 self.stop()
-        else:
-            thread = threading.Thread(target=api.Join, daemon=True)
-            with self._query_state_lock:
-                self._thread = thread
-            thread.start()
+            return
+
+        self._start_join_observer(api)
 
     def wait_ready(self, timeout=15):
         """Wait for login, direct confirmation and matching server readback."""
@@ -2215,12 +2689,24 @@ class TraderClient:
         return list(result.records) if result.complete else []
 
     def query_instruments_result(
-        self, instrument_id="", exchange_id="", timeout=5
+        self, instrument_id="", exchange_id="", product_id="", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryInstrumentField()
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
             field.ExchangeID = str(exchange_id)
+        if product_id:
+            try:
+                field.ProductID = str(product_id)
+            except Exception:
+                # Do not silently fall back to the potentially expensive,
+                # unfiltered instrument query when this native ABI cannot
+                # represent ProductID.
+                return self._local_query_failure(
+                    "instruments",
+                    "native_instrument_filter_unsupported:ProductID",
+                    unsupported=True,
+                )
         method = getattr(self._api, "ReqQryInstrument", None) if self._api else None
         return self._execute_query(
             "instruments",
@@ -2463,24 +2949,52 @@ class TraderClient:
         return self._api_view
 
     def stop(self):
-        """停止并释放资源
+        """Stop a CTP trader session without freeing a live SWIG director.
 
-        macOS 上 CTP C++ API 的 Release() 在 Join() 仍然运行于
-        另一个线程时会触发 segfault。因此:
-        - 非阻塞模式 (daemon thread): 仅置空引用，让 daemon 线程随进程退出
-        - 阻塞模式 (Join 已返回): 安全调用 Release()
+        The vendor macOS framework is unsafe if ``Release()`` races a live
+        ``Join()``.  Detach the native callback first, then retain the API,
+        director and Join thread until Join returns.  Once it has returned,
+        the Join observer releases the retained session immediately.
         """
+
+        # Set this before waiting for a native registration call's lock.  It
+        # is the post-call fence that prevents later startup calls when stop
+        # races RegisterSpi on another thread.
+        self._startup_cancel_event.set()
         with self._query_state_lock:
+            # A stop issued while CreateFtdc* is still running must cancel the
+            # reserved generation before start() can register it.
+            self._lifecycle_generation += 1
+            self._starting_generation = None
             self._on_front_disconnected("client_stop")
             api = self._api
+            spi = self._spi
+            join_thread = self._thread
+            native_may_be_live = self._native_init_started or self._join_active
+            join_active = native_may_be_live and (
+                self._join_active
+                or (join_thread is not None and join_thread.is_alive())
+            )
+            if api is None:
+                return
+            if join_active:
+                _retain_live_ctp_native_session(api, spi, join_thread)
             self._api = None
-            self._spi = None
-        if api is not None and (self._thread is None or not self._thread.is_alive()):
-            try:
+            self._thread = None
+            self._join_active = False
+            self._native_init_started = False
+
+        if join_active:
+            # RegisterSpi(None) is the vendor's documented callback
+            # registration API; retaining ``spi`` above also protects a
+            # callback already in flight while the registration is changed.
+            with suppress(Exception):
                 api.RegisterSpi(None)
-                api.Release()
-            except Exception:
-                pass
+            return
+
+        with suppress(Exception):
+            api.RegisterSpi(None)
+            api.Release()
 
     @property
     def is_ready(self):

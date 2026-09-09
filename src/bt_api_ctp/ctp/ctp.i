@@ -45,7 +45,111 @@ def _swig_repr(self):
 #include "ThostFtdcUserApiStruct.h"
 #include "ThostFtdcMdApi.h"
 #include "ThostFtdcTraderApi.h"
+#ifdef _WIN32
+#include <windows.h>
+typedef void *iconv_t;
+static iconv_t iconv_open(const char *tocode, const char *fromcode) {
+    if (!tocode || !fromcode) {
+        return (iconv_t)-1;
+    }
+    if (_stricmp(tocode, "UTF-8") != 0 || _stricmp(fromcode, "GBK") != 0) {
+        return (iconv_t)-1;
+    }
+    return (iconv_t)1;
+}
+static size_t iconv(iconv_t cd, char **inbuf, size_t *inbytesleft, char **outbuf, size_t *outbytesleft) {
+    if (cd == (iconv_t)-1) {
+        return (size_t)-1;
+    }
+    if (!inbuf || !outbuf || !inbytesleft || !outbytesleft) {
+        return 0;
+    }
+    if (!*inbuf || !*outbuf) {
+        return 0;
+    }
+    int wide_len = MultiByteToWideChar(936, 0, *inbuf, (int)*inbytesleft, NULL, 0);
+    if (wide_len <= 0) {
+        return (size_t)-1;
+    }
+    wchar_t *wide_buf = (wchar_t *)malloc((size_t)wide_len * sizeof(wchar_t));
+    if (!wide_buf) {
+        return (size_t)-1;
+    }
+    int decoded = MultiByteToWideChar(936, 0, *inbuf, (int)*inbytesleft, wide_buf, wide_len);
+    if (decoded <= 0) {
+        free(wide_buf);
+        return (size_t)-1;
+    }
+    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide_buf, decoded, NULL, 0, NULL, NULL);
+    if (utf8_len <= 0 || (size_t)utf8_len > *outbytesleft) {
+        free(wide_buf);
+        return (size_t)-1;
+    }
+    int encoded = WideCharToMultiByte(CP_UTF8, 0, wide_buf, decoded, *outbuf, utf8_len, NULL, NULL);
+    free(wide_buf);
+    if (encoded <= 0) {
+        return (size_t)-1;
+    }
+    *inbuf += *inbytesleft;
+    *outbuf += encoded;
+    *outbytesleft -= (size_t)encoded;
+    *inbytesleft = 0;
+    return 0;
+}
+#else
 #include "iconv.h"
+#endif
+
+#include <stdexcept>
+
+#if defined(BT_API_CTP_DARWIN_ARM64_AUDITED_TRADER_ABI)
+#include <cstddef>
+#include <cstring>
+#include <limits>
+
+namespace {
+constexpr std::size_t kReqUserLoginVtableSlot = 14;
+constexpr std::size_t kLoginEnvelopePayloadCapacity = 0x22c - 0x20;
+using ReqUserLoginWithPayload = int (*)(
+    CThostFtdcTraderApi*, CThostFtdcReqUserLoginField*, int, int, char*);
+static_assert(
+    sizeof(CThostFtdcReqUserLoginField) <= kLoginEnvelopePayloadCapacity,
+    "CThostFtdcReqUserLoginField must fit the audited login envelope");
+static_assert(
+    sizeof(CThostFtdcReqUserLoginField) <= std::numeric_limits<int>::max(),
+    "CThostFtdcReqUserLoginField length must fit int");
+}  // namespace
+
+#endif
+
+int bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(
+    CThostFtdcTraderApi* api,
+    CThostFtdcReqUserLoginField* field,
+    int request_id) {
+#if defined(BT_API_CTP_DARWIN_ARM64_AUDITED_TRADER_ABI)
+    if (api == nullptr || field == nullptr) {
+        throw std::invalid_argument("CTP login API and field are required");
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, static_cast<void*>(api), sizeof(vtable));
+    if (vtable == nullptr || vtable[kReqUserLoginVtableSlot] == nullptr) {
+        throw std::runtime_error("audited CTP login vtable slot is unavailable");
+    }
+    const auto request = reinterpret_cast<ReqUserLoginWithPayload>(
+        vtable[kReqUserLoginVtableSlot]);
+    return request(
+        api,
+        field,
+        request_id,
+        static_cast<int>(sizeof(*field)),
+        reinterpret_cast<char*>(field));
+#else
+    (void)api;
+    (void)field;
+    (void)request_id;
+    throw std::runtime_error("audited Darwin arm64 CTP login ABI shim is unavailable");
+#endif
+}
 %}
 
 %feature("director:except") {
@@ -235,3 +339,10 @@ static iconv_t _ctp_get_iconv() {
 %include "ThostFtdcUserApiStruct.h"
 %include "ThostFtdcMdApi.h"
 %include "ThostFtdcTraderApi.h"
+
+// Kept as a raw _ctp function.  The Python client validates that the loaded
+// framework is the audited bundle before it can dispatch through this shim.
+int bt_api_ctp_req_user_login_darwin_arm64_v677_20240716(
+    CThostFtdcTraderApi* api,
+    CThostFtdcReqUserLoginField* field,
+    int request_id);

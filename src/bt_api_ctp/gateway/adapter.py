@@ -17,6 +17,7 @@ from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
 from bt_api_ctp.ctp.client import _check_native_module
+from bt_api_ctp.ctp_env_selector import verify_official_simnow_profile
 from bt_api_ctp.feeds.live_ctp_feed import (
     CTP_DIRECTION_FLAG,
     CTP_OFFSET_FLAG,
@@ -64,6 +65,14 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
         "ZC",
     }
 )
+
+
+def _auto_detect_fronts_enabled(value: Any) -> bool:
+    """Match the CTP feed's accepted configuration boolean spellings."""
+
+    return value is True or (
+        isinstance(value, str) and value.strip().lower() in {"1", "true", "yes", "on"}
+    )
 
 
 def _ctp_tick_timestamp_datetime(
@@ -150,9 +159,50 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
 
     def _create_streams(self) -> None:
         self.feed = CtpRequestDataFuture(None, **self._stream_kwargs)
+        self._pin_request_feed_fronts()
         self.market = CtpMarketStream(self.q, **self._stream_kwargs)
         self.trade = CtpTradeStream(
             self.q, request_feed=self.feed, **self._stream_kwargs
+        )
+
+    def _pin_request_feed_fronts(self) -> None:
+        """Reuse a request-feed auto-detection result for both gateway streams."""
+        if not _auto_detect_fronts_enabled(
+            self._stream_kwargs.get("auto_detect_fronts")
+        ):
+            return
+        if getattr(self.feed, "ctp_env_readiness", None) != "tcp_pair_reachable":
+            return
+        get_environment_info = getattr(self.feed, "get_environment_info", None)
+        if not callable(get_environment_info):
+            return
+        try:
+            environment_info = get_environment_info()
+        except Exception:
+            return
+        if (
+            not isinstance(environment_info, dict)
+            or environment_info.get("environment") != "demo"
+            or environment_info.get("verified") is not True
+        ):
+            return
+        td_front = str(getattr(self.feed, "td_front", "") or "").strip()
+        md_front = str(getattr(self.feed, "md_front", "") or "").strip()
+        profile = str(getattr(self.feed, "ctp_env_profile", "") or "").strip().lower()
+        if (
+            not td_front
+            or not md_front
+            or profile != str(environment_info.get("profile") or "").strip().lower()
+        ):
+            return
+        if not verify_official_simnow_profile(td_front, md_front, profile):
+            return
+        self._stream_kwargs.update(
+            td_front=td_front,
+            md_front=md_front,
+            ctp_env_profile=profile,
+            ctp_environment=getattr(self.feed, "ctp_environment", "simnow"),
+            ctp_env_readiness=getattr(self.feed, "ctp_env_readiness", "unknown"),
         )
 
     def _startup_stream_timeout(self) -> float:
