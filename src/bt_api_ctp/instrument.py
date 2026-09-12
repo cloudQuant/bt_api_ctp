@@ -32,6 +32,132 @@ def field_float(source: Any, *names: str) -> float | None:
         return None
 
 
+def _reference_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            value = value.decode("gb18030", errors="replace")
+    return str(value).strip().strip("\x00") or None
+
+
+def _reference_number(source: Any, *names: str) -> float | None:
+    value = field_value(source, *names)
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    # Native CTP uses DBL_MAX as an unavailable-price sentinel.
+    return number if math.isfinite(number) and 0 < number < 1e308 else None
+
+
+def normalize_ctp_instrument(instrument_info: Any) -> dict[str, Any]:
+    """Normalize native reference fields without guessing absent product rules.
+
+    ProductClass, OptionsType and InstLifePhase values follow the bundled CTP
+    ThostFtdcUserApiDataType.h. Names do not determine instrument type. Dates
+    remain native YYYYMMDD strings, and IsTrading is a reference flag, not a
+    real-time session status. Exercise style/calendar/settlement rules require
+    independently sourced exchange product rules.
+    """
+
+    def text(*names):
+        return _reference_text(field_value(instrument_info, *names))
+
+    product_class = text("ProductClass", "product_class")
+    kind = {
+        "1": "future",
+        "2": "option",
+        "3": "combination",
+        "4": "spot",
+        "5": "efp",
+        "6": "spot_option",
+        "7": "tas",
+        "I": "mi",
+    }.get(product_class, "unknown")
+    is_option = kind in {"option", "spot_option"}
+    raw_trading = field_value(instrument_info, "IsTrading", "is_trading")
+    if raw_trading in (1, "1", b"1", True):
+        is_trading = True
+    elif raw_trading in (0, "0", b"0", False):
+        is_trading = False
+    else:
+        is_trading = None
+    return {
+        "metadata_source": "ctp_instrument_field",
+        "instrument_id": text("InstrumentID", "instrument_id"),
+        "instrument_name": text("InstrumentName", "instrument_name"),
+        "exchange_id": text("ExchangeID", "exchange_id"),
+        "exchange_instrument_id": text("ExchangeInstID", "exchange_instrument_id"),
+        "product_id": text("ProductID", "product_id"),
+        "product_class": product_class,
+        "asset_type": kind,
+        "contract_type": kind,
+        "multiplier": _reference_number(
+            instrument_info, "VolumeMultiple", "multiplier", "contract_size"
+        ),
+        "price_tick": _reference_number(
+            instrument_info, "PriceTick", "price_tick", "tick_size"
+        ),
+        "min_limit_order_volume": _reference_number(
+            instrument_info, "MinLimitOrderVolume", "min_limit_order_volume"
+        ),
+        "max_limit_order_volume": _reference_number(
+            instrument_info, "MaxLimitOrderVolume", "max_limit_order_volume"
+        ),
+        "min_market_order_volume": _reference_number(
+            instrument_info, "MinMarketOrderVolume", "min_market_order_volume"
+        ),
+        "max_market_order_volume": _reference_number(
+            instrument_info, "MaxMarketOrderVolume", "max_market_order_volume"
+        ),
+        "underlying_instrument": (
+            text("UnderlyingInstrID", "underlying_instrument") if is_option else None
+        ),
+        "strike_price": (
+            _reference_number(instrument_info, "StrikePrice", "strike_price")
+            if is_option
+            else None
+        ),
+        "option_type": (
+            {"1": "call", "2": "put"}.get(text("OptionsType")) if is_option else None
+        ),
+        "underlying_multiple": (
+            _reference_number(
+                instrument_info, "UnderlyingMultiple", "underlying_multiple"
+            )
+            if is_option
+            else None
+        ),
+        "create_date": text("CreateDate", "create_date"),
+        "open_date": text("OpenDate", "open_date"),
+        "expiry_date": text("ExpireDate", "expiry_date"),
+        "start_delivery_date": text("StartDelivDate", "start_delivery_date"),
+        "end_delivery_date": text("EndDelivDate", "end_delivery_date"),
+        "delivery_year": field_value(instrument_info, "DeliveryYear", "delivery_year"),
+        "delivery_month": field_value(
+            instrument_info, "DeliveryMonth", "delivery_month"
+        ),
+        "life_phase": {
+            "0": "not_started",
+            "1": "started",
+            "2": "paused",
+            "3": "expired",
+        }.get(text("InstLifePhase"), "unknown"),
+        "is_trading": is_trading,
+        "status": (
+            "trading"
+            if is_trading is True
+            else "disabled" if is_trading is False else "unknown"
+        ),
+        "exercise_style": None,
+    }
+
+
 def _finite_non_negative_field(source: Any, *names: str) -> bool:
     """Return whether at least one named field is explicit and financially valid."""
     value = field_value(source, *names)
@@ -199,10 +325,9 @@ def build_ctp_instrument_spec(
         or instrument
         or ""
     ).strip()
-    multiplier = field_float(
-        instrument_info, "VolumeMultiple", "contract_size", "multiplier"
-    )
-    price_tick = field_float(instrument_info, "PriceTick", "price_tick", "tick_size")
+    metadata = normalize_ctp_instrument(instrument_info)
+    multiplier = metadata["multiplier"]
+    price_tick = metadata["price_tick"]
     long_margin_rate = field_float(
         margin_info, "LongMarginRatioByMoney", "long_margin_rate"
     )
@@ -230,13 +355,12 @@ def build_ctp_instrument_spec(
     margin_rate = (
         long_margin_rate if long_margin_rate is not None else short_margin_rate
     )
-    is_trading = field_value(instrument_info, "IsTrading", "is_trading")
-    status = "trading" if is_trading in (None, "", 1, "1", True) else "disabled"
     max_quantity = field_float(
         instrument_info, "MaxLimitOrderVolume", "max_limit_order_volume"
     )
 
     spec: dict[str, Any] = {
+        **metadata,
         "source": "ctp_query_contract",
         "symbol": symbol,
         "instrument": symbol,
@@ -263,10 +387,11 @@ def build_ctp_instrument_spec(
         "quantity_unit": "lots",
         "base_currency": field_value(instrument_info, "ProductID") or symbol,
         "quote_currency": "CNY",
-        "contract_type": "future",
-        "linear": True,
-        "status": status,
-        "asset_type": "future",
+        "linear": (
+            True
+            if metadata["asset_type"] == "future"
+            else False if metadata["asset_type"] in {"option", "spot_option"} else None
+        ),
         "margin": margin_rate,
         "margin_rate": margin_rate,
         "long_margin_rate": long_margin_rate,
@@ -296,6 +421,7 @@ def build_ctp_instrument_spec(
 
 
 __all__ = [
+    "normalize_ctp_instrument",
     "build_ctp_instrument_spec",
     "ctp_instrument_evidence_errors",
     "ctp_query_bundle_errors",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 
 
@@ -186,3 +188,109 @@ class TestCtpTickerData:
         assert result["last_price"] == 3500.0
         assert result["bid_price_1"] == 3499.0
         assert result["ask_price_1"] == 3501.0
+
+    def test_quote_v2_public_data_retains_identity_and_defaults_closed(self):
+        ticker = CtpTickerData(
+            {
+                "InstrumentID": "SA701P1080",
+                "ExchangeID": "CZCE",
+                "LastPrice": 60,
+                "BidPrice1": 59,
+                "AskPrice1": 61,
+                "BidVolume1": 2,
+                "AskVolume1": 3,
+                "Volume": 107,
+                "OpenInterest": 1000,
+                "UpperLimitPrice": 100,
+                "LowerLimitPrice": 1,
+                "TradingDay": "20260909",
+                "ActionDay": "20260909",
+                "UpdateTime": "09:30:01",
+                "UpdateMillisec": 0,
+            },
+            asset_type="OPTION",
+            connection_generation=3,
+            ingest_seq=8,
+            subscription_epoch=2,
+            recv_time_utc=datetime(2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc),
+            recv_monotonic_ns=123,
+            rules_hash="rules-sha256",
+            clock_domain_id="ctp-md-clock-a",
+            source="ctp.native.md",
+            source_clock_quality="verified",
+            receive_clock_quality="verified",
+            source_clock_error_ms=1,
+            receive_clock_error_ms=1,
+            freshness_verified=True,
+            product_class="2",
+            contract_type="option",
+            option_type="put",
+            underlying_instrument="SA701",
+            strike_price=1080,
+        )
+        ticker.init_data()
+        ticker.resolve_event_time()
+        ticker.apply_volume_delta(7, complete=True, quality="CONTINUOUS")
+
+        data = ticker.get_all_data()
+
+        assert data["schema_version"] == "ctp.quote.v2"
+        assert data["asset_type"] == "OPTION"
+        assert data["product_class"] == "2"
+        assert data["contract_type"] == "option"
+        assert data["option_type"] == "put"
+        assert data["underlying_instrument"] == "SA701"
+        assert data["strike_price"] == 1080.0
+        assert data["bid_price"] == data["bid_price_1"] == 59.0
+        assert data["ask_price"] == data["ask_price_1"] == 61.0
+        assert data["bid_volume"] == data["bid_volume_1"] == 2
+        assert data["ask_volume"] == data["ask_volume_1"] == 3
+        assert data["volume_semantics"] == "delta"
+        assert data["volume"] == data["delta_volume"] == 7.0
+        assert data["cum_volume"] == data["cumulative_volume"] == 107
+        assert data["volume_complete"] is True
+        assert data["continuity_status"] == "continuous"
+        assert data["lower_limit_price"] == 1.0
+        assert data["upper_limit_price"] == 100.0
+        assert data["trading_day"] == "20260909"
+        assert data["action_day"] == "20260909"
+        assert data["event_time_source"] == "action_day"
+        assert data["connection_generation"] == 3
+        assert data["ingest_seq"] == 8
+        assert data["subscription_epoch"] == 2
+        assert data["recv_monotonic_ns"] == 123
+        assert data["rules_hash"] == "rules-sha256"
+        assert data["clock_domain_id"] == "ctp-md-clock-a"
+        assert data["source"] == "ctp.native.md"
+        assert data["source_clock_quality"] == "verified"
+        assert data["receive_clock_quality"] == "verified"
+        assert data["source_clock_error_ms"] == 1
+        assert data["receive_clock_error_ms"] == 1
+        assert data["freshness_verified"] is True
+        assert data["event_time_utc"] == datetime(
+            2026, 9, 9, 1, 30, 1, tzinfo=timezone.utc
+        )
+        assert data["recv_time_utc"] == datetime(
+            2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc
+        )
+        assert data["quality_flags"] == []
+        assert data["execution_eligible"] is False
+        ticker.execution_eligible = True
+        assert ticker.get_all_data()["execution_eligible"] is False
+
+    def test_quote_v2_defaults_do_not_self_promote_execution(self):
+        data = CtpTickerData(
+            {"InstrumentID": "SA701C1080"},
+            connection_generation=True,
+            ingest_seq=True,
+            subscription_epoch=True,
+        ).get_all_data()
+
+        assert data["asset_type"] == "UNKNOWN"
+        assert data["contract_type"] == "unknown"
+        assert data["option_type"] is None
+        assert data["continuity_status"] == "gap"
+        assert data["connection_generation"] == 0
+        assert data["ingest_seq"] == 0
+        assert data["subscription_epoch"] == 0
+        assert data["execution_eligible"] is False

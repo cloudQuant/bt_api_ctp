@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from bt_api_base.containers.positions.position import PositionData
 from bt_api_base.functions.utils import (
     from_dict_get_float,
@@ -9,6 +12,52 @@ from bt_api_base.functions.utils import (
 from ._normalization import ctp_dict_code, ctp_int
 
 CTP_POS_DIRECTION_MAP = {"1": "net", "2": "long", "3": "short"}
+
+# These names are the raw CTP wire fields.  The strict evidence adapter uses
+# them without applying the legacy container's default-to-zero conversions.
+CTP_POSITION_IDENTITY_FIELDS = (
+    "InstrumentID",
+    "ExchangeID",
+    "PosiDirection",
+    "HedgeFlag",
+    "PositionDate",
+    "TradingDay",
+)
+CTP_POSITION_ACCOUNT_FIELDS = ("BrokerID", "InvestorID")
+CTP_POSITION_QUANTITY_FIELDS = ("Position", "TodayPosition", "YdPosition")
+CTP_POSITION_FROZEN_FIELDS = (
+    "LongFrozen",
+    "ShortFrozen",
+    "LongFrozenAmount",
+    "ShortFrozenAmount",
+    "FrozenMargin",
+    "FrozenCash",
+    "FrozenCommission",
+    "CombLongFrozen",
+    "CombShortFrozen",
+    "StrikeFrozen",
+    "StrikeFrozenAmount",
+    "AbandonFrozen",
+    "YdStrikeFrozen",
+)
+
+
+def ctp_position_field(source: Any, name: str) -> tuple[bool, Any]:
+    """Return raw field presence and value without legacy normalization.
+
+    CTP query callbacks are normally detached mappings, while a few callers
+    still pass a native field object.  Both paths retain the exact value and
+    distinguish an absent attribute from an explicit zero.
+    """
+
+    if isinstance(source, Mapping):
+        if name in source:
+            return True, source[name]
+        return False, None
+    try:
+        return True, getattr(source, name)
+    except (AttributeError, TypeError):
+        return False, None
 
 
 class CtpPositionData(PositionData):
@@ -78,7 +127,9 @@ class CtpPositionData(PositionData):
         if self.position_volume and self.position_volume > 0:
             multiplier = float(contract_multiplier or 0.0)
             denominator = (
-                self.position_volume * multiplier if multiplier > 0 else self.position_volume
+                self.position_volume * multiplier
+                if multiplier > 0
+                else self.position_volume
             )
             return float(self.position_cost or 0.0) / denominator
         return 0.0

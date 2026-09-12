@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bt_api_ctp.ctp import client as ctp_client
 from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
 
@@ -13,20 +14,47 @@ from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 def feed():
     result = CtpRequestDataFuture(queue.Queue(), broker_id="fixture", user_id="fixture")
     calls = []
-    result._trader = SimpleNamespace(
+    # The managed feed no longer accepts a caller-created ``object()`` as a
+    # write capability.  This isolated fixture uses the deliberately private
+    # test authority seam while its fake trader verifies identity by object.
+    capability = ctp_client._issue_ctp_execution_authority_for_test()
+    trader = SimpleNamespace(
         is_ready=True,
         is_read_only_ready=True,
         is_trading_ready=True,
+        auto_settlement_confirm=False,
         _req_id=0,
         _front_id=11,
         _session_id=22,
-        api=SimpleNamespace(ReqOrderInsert=lambda field, ref: calls.append(field) or 0),
+        # The raw request seam must never be used by the feed's managed path.
+        api=SimpleNamespace(
+            ReqOrderInsert=lambda *_args: pytest.fail("raw order request was used")
+        ),
     )
-    result._trader._next_request_id = (
-        lambda: setattr(result._trader, "_req_id", result._trader._req_id + 1)
-        or result._trader._req_id
+    trader._next_request_id = (
+        lambda: setattr(trader, "_req_id", trader._req_id + 1) or trader._req_id
     )
-    result._trader._record_request = lambda _request_type: None
+    trader._record_request = lambda _request_type: None
+    trader.configure_execution_gate = lambda candidate: (
+        {"managed": True, "armed": True}
+        if candidate is capability
+        else pytest.fail("unexpected execution capability")
+    )
+    trader.get_execution_gate_state = lambda: {"managed": True, "armed": True}
+
+    def require_execution_write(candidate, _instrument, _exchange_id=""):
+        if candidate is not capability:
+            pytest.fail("unexpected execution capability")
+
+    trader.require_execution_write = require_execution_write
+    trader.submit_order_insert = lambda field, _request_id, *, execution_capability: (
+        calls.append(field) or 0
+        if execution_capability is capability
+        else pytest.fail("unexpected execution capability")
+    )
+    result._trader = trader
+    result.configure_execution_gate(capability)
+    result._test_execution_capability = capability
     result._connected = True
     return result, calls
 
@@ -52,6 +80,7 @@ def test_native_time_in_force_preserves_dated_close(feed, tif, offset, flag):
         exchange_id="SHFE",
         client_order_id="123",
         time_in_force=tif,
+        _execution_capability=client._test_execution_capability,
     )
     assert result.get_status()
     field = calls[0]
@@ -73,6 +102,7 @@ def test_iteration22_rejects_non_gfd_time_in_force(feed, tif):
             offset="close_today",
             exchange_id="SHFE",
             time_in_force=tif,
+            _execution_capability=client._test_execution_capability,
         )
     assert calls == []
 
@@ -89,6 +119,7 @@ def test_iteration22_rejects_invalid_price_before_native_order_request(feed, pri
             offset="close_today",
             exchange_id="SHFE",
             time_in_force="GFD",
+            _execution_capability=client._test_execution_capability,
         )
     assert calls == []
     assert client._trader._req_id == 0

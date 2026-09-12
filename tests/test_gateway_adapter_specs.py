@@ -256,7 +256,7 @@ def test_ctp_gateway_balance_uses_balance_as_equity_and_curr_margin_as_used_marg
     assert balance["profit"] == pytest.approx(5_000.0)
 
 
-def test_ctp_gateway_place_order_preserves_request_id_and_exchange_prefixed_symbol(
+def test_ctp_gateway_rejects_order_submission_even_when_quote_is_eligible(
     monkeypatch,
 ):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
@@ -266,57 +266,47 @@ def test_ctp_gateway_place_order_preserves_request_id_and_exchange_prefixed_symb
     adapter = adapter_module.CtpGatewayAdapter()
     adapter.last_price["rb2501"] = 3500.0
     adapter._price_ticks["rb2501"] = 1.0
+    adapter._quote_execution_eligible["rb2501"] = True
 
-    result = adapter.place_order(
-        {
-            "symbol": "SHFE.rb2501",
-            "side": "sell",
-            "size": "2.0",
-            "price": 0,
-            "order_type": "market",
-            "offset": "close_today",
-            "request_id": "req-ctp-1",
-        }
-    )
-
-    sent = adapter.feed.last_order
-    assert sent == {
-        "symbol": "rb2501",
-        "volume": 2,
-        "price": pytest.approx(3495.0),
-        "order_type": "sell-limit",
-        "offset": "close_today",
-        "offset_flag": "3",
-        "client_order_id": "req-ctp-1",
-        "exchange_id": "SHFE",
-    }
-    assert result["order_ref"] == "req-ctp-1"
-    assert result["details"]["request_id"] == "req-ctp-1"
+    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
+        adapter.place_order(
+            {
+                "symbol": "SHFE.rb2501",
+                "side": "sell",
+                "size": "2.0",
+                "price": 0,
+                "order_type": "market",
+                "offset": "close_today",
+                "request_id": "req-ctp-1",
+            }
+        )
+    assert adapter.feed.last_order is None
 
 
-@pytest.mark.parametrize(("offset", "flag"), [("close", "1"), ("close_yesterday", "4")])
-def test_ctp_gateway_place_order_preserves_close_offsets(monkeypatch, offset, flag):
+@pytest.mark.parametrize("offset", ["close", "close_yesterday"])
+def test_ctp_gateway_rejects_order_submission_for_each_valid_close_offset(
+    monkeypatch, offset
+):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)
 
     adapter = adapter_module.CtpGatewayAdapter()
     adapter.last_price["IF2506"] = 4000.0
+    adapter._quote_execution_eligible["IF2506"] = True
 
-    result = adapter.place_order(
-        {
-            "symbol": "IF2506.CFFEX",
-            "side": "buy",
-            "size": 1,
-            "price": 4000.0,
-            "offset": offset,
-            "request_id": f"req-{offset}",
-        }
-    )
-
-    assert adapter.feed.last_order["offset"] == offset
-    assert adapter.feed.last_order["offset_flag"] == flag
-    assert result["order_ref"] == f"req-{offset}"
+    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
+        adapter.place_order(
+            {
+                "symbol": "IF2506.CFFEX",
+                "side": "buy",
+                "size": 1,
+                "price": 4000.0,
+                "offset": offset,
+                "request_id": f"req-{offset}",
+            }
+        )
+    assert adapter.feed.last_order is None
 
 
 def test_ctp_gateway_get_open_orders_returns_remaining_orders(monkeypatch):
@@ -338,42 +328,33 @@ def test_ctp_gateway_get_open_orders_returns_remaining_orders(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("payload", "error"),
+    "payload",
     [
-        (
-            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1.5, "price": 4000},
-            "positive integer",
-        ),
-        (
-            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 0, "price": 4000},
-            "positive integer",
-        ),
-        (
-            {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1, "price": 0},
-            "positive price",
-        ),
-        (
-            {
-                "symbol": "IF2506.CFFEX",
-                "side": "buy",
-                "size": 1,
-                "offset": "bad",
-                "price": 4000,
-            },
-            "offset",
-        ),
-        ({"symbol": "IF2506.CFFEX", "side": "hold", "size": 1, "price": 4000}, "side"),
+        {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1.5, "price": 4000},
+        {"symbol": "IF2506.CFFEX", "side": "buy", "size": 0, "price": 4000},
+        {"symbol": "IF2506.CFFEX", "side": "buy", "size": 1, "price": 0},
+        {
+            "symbol": "IF2506.CFFEX",
+            "side": "buy",
+            "size": 1,
+            "offset": "bad",
+            "price": 4000,
+        },
+        {"symbol": "IF2506.CFFEX", "side": "hold", "size": 1, "price": 4000},
     ],
 )
-def test_ctp_gateway_place_order_rejects_unsafe_payload(monkeypatch, payload, error):
+def test_ctp_gateway_place_order_rejects_any_payload_before_validation(
+    monkeypatch, payload
+):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)
 
     adapter = adapter_module.CtpGatewayAdapter()
 
-    with pytest.raises(ValueError, match=error):
+    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
         adapter.place_order(payload)
+    assert adapter.feed.last_order is None
 
 
 @pytest.mark.parametrize(

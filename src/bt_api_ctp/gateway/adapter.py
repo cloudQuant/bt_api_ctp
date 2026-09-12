@@ -5,8 +5,8 @@ import re
 import threading
 import time
 from collections import defaultdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from bt_api_base.gateway.adapters.base import BaseGatewayAdapter
@@ -19,14 +19,12 @@ from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
 from bt_api_ctp.ctp.client import _check_native_module
 from bt_api_ctp.ctp_env_selector import verify_official_simnow_profile
 from bt_api_ctp.feeds.live_ctp_feed import (
-    CTP_DIRECTION_FLAG,
-    CTP_OFFSET_FLAG,
     CtpMarketStream,
     CtpRequestDataFuture,
     CtpTradeStream,
     CtpVolumeDeltaTracker,
-    _positive_ctp_price,
     _safe_ctp_quote_number,
+    _valid_ctp_quote_number,
     _validate_ctp_quote,
 )
 from bt_api_ctp.instrument import (
@@ -37,6 +35,36 @@ from bt_api_ctp.instrument import (
 
 _CTP_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"})
 _CTP_TZ = timezone(timedelta(hours=8))
+_CTP_PRODUCT_CLASS_ASSET_TYPES = {"1": "future", "2": "option"}
+_UNPROVEN_PROVENANCE_IDENTITIES = frozenset(
+    {
+        "",
+        "-",
+        "--",
+        "unknown",
+        "unverified",
+        "unset",
+        "not-set",
+        "not set",
+        "none",
+        "null",
+        "nil",
+        "n/a",
+        "na",
+        "not-applicable",
+        "not applicable",
+        "not-available",
+        "not available",
+        "unavailable",
+        "undefined",
+        "missing",
+        "pending",
+        "tbd",
+        "default",
+        "placeholder",
+        "redacted",
+    }
+)
 _CZCE_PRODUCT_PREFIXES = frozenset(
     {
         "AP",
@@ -65,6 +93,58 @@ _CZCE_PRODUCT_PREFIXES = frozenset(
         "ZC",
     }
 )
+
+
+@dataclass
+class CtpQuoteV2Tick(GatewayTick):
+    """Additive CTP quote transport that also runs with an older base wheel.
+
+    ``bt_api_base`` receives the same explicit fields in its next package
+    version.  Keeping them on this subclass prevents an older compatible base
+    wheel from rejecting a CTP adapter before that package upgrade completes.
+    """
+
+    schema_version: str = ""
+    volume_semantics: str = ""
+    cum_volume: float | None = None
+    cumulative_volume: float | None = None
+    delta_volume: float | None = None
+    volume_complete: bool = False
+    volume_quality: str = "unknown"
+    continuity_status: str = "unverified"
+    quality_flags: tuple[str, ...] = ()
+    last_price: float | None = None
+    lower_limit_price: float | None = None
+    upper_limit_price: float | None = None
+    event_time_utc: datetime | None = None
+    recv_time_utc: datetime | None = None
+    recv_monotonic_ns: int = 0
+    connection_generation: int = 0
+    ingest_seq: int = 0
+    subscription_epoch: int = 0
+    rules_hash: str = ""
+    clock_domain_id: str = ""
+    source: str = "unknown"
+    event_time_source: str = "unresolved"
+    source_clock_quality: str = "unknown"
+    receive_clock_quality: str = "unknown"
+    source_clock_error_ms: float | None = None
+    receive_clock_error_ms: float | None = None
+    freshness_verified: bool = False
+    product_class: str | None = None
+    contract_type: str = "unknown"
+    option_type: str | None = None
+    underlying_instrument: str | None = None
+    strike_price: float | None = None
+    execution_eligible: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        for name in ("datetime", "event_time_utc", "recv_time_utc"):
+            value = getattr(self, name)
+            if value is not None:
+                payload[name] = value.isoformat()
+        return payload
 
 
 def _auto_detect_fronts_enabled(value: Any) -> bool:
@@ -115,6 +195,181 @@ def _ctp_tick_timestamp_datetime(
         row.event_time_source = "receive_fallback"
     row.event_time_utc = tick_dt
     return stamp, tick_dt
+
+
+def _append_quote_quality_flag(row: CtpTickerData, flag: str) -> None:
+    if flag not in row.quality_flags:
+        row.quality_flags.append(flag)
+
+
+def _optional_ctp_quote_number(value: Any, *, positive: bool = False) -> float | None:
+    """Keep an absent CTP V2 field absent instead of turning it into zero."""
+
+    if not _valid_ctp_quote_number(value, positive=positive):
+        return None
+    return float(value)
+
+
+def _ctp_quote_asset_type(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"future", "futures", "future_contract", "fut"}:
+        return "future"
+    if text in {"option", "options", "option_contract", "opt"}:
+        return "option"
+    return "unknown"
+
+
+def _has_provenance_identity(value: Any) -> bool:
+    """Accept only a concrete source, rules, or clock-domain identity.
+
+    Quote V2 execution admission needs identities that can be independently
+    checked by a downstream boundary.  Placeholder strings are not evidence,
+    even though they are non-empty Python strings.
+    """
+
+    if not isinstance(value, str):
+        return False
+    identity = value.strip().casefold().replace("_", "-")
+    return identity not in _UNPROVEN_PROVENANCE_IDENTITIES
+
+
+def _valid_ctp_day(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 8 and text.isdigit()
+
+
+def _finite_nonnegative_number(value: Any) -> float | None:
+    return _optional_ctp_quote_number(value, positive=False)
+
+
+def _quote_v2_execution_eligible(
+    row: CtpTickerData,
+    *,
+    quote_valid: bool,
+    bid: float | None,
+    ask: float | None,
+    last: float | None,
+    bid_size: float | None,
+    ask_size: float | None,
+    lower_limit: float | None,
+    upper_limit: float | None,
+) -> bool:
+    """Evaluate CTP Quote V2 admission without inventing timing evidence.
+
+    A native CTP tick has no calibrated source-clock proof by itself.  It can
+    become execution eligible only when an upstream subscription explicitly
+    supplies verified timing and rules evidence.  This function deliberately
+    does not synthesize that evidence from local receipt time.
+    """
+
+    if not (
+        bool(row.volume_complete) and str(row.volume_quality).upper() == "CONTINUOUS"
+    ):
+        _append_quote_quality_flag(row, "VOLUME_NOT_CONTINUOUS")
+    if bid_size is None or ask_size is None or bid_size <= 0 or ask_size <= 0:
+        _append_quote_quality_flag(row, "TOP_OF_BOOK_UNAVAILABLE")
+    if (
+        lower_limit is None
+        or upper_limit is None
+        or lower_limit <= 0
+        or upper_limit <= lower_limit
+    ):
+        _append_quote_quality_flag(row, "DAILY_PRICE_LIMIT_INVALID")
+    elif any(
+        value is None or value < lower_limit or value > upper_limit
+        for value in (bid, ask, last)
+    ):
+        _append_quote_quality_flag(row, "QUOTE_OUTSIDE_DAILY_LIMIT")
+
+    asset_type = _ctp_quote_asset_type(row.get_asset_type())
+    instrument = row.get_symbol_name() or ""
+    if asset_type == "unknown":
+        _append_quote_quality_flag(row, "ASSET_TYPE_UNKNOWN")
+    contract_type = _ctp_quote_asset_type(getattr(row, "contract_type", ""))
+    if contract_type != asset_type:
+        _append_quote_quality_flag(row, "CONTRACT_TYPE_MISMATCH")
+    product_class = getattr(row, "product_class", "")
+    if not _has_provenance_identity(product_class):
+        _append_quote_quality_flag(row, "PRODUCT_CLASS_UNKNOWN")
+    elif _CTP_PRODUCT_CLASS_ASSET_TYPES.get(str(product_class).strip()) != asset_type:
+        _append_quote_quality_flag(row, "PRODUCT_CLASS_MISMATCH")
+    if asset_type == "option":
+        option_type = str(getattr(row, "option_type", "") or "").strip().lower()
+        underlying_instrument = str(
+            getattr(row, "underlying_instrument", "") or ""
+        ).strip()
+        strike_price = _optional_ctp_quote_number(
+            getattr(row, "strike_price", None), positive=True
+        )
+        if option_type not in {"call", "put"}:
+            _append_quote_quality_flag(row, "OPTION_TYPE_UNKNOWN")
+        if not underlying_instrument:
+            _append_quote_quality_flag(row, "OPTION_UNDERLYING_UNKNOWN")
+        elif underlying_instrument == instrument:
+            _append_quote_quality_flag(row, "OPTION_UNDERLYING_SELF_REFERENCE")
+        if strike_price is None:
+            _append_quote_quality_flag(row, "OPTION_STRIKE_INVALID")
+    if not _has_provenance_identity(getattr(row, "rules_hash", "")):
+        _append_quote_quality_flag(row, "RULES_HASH_UNKNOWN")
+    if int(getattr(row, "connection_generation", 0) or 0) <= 0:
+        _append_quote_quality_flag(row, "CONNECTION_GENERATION_UNKNOWN")
+    if int(getattr(row, "ingest_seq", 0) or 0) <= 0:
+        _append_quote_quality_flag(row, "INGEST_SEQUENCE_UNKNOWN")
+    if int(getattr(row, "subscription_epoch", 0) or 0) <= 0:
+        _append_quote_quality_flag(row, "SUBSCRIPTION_EPOCH_UNKNOWN")
+    if not _valid_ctp_day(getattr(row, "trading_day", "")):
+        _append_quote_quality_flag(row, "TRADING_DAY_INVALID")
+    if not _valid_ctp_day(getattr(row, "action_day", "")):
+        _append_quote_quality_flag(row, "ACTION_DAY_INVALID")
+    if str(getattr(row, "event_time_source", "") or "").strip().lower() != "action_day":
+        _append_quote_quality_flag(row, "SOURCE_TIME_UNVERIFIED")
+    if not _has_provenance_identity(getattr(row, "source", "")):
+        _append_quote_quality_flag(row, "QUOTE_SOURCE_UNKNOWN")
+    if not _has_provenance_identity(getattr(row, "clock_domain_id", "")):
+        _append_quote_quality_flag(row, "CLOCK_DOMAIN_UNKNOWN")
+
+    source_error = _finite_nonnegative_number(
+        getattr(row, "source_clock_error_ms", None)
+    )
+    receive_error = _finite_nonnegative_number(
+        getattr(row, "receive_clock_error_ms", None)
+    )
+    source_time = getattr(row, "event_time_utc", None)
+    receive_time = getattr(row, "recv_time_utc", None)
+    source_clock_verified = (
+        str(getattr(row, "source_clock_quality", "") or "").strip().lower()
+        == "verified"
+    )
+    receive_clock_verified = (
+        str(getattr(row, "receive_clock_quality", "") or "").strip().lower()
+        == "verified"
+    )
+    timing_complete = (
+        getattr(row, "freshness_verified", False) is True
+        and source_clock_verified
+        and receive_clock_verified
+        and source_error is not None
+        and receive_error is not None
+        and isinstance(source_time, datetime)
+        and source_time.tzinfo is not None
+        and isinstance(receive_time, datetime)
+        and receive_time.tzinfo is not None
+    )
+    if not timing_complete:
+        _append_quote_quality_flag(row, "FRESHNESS_UNVERIFIED")
+    elif (
+        source_time.timestamp()
+        > receive_time.timestamp() + (source_error + receive_error) / 1000
+    ):
+        _append_quote_quality_flag(row, "SOURCE_TIME_AFTER_RECEIVE")
+
+    return (
+        quote_valid
+        and bool(row.volume_complete)
+        and str(row.volume_quality).upper() == "CONTINUOUS"
+        and not row.quality_flags
+        and asset_type in {"future", "option"}
+    )
 
 
 class CtpGatewayAdapter(BaseGatewayAdapter):
@@ -536,141 +791,27 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             f"CTP metadata incomplete for {instrument}: positive PriceTick required"
         )
 
+    @staticmethod
+    def _reject_direct_execution(operation: str) -> None:
+        """Keep the gateway adapter market-data-only until an SDK owns writes.
+
+        Quote V2 eligibility proves only that a market-data snapshot passed its
+        quote checks.  It cannot carry the SDK's opaque capability, execution
+        arm, or preflight receipt.  Letting this compatibility adapter forward
+        ``place_order`` or ``cancel_order`` would therefore recreate an
+        unguarded route around the managed CTP request feed.
+        """
+
+        raise RuntimeError(
+            f"CTP gateway {operation} is disabled without an SDK-managed "
+            "execution capability, arm, and preflight"
+        )
+
     def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
-        name = str(
-            payload.get("data_name")
-            or payload.get("symbol")
-            or payload.get("instrument")
-            or ""
-        ).strip()
-        instrument, exchange_id = _split(name)
-        if not instrument:
-            raise ValueError("CTP order rejected: missing instrument.")
-        if getattr(self, "_quote_execution_eligible", {}).get(instrument) is False:
-            raise RuntimeError(
-                f"CTP order for {instrument} rejected: latest quote failed quality checks"
-            )
-        time_in_force = str(
-            payload.get("time_in_force") or payload.get("tif") or "GFD"
-        ).upper()
-        if time_in_force == "DAY":
-            time_in_force = "GFD"
-        if time_in_force != "GFD":
-            raise ValueError(
-                f"CTP time_in_force {time_in_force!r} is unsupported; iteration 22 requires GFD."
-            )
-        side = str(payload.get("side") or "buy").lower()
-        if side not in CTP_DIRECTION_FLAG:
-            raise ValueError(f"CTP order side {payload.get('side')!r} is unsupported.")
-        requested_order_type = str(
-            payload.get("order_type") or payload.get("type") or "limit"
-        ).lower()
-        if requested_order_type not in {"limit", "market"}:
-            raise ValueError(f"CTP order type {requested_order_type!r} is unsupported.")
-        offset = str(payload.get("offset") or "open").lower()
-        if offset not in CTP_OFFSET_FLAG:
-            raise ValueError(
-                f"CTP order offset {payload.get('offset')!r} is unsupported."
-            )
-        volume = _positive_int_lot(
-            payload["size"] if "size" in payload else payload.get("volume"),
-            "size",
-        )
-        price = payload.get("price")
-        if requested_order_type == "market":
-            try:
-                last_price = _positive_ctp_price(
-                    self.last_price.get(instrument or name), "reference price"
-                )
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"CTP order for {instrument or name} rejected: no recent tick price available"
-                ) from exc
-            price_tick = self._get_price_tick(instrument or name)
-            slippage = price_tick * 5
-            price = (
-                (last_price + slippage)
-                if side == "buy"
-                else max(last_price - slippage, price_tick)
-            )
-            price = round(price, 4)
-        else:
-            price = _positive_ctp_price(price)
-        client_order_id = _first_non_empty(
-            payload,
-            "client_order_id",
-            "bt_order_ref",
-            "request_id",
-            "order_ref",
-        )
-        response = self.feed.make_order(
-            instrument,
-            volume=volume,
-            price=price,
-            order_type=f"{side}-limit",
-            offset=offset,
-            client_order_id=client_order_id,
-            exchange_id=exchange_id or payload.get("exchange_id") or "",
-            time_in_force="GFD",
-        )
-        if not response.get_status():
-            raise RuntimeError("ctp order failed")
-        row = response.get_data()[0].init_data()
-        order_sys_id = row.get_order_id() or ""
-        order_ref = row.get_client_order_id() or ""
-        return {
-            "id": order_sys_id,
-            "order_id": order_sys_id,
-            "external_order_id": order_sys_id,
-            "order_sys_id": order_sys_id,
-            "order_ref": order_ref,
-            "client_order_id": client_order_id or order_ref,
-            "front_id": row.front_id,
-            "session_id": row.session_id,
-            "exchange_id": row.get_order_exchange_id(),
-            "id_source": "exchange" if order_sys_id else "local_pending",
-            "details": {
-                "bt_order_ref": payload.get("bt_order_ref"),
-                "request_id": payload.get("request_id"),
-                "client_order_id": client_order_id,
-            },
-        }
+        self._reject_direct_execution("order submission")
 
     def cancel_order(self, payload: dict[str, Any]) -> dict[str, Any]:
-        name = str(
-            payload.get("data_name")
-            or payload.get("symbol")
-            or payload.get("instrument")
-            or ""
-        ).strip()
-        instrument, exchange_id = _split(name)
-        response = self.feed.cancel_order(
-            instrument or name,
-            order_id=payload.get("order_id") or payload.get("external_order_id"),
-            exchange_id=exchange_id or payload.get("exchange_id") or "",
-            front_id=payload.get("front_id"),
-            session_id=payload.get("session_id"),
-            order_ref=payload.get("order_ref"),
-        )
-        if not response.get_status():
-            raise RuntimeError("ctp cancel failed")
-        data = dict((response.get_data() or [{}])[0])
-        order_sys_id = data.get("OrderSysID") or payload.get("order_id") or ""
-        order_ref = data.get("OrderRef") or payload.get("order_ref") or ""
-        return {
-            "id": order_sys_id,
-            "order_id": order_sys_id,
-            "external_order_id": order_sys_id,
-            "order_ref": order_ref,
-            "order_sys_id": order_sys_id,
-            "client_order_id": payload.get("client_order_id")
-            or payload.get("bt_order_ref")
-            or order_ref,
-            "front_id": data.get("FrontID") or payload.get("front_id"),
-            "session_id": data.get("SessionID") or payload.get("session_id"),
-            "exchange_id": data.get("ExchangeID") or exchange_id,
-            "id_source": "exchange" if order_sys_id else "local_pending",
-        }
+        self._reject_direct_execution("order cancellation")
 
     def _run(self) -> None:
         while self.running:
@@ -706,21 +847,48 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         volume = float(row.delta_volume or 0.0)
         volume_complete = bool(row.volume_complete)
         volume_quality = str(row.volume_quality or "UNKNOWN")
-        execution_eligible = quote_valid and not row.quality_flags
+        bid = _optional_ctp_quote_number(row.get_bid_price(), positive=True)
+        ask = _optional_ctp_quote_number(row.get_ask_price(), positive=True)
+        last = _optional_ctp_quote_number(row.get_last_price(), positive=True)
+        bid_size = _optional_ctp_quote_number(row.get_bid_volume())
+        ask_size = _optional_ctp_quote_number(row.get_ask_volume())
+        upper_limit_price = _optional_ctp_quote_number(
+            row.get_upper_limit_price(), positive=True
+        )
+        lower_limit_price = _optional_ctp_quote_number(
+            row.get_lower_limit_price(), positive=True
+        )
+        execution_eligible = _quote_v2_execution_eligible(
+            row,
+            quote_valid=quote_valid,
+            bid=bid,
+            ask=ask,
+            last=last,
+            bid_size=bid_size,
+            ask_size=ask_size,
+            lower_limit=lower_limit_price,
+            upper_limit=upper_limit_price,
+        )
+        continuity_status = (
+            "continuous"
+            if volume_complete and volume_quality == "CONTINUOUS"
+            else "gap"
+        )
         eligibility = getattr(self, "_quote_execution_eligible", None)
         if eligibility is None:
             eligibility = self._quote_execution_eligible = {}
         eligibility[instrument] = execution_eligible
         price = _safe_ctp_quote_number(row.get_last_price())
+        asset_type = _ctp_quote_asset_type(row.get_asset_type())
         if quote_valid:
             self.last_price[instrument] = price
             self.last_volume[instrument] = total
         for alias in self.aliases.get(instrument) or {instrument}:
-            tick = GatewayTick(
+            tick = CtpQuoteV2Tick(
                 timestamp=stamp,
                 symbol=alias,
                 exchange=row.exchange_id or "",
-                asset_type="futures",
+                asset_type=asset_type,
                 local_time=row.recv_time_utc.timestamp(),
                 price=price,
                 volume=volume,
@@ -731,32 +899,53 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 action_day=row.action_day or "",
                 update_time=row.update_time_val or "",
                 update_millisec=int(row.update_millisec or 0),
-                bid_price=_safe_ctp_quote_number(row.get_bid_price()),
-                ask_price=_safe_ctp_quote_number(row.get_ask_price()),
-                bid_volume=_safe_ctp_quote_number(row.get_bid_volume()),
-                ask_volume=_safe_ctp_quote_number(row.get_ask_volume()),
+                bid_price=bid,
+                ask_price=ask,
+                bid_volume=bid_size,
+                ask_volume=ask_size,
                 openinterest=_safe_ctp_quote_number(row.get_open_interest()),
                 turnover=_safe_ctp_quote_number(row.turnover),
                 trade_id=f"{instrument}-{generation}-{row.ingest_seq}",
+                schema_version=row.schema_version,
+                volume_semantics="delta",
+                cum_volume=total,
+                cumulative_volume=total,
+                delta_volume=volume,
+                volume_complete=volume_complete,
+                volume_quality=volume_quality,
+                continuity_status=continuity_status,
+                quality_flags=tuple(row.quality_flags),
+                last_price=last,
+                lower_limit_price=lower_limit_price,
+                upper_limit_price=upper_limit_price,
+                event_time_utc=row.event_time_utc,
+                recv_time_utc=row.recv_time_utc,
+                recv_monotonic_ns=int(row.recv_monotonic_ns or 0),
+                connection_generation=generation,
+                ingest_seq=int(row.ingest_seq or 0),
+                subscription_epoch=int(getattr(row, "subscription_epoch", 0) or 0),
+                rules_hash=str(getattr(row, "rules_hash", "") or ""),
+                clock_domain_id=str(getattr(row, "clock_domain_id", "") or ""),
+                source=str(getattr(row, "source", "unknown") or "unknown"),
+                event_time_source=str(getattr(row, "event_time_source", "") or ""),
+                source_clock_quality=str(
+                    getattr(row, "source_clock_quality", "unknown") or "unknown"
+                ),
+                receive_clock_quality=str(
+                    getattr(row, "receive_clock_quality", "unknown") or "unknown"
+                ),
+                source_clock_error_ms=getattr(row, "source_clock_error_ms", None),
+                receive_clock_error_ms=getattr(row, "receive_clock_error_ms", None),
+                freshness_verified=getattr(row, "freshness_verified", False) is True,
+                product_class=getattr(row, "product_class", None),
+                contract_type=str(
+                    getattr(row, "contract_type", "unknown") or "unknown"
+                ),
+                option_type=getattr(row, "option_type", None),
+                underlying_instrument=getattr(row, "underlying_instrument", None),
+                strike_price=getattr(row, "strike_price", None),
+                execution_eligible=execution_eligible,
             )
-            for name, value in {
-                "schema_version": row.schema_version,
-                "volume_semantics": "delta",
-                "cum_volume": total,
-                "cumulative_volume": total,
-                "delta_volume": volume,
-                "volume_complete": volume_complete,
-                "volume_quality": volume_quality,
-                "event_time_utc": row.event_time_utc,
-                "recv_time_utc": row.recv_time_utc,
-                "recv_monotonic_ns": row.recv_monotonic_ns,
-                "connection_generation": generation,
-                "ingest_seq": row.ingest_seq,
-                "quality_flags": tuple(row.quality_flags),
-                "event_time_source": row.event_time_source,
-                "execution_eligible": execution_eligible,
-            }.items():
-                setattr(tick, name, value)
             self.emit(CHANNEL_MARKET, tick)
 
 
@@ -808,28 +997,6 @@ def _positive_float(value: Any, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return number if number > 0 else default
-
-
-def _positive_int_lot(value: Any, field_name: str) -> int:
-    if isinstance(value, bool) or value in (None, ""):
-        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
-    try:
-        lot = Decimal(str(value).strip())
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(
-            f"CTP order {field_name} must be a positive integer lot."
-        ) from exc
-    if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
-        raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
-    return int(lot)
-
-
-def _first_non_empty(source: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        value = source.get(name)
-        if value not in (None, ""):
-            return value
-    return None
 
 
 def _safe_query(func: Any, *args: Any, **kwargs: Any) -> Any:

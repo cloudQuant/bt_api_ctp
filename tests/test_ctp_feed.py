@@ -20,6 +20,8 @@ import threading
 
 import pytest
 
+from bt_api_ctp.ctp import client as ctp_client
+
 
 class _CompleteResult:
     def __init__(self, records):
@@ -493,9 +495,11 @@ class TestCtpOrderThreadingRegression:
                 self.is_ready = True
                 self.is_read_only_ready = True
                 self.is_trading_ready = True
+                self.auto_settlement_confirm = False
                 self._req_id = 7
                 self._front_id = 11
                 self._session_id = 22
+                self._execution_capability = None
 
             def next_order_ref(self):
                 return "108"
@@ -507,6 +511,24 @@ class TestCtpOrderThreadingRegression:
             def _record_request(self, _request_type):
                 return None
 
+            def configure_execution_gate(self, capability):
+                self._execution_capability = capability
+                return self.get_execution_gate_state()
+
+            def get_execution_gate_state(self):
+                return {
+                    "managed": self._execution_capability is not None,
+                    "armed": self._execution_capability is not None,
+                }
+
+            def require_execution_write(self, capability, _instrument, _exchange_id=""):
+                if capability is not self._execution_capability:
+                    raise AssertionError("unexpected execution capability")
+
+            def submit_order_insert(self, field, request_id, *, execution_capability):
+                self.require_execution_write(execution_capability, field.InstrumentID)
+                return self.api.ReqOrderInsert(field, request_id)
+
         feed = CtpRequestDataFuture(
             queue.Queue(),
             broker_id="9999",
@@ -516,6 +538,8 @@ class TestCtpOrderThreadingRegression:
         )
         feed._trader = FakeTrader()
         feed._connected = True
+        capability = ctp_client._issue_ctp_execution_authority_for_test()
+        feed.configure_execution_gate(capability)
 
         result = feed.make_order(
             symbol="IF2506",
@@ -524,6 +548,7 @@ class TestCtpOrderThreadingRegression:
             order_type="buy-limit",
             offset="open",
             exchange_id="CFFEX",
+            _execution_capability=capability,
         )
 
         sent_field = feed._trader.api.field
@@ -547,6 +572,7 @@ class TestCtpOrderThreadingRegression:
         class FakeTrader:
             is_ready = True
             is_read_only_ready = True
+            auto_settlement_confirm = False
 
             def query_orders_result(self, **_kwargs):
                 records = [
@@ -646,9 +672,11 @@ class TestCtpOrderThreadingRegression:
                 self.is_ready = True
                 self.is_read_only_ready = True
                 self.is_trading_ready = True
+                self.auto_settlement_confirm = False
                 self._req_id = 7
                 self._front_id = 11
                 self._session_id = 22
+                self._execution_capability = None
 
             def _next_request_id(self):
                 self._req_id += 1
@@ -656,6 +684,23 @@ class TestCtpOrderThreadingRegression:
 
             def _record_request(self, _request_type):
                 return None
+
+            def configure_execution_gate(self, capability):
+                self._execution_capability = capability
+                return self.get_execution_gate_state()
+
+            def get_execution_gate_state(self):
+                return {
+                    "managed": self._execution_capability is not None,
+                    "armed": self._execution_capability is not None,
+                }
+
+            def require_execution_write(self, capability, _instrument, _exchange_id=""):
+                if capability is not self._execution_capability:
+                    raise AssertionError("unexpected execution capability")
+
+            def submit_order_insert(self, *_args, **_kwargs):
+                raise AssertionError("typed order request should not be called")
 
         feed = CtpRequestDataFuture(
             queue.Queue(),
@@ -666,6 +711,8 @@ class TestCtpOrderThreadingRegression:
         )
         feed._trader = FakeTrader()
         feed._connected = True
+        capability = ctp_client._issue_ctp_execution_authority_for_test()
+        feed.configure_execution_gate(capability)
 
         params = {
             "symbol": "IF2506",
@@ -678,4 +725,4 @@ class TestCtpOrderThreadingRegression:
         params.update(kwargs)
 
         with pytest.raises(ValueError, match=error):
-            feed.make_order(**params)
+            feed.make_order(**params, _execution_capability=capability)

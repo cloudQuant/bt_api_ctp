@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
+from math import isfinite
+from typing import Any
 
 from bt_api_base.containers.tickers.ticker import TickerData
 from bt_api_base.functions.utils import (
@@ -11,17 +13,58 @@ from bt_api_base.functions.utils import (
 )
 
 
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return result if result >= 0 else 0
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _positive_finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) and number > 0 else None
+
+
 class CtpTickerData(TickerData):
     def __init__(
         self,
         ticker_info,
         symbol_name=None,
-        asset_type="FUTURE",
+        asset_type="UNKNOWN",
         has_been_json_encoded=False,
         connection_generation=0,
         ingest_seq=0,
         recv_time_utc=None,
         recv_monotonic_ns=None,
+        subscription_epoch=0,
+        rules_hash="",
+        clock_domain_id="",
+        source="ctp.native.md",
+        source_clock_quality="unknown",
+        receive_clock_quality="unknown",
+        source_clock_error_ms=None,
+        receive_clock_error_ms=None,
+        freshness_verified=False,
+        product_class=None,
+        contract_type=None,
+        option_type=None,
+        underlying_instrument=None,
+        strike_price=None,
     ):
         super().__init__(ticker_info, has_been_json_encoded)
         self.symbol_name = symbol_name
@@ -49,8 +92,32 @@ class CtpTickerData(TickerData):
         self.trading_day = None
         self.exchange_id = None
         self.action_day = None
-        self.connection_generation = int(connection_generation or 0)
-        self.ingest_seq = int(ingest_seq or 0)
+        self.connection_generation = _nonnegative_int(connection_generation)
+        self.ingest_seq = _nonnegative_int(ingest_seq)
+        self.subscription_epoch = _nonnegative_int(subscription_epoch)
+        self.rules_hash = str(rules_hash or "")
+        self.clock_domain_id = str(clock_domain_id or "")
+        self.source = str(source or "unknown")
+        self.source_clock_quality = (
+            str(source_clock_quality or "unknown").strip().lower()
+        )
+        self.receive_clock_quality = (
+            str(receive_clock_quality or "unknown").strip().lower()
+        )
+        self.source_clock_error_ms = source_clock_error_ms
+        self.receive_clock_error_ms = receive_clock_error_ms
+        # A source must explicitly attest freshness.  CTP native fields alone
+        # carry no clock-calibration proof, so the default remains false.
+        self.freshness_verified = freshness_verified is True
+        # Product identity comes from the separately queried CTP instrument
+        # reference data.  A depth quote does not prove it, so retain only
+        # caller-supplied fields and never infer an option/future relationship
+        # from the instrument string.
+        self.product_class = _optional_text(product_class)
+        self.contract_type = _optional_text(contract_type) or "unknown"
+        self.option_type = _optional_text(option_type)
+        self.underlying_instrument = _optional_text(underlying_instrument)
+        self.strike_price = _positive_finite_number(strike_price)
         if isinstance(recv_time_utc, (int, float)):
             recv_time_utc = datetime.fromtimestamp(float(recv_time_utc), timezone.utc)
         elif isinstance(recv_time_utc, str):
@@ -67,6 +134,10 @@ class CtpTickerData(TickerData):
         self.volume_semantics = "cumulative"
         self.volume_complete = False
         self.volume_quality = "uninitialized"
+        self.continuity_status = "gap"
+        # Direct native containers carry no parent-issued transport attestation
+        # and must never self-promote an execution decision.
+        self.execution_eligible = False
         self.quality_flags = []
 
     def init_data(self):
@@ -164,6 +235,12 @@ class CtpTickerData(TickerData):
         self.volume_semantics = "delta"
         self.volume_complete = bool(complete)
         self.volume_quality = str(quality)
+        self.continuity_status = (
+            "continuous"
+            if self.volume_complete and self.volume_quality.upper() == "CONTINUOUS"
+            else "gap"
+        )
+        self.execution_eligible = False
         return self
 
     def resolve_event_time(self):
@@ -205,7 +282,16 @@ class CtpTickerData(TickerData):
         self._ensure_init()
         return {
             "exchange_name": self.exchange_name,
+            "asset_type": self.asset_type,
+            "symbol": self.get_symbol_name(),
+            "symbol_name": self.symbol_name,
             "instrument_id": self.instrument_id,
+            "product_class": self.product_class,
+            "contract_type": self.contract_type,
+            "option_type": self.option_type,
+            "underlying_instrument": self.underlying_instrument,
+            "strike_price": self.strike_price,
+            "price": self.last_price_val,
             "last_price": self.last_price_val,
             "pre_settlement_price": self.pre_settlement_price,
             "open_price": self.open_price_val,
@@ -215,6 +301,10 @@ class CtpTickerData(TickerData):
             "bid_volume_1": self.bid_volume_1,
             "ask_price_1": self.ask_price_1,
             "ask_volume_1": self.ask_volume_1,
+            "bid_price": self.bid_price_1,
+            "bid_volume": self.bid_volume_1,
+            "ask_price": self.ask_price_1,
+            "ask_volume": self.ask_volume_1,
             "volume": self.get_last_volume(),
             "cum_volume": self.cum_volume,
             "cumulative_volume": self.cum_volume,
@@ -222,6 +312,7 @@ class CtpTickerData(TickerData):
             "volume_semantics": self.volume_semantics,
             "volume_complete": self.volume_complete,
             "volume_quality": self.volume_quality,
+            "continuity_status": self.continuity_status,
             "turnover": self.turnover,
             "open_interest": self.open_interest,
             "upper_limit_price": self.upper_limit_price,
@@ -237,7 +328,20 @@ class CtpTickerData(TickerData):
             "recv_monotonic_ns": self.recv_monotonic_ns,
             "connection_generation": self.connection_generation,
             "ingest_seq": self.ingest_seq,
+            "subscription_epoch": self.subscription_epoch,
+            "rules_hash": self.rules_hash,
+            "clock_domain_id": self.clock_domain_id,
+            "source": self.source,
+            "source_clock_quality": self.source_clock_quality,
+            "receive_clock_quality": self.receive_clock_quality,
+            "source_clock_error_ms": self.source_clock_error_ms,
+            "receive_clock_error_ms": self.receive_clock_error_ms,
+            "freshness_verified": self.freshness_verified,
             "schema_version": self.schema_version,
+            # Eligibility is a parent-owned admission decision.  This native
+            # container can expose evidence, but it cannot serialize a
+            # self-issued approval even if a caller mutates the public object.
+            "execution_eligible": False,
             "quality_flags": list(self.quality_flags),
         }
 

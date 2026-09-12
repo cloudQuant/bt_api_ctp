@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import importlib.machinery
 import json
+import math
 import os
 import queue
 import re
@@ -48,7 +49,15 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
-from bt_api_ctp.query import QueryResult
+from bt_api_ctp.instrument import normalize_ctp_instrument
+from bt_api_ctp.query import (
+    QueryResult,
+    _attach_query_source,
+    _new_query_session_scope,
+    _new_query_source,
+    _query_records_digest,
+    _QuerySessionScope,
+)
 
 from . import _ctp_base
 from ._ctp_base import (
@@ -67,10 +76,13 @@ from .ctp_structs_common import (
     CThostFtdcSettlementInfoConfirmField,
 )
 from .ctp_structs_query import (
+    CThostFtdcQryDepthMarketDataField,
     CThostFtdcQryInstrumentCommissionRateField,
     CThostFtdcQryInstrumentField,
     CThostFtdcQryInstrumentMarginRateField,
     CThostFtdcQryInvestorPositionField,
+    CThostFtdcQryOptionInstrCommRateField,
+    CThostFtdcQryOptionInstrTradeCostField,
     CThostFtdcQryOrderField,
     CThostFtdcQrySettlementInfoConfirmField,
     CThostFtdcQryTradeField,
@@ -91,6 +103,9 @@ CTP_REQUEST_COUNT_KEYS = (
     "query_instruments",
     "query_margin_rate",
     "query_commission_rate",
+    "query_depth_market_data",
+    "query_option_trade_cost",
+    "query_option_commission_rate",
     "query_settlement_confirmation",
 )
 
@@ -182,6 +197,12 @@ _CTP_EXECUTION_GATE_PROOF_FIELDS = (
     "source_hashes_sha256",
     "dependency_hashes_sha256",
 )
+_CTP_EXECUTION_GATE_BUNDLE_SCOPE_VERSION = "ctp-contract-bundle-v1"
+_CTP_EXECUTION_GATE_BUNDLE_PROOF_FIELDS = (
+    *_CTP_EXECUTION_GATE_PROOF_FIELDS,
+    "scope_version",
+    "authorized_instruments",
+)
 _CTP_EXECUTION_GATE_HASH_FIELDS = (
     "preflight_sha256",
     "receipt_sha256",
@@ -193,7 +214,13 @@ _CTP_EXECUTION_GATE_HASH_FIELDS = (
 _CTP_EXCHANGES = {"CFFEX", "CZCE", "DCE", "GFEX", "INE", "SHFE"}
 _CTP_EXCHANGE_ALIASES = {"ZCE": "CZCE"}
 _CTP_INSTRUMENT_RE = re.compile(r"^[A-Z]{1,3}[0-9]{3,4}$")
+_CTP_BUNDLE_INSTRUMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$")
 _CTP_GATE_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+# The public API view is intentionally much narrower than the SWIG object.
+# Raw lifecycle calls can change the effective native connection while leaving
+# the Python-side immutable front binding unchanged.  Keep the tiny allowlist
+# to pure observation methods; typed query methods are handled separately.
+_CTP_PUBLIC_NATIVE_READ_CALLS = frozenset({"GetApiVersion", "GetTradingDay"})
 
 
 class CtpExecutionGateError(RuntimeError):
@@ -202,6 +229,144 @@ class CtpExecutionGateError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+# These objects deliberately have no public construction or retrieval API.
+# A bare ``object()`` (or a mapping reconstructed from session-state fields)
+# must never become a CTP write credential.  The parent SDK receives an owner
+# capability through its private feed handshake and uses it only to install
+# the managed gate.  The two one-shot grants below carry the mutable proof
+# state; the capability itself is intentionally insufficient to arm orders or
+# confirm settlement.
+_CTP_CORE_EXECUTION_AUTHORITY_SEAL = object()
+_CTP_EXECUTION_AUTHORIZATION_SEAL = object()
+
+
+class _CtpCoreExecutionAuthority:
+    """Opaque owner capability accepted only by the managed CTP boundary."""
+
+    __slots__ = ("_seal", "_test_only")
+
+    def __init__(self, seal: object, *, test_only: bool = False) -> None:
+        if seal is not _CTP_CORE_EXECUTION_AUTHORITY_SEAL:
+            raise CtpExecutionGateError("ctp_execution_gate_capability_required")
+        self._seal = seal
+        self._test_only = test_only
+
+
+def _issue_ctp_execution_authority_for_core() -> object:
+    """Private core/test seam; it is not part of the public feed contract.
+
+    Production callers have no public route to this function.  It exists so
+    the owning SDK can install a process-local capability before it exposes a
+    CTP feed and so offline contract tests can exercise the native boundary.
+    """
+
+    return _CtpCoreExecutionAuthority(_CTP_CORE_EXECUTION_AUTHORITY_SEAL)
+
+
+def _issue_ctp_execution_authority_for_test() -> object:
+    """Private offline-test seam for exercising managed native transitions.
+
+    This is intentionally separate from the parent/core issuer.  Only this
+    marker permits compatibility construction of a one-shot token from a
+    fixture mapping; a production core capability never does.
+    """
+
+    return _CtpCoreExecutionAuthority(
+        _CTP_CORE_EXECUTION_AUTHORITY_SEAL, test_only=True
+    )
+
+
+def _is_ctp_core_execution_authority(value: object) -> bool:
+    return bool(
+        type(value) is _CtpCoreExecutionAuthority
+        and getattr(value, "_seal", None) is _CTP_CORE_EXECUTION_AUTHORITY_SEAL
+    )
+
+
+def _is_ctp_test_execution_authority(value: object) -> bool:
+    return bool(
+        _is_ctp_core_execution_authority(value)
+        and getattr(value, "_test_only", False) is True
+    )
+
+
+class _CtpExecutionAuthorization:
+    """Native one-shot order-arm authorization, owned by one TraderClient."""
+
+    __slots__ = (
+        "_seal",
+        "_client_ref",
+        "_capability",
+        "_proof",
+        "_environment_profile",
+        "_strategy_identity_sha256",
+        "_execution_cycle_id",
+        "_preflight_epoch",
+        "_used",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: object,
+        capability: object,
+        proof: Mapping[str, Any],
+        environment_profile: str,
+        strategy_identity_sha256: str,
+        execution_cycle_id: str,
+        preflight_epoch: int,
+    ) -> None:
+        self._seal = _CTP_EXECUTION_AUTHORIZATION_SEAL
+        self._client_ref = weakref.ref(client)
+        self._capability = capability
+        self._proof = dict(proof)
+        self._environment_profile = environment_profile
+        self._strategy_identity_sha256 = strategy_identity_sha256
+        self._execution_cycle_id = execution_cycle_id
+        self._preflight_epoch = preflight_epoch
+        self._used = False
+
+
+class _CtpSettlementAuthorization:
+    """Native one-shot settlement-confirm authorization with a fixed budget."""
+
+    __slots__ = (
+        "_seal",
+        "_client_ref",
+        "_capability",
+        "_account_fingerprint",
+        "_trading_day",
+        "_connection_generation",
+        "_environment_profile",
+        "_scope",
+        "_budget",
+        "_used",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: object,
+        capability: object,
+        account_fingerprint: str,
+        trading_day: str,
+        connection_generation: int,
+        environment_profile: str,
+        scope: str,
+        budget: int,
+    ) -> None:
+        self._seal = _CTP_EXECUTION_AUTHORIZATION_SEAL
+        self._client_ref = weakref.ref(client)
+        self._capability = capability
+        self._account_fingerprint = account_fingerprint
+        self._trading_day = trading_day
+        self._connection_generation = connection_generation
+        self._environment_profile = environment_profile
+        self._scope = scope
+        self._budget = budget
+        self._used = False
 
 
 class _ManagedTraderApiView:
@@ -276,12 +441,107 @@ def canonical_ctp_instrument(value: Any, exchange_id: Any = None) -> str:
     return f"{exchange}.{letters}{digits}"
 
 
-def _execution_gate_proof(value: Any) -> tuple[dict[str, Any], str]:
-    if not isinstance(value, Mapping) or set(value) != set(
-        _CTP_EXECUTION_GATE_PROOF_FIELDS
+def canonical_ctp_bundle_instrument(value: Any, exchange_id: Any = None) -> str:
+    """Return one exact raw native CTP contract identity for a V2 bundle.
+
+    DCE option identifiers can contain hyphens and lowercase product codes.
+    V2 deliberately preserves that native spelling and does not apply V1's
+    legacy CZCE alias normalization before a submit/cancel reaches CTP.
+    """
+    text = str(value or "").strip()
+    supplied_exchange = _canonical_ctp_exchange(exchange_id)
+    if not text or (exchange_id not in (None, "") and not supplied_exchange):
+        return ""
+    parts = text.split(".")
+    if len(parts) == 1:
+        exchange = supplied_exchange
+        instrument = parts[0]
+    elif len(parts) == 2:
+        first_exchange = _canonical_ctp_exchange(parts[0])
+        last_exchange = _canonical_ctp_exchange(parts[1])
+        if bool(first_exchange) == bool(last_exchange):
+            return ""
+        exchange = first_exchange or last_exchange
+        instrument = parts[1] if first_exchange else parts[0]
+        if supplied_exchange and supplied_exchange != exchange:
+            return ""
+    else:
+        return ""
+    if (
+        not exchange
+        or len(instrument) > 80
+        or not _CTP_BUNDLE_INSTRUMENT_RE.fullmatch(instrument)
+        or not any(character.isdigit() for character in instrument)
     ):
+        return ""
+    return f"{exchange}.{instrument}"
+
+
+def _canonical_ctp_bundle_wire_instrument(value: Any, exchange_id: Any = None) -> str:
+    """Return a V2 identity only when native CTP fields can stay verbatim.
+
+    The V2 proof and recovery readers may canonicalize qualified forms such as
+    ``DCE.m2701-C-3400``.  At the final native submit/cancel boundary the
+    request fields are serialized unchanged, so only an exact bare
+    ``InstrumentID`` paired with the canonical ``ExchangeID`` is safe.
+    """
+    if (
+        not isinstance(value, str)
+        or value != value.strip()
+        or "." in value
+        or not isinstance(exchange_id, str)
+        or exchange_id != exchange_id.strip()
+    ):
+        return ""
+    canonical = canonical_ctp_bundle_instrument(value, exchange_id)
+    if not canonical:
+        return ""
+    exchange, instrument = canonical.split(".", 1)
+    return canonical if instrument == value and exchange == exchange_id else ""
+
+
+def _is_execution_gate_bundle(proof: Any) -> bool:
+    return bool(
+        isinstance(proof, Mapping)
+        and proof.get("scope_version") == _CTP_EXECUTION_GATE_BUNDLE_SCOPE_VERSION
+        and isinstance(proof.get("authorized_instruments"), (list, tuple))
+    )
+
+
+def _execution_gate_instruments(proof: Mapping[str, Any] | None) -> tuple[str, ...]:
+    if not isinstance(proof, Mapping):
+        return ()
+    if _is_execution_gate_bundle(proof):
+        return tuple(proof["authorized_instruments"])
+    instrument = proof.get("instrument")
+    return (instrument,) if isinstance(instrument, str) else ()
+
+
+def _canonical_execution_gate_instrument(
+    proof: Mapping[str, Any] | None,
+    value: Any,
+    exchange_id: Any = None,
+    *,
+    native_wire: bool = False,
+) -> str:
+    if _is_execution_gate_bundle(proof):
+        if native_wire:
+            return _canonical_ctp_bundle_wire_instrument(value, exchange_id)
+        return canonical_ctp_bundle_instrument(value, exchange_id)
+    return canonical_ctp_instrument(value, exchange_id)
+
+
+def _execution_gate_proof(value: Any) -> tuple[dict[str, Any], str]:
+    fields = set(value) if isinstance(value, Mapping) else set()
+    is_bundle = fields == set(_CTP_EXECUTION_GATE_BUNDLE_PROOF_FIELDS)
+    if fields == set(_CTP_EXECUTION_GATE_PROOF_FIELDS):
+        proof = {field: value[field] for field in _CTP_EXECUTION_GATE_PROOF_FIELDS}
+    elif is_bundle:
+        proof = {
+            field: value[field] for field in _CTP_EXECUTION_GATE_BUNDLE_PROOF_FIELDS
+        }
+    else:
         raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
-    proof = {field: value[field] for field in _CTP_EXECUTION_GATE_PROOF_FIELDS}
     for field in (
         "account_fingerprint",
         "trading_day",
@@ -300,9 +560,35 @@ def _execution_gate_proof(value: Any) -> tuple[dict[str, Any], str]:
         or any(char not in "0123456789abcdef" for char in account_digest)
     ):
         raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
-    canonical_instrument = canonical_ctp_instrument(proof["instrument"])
+    canonical_instrument = (
+        canonical_ctp_bundle_instrument(proof["instrument"])
+        if is_bundle
+        else canonical_ctp_instrument(proof["instrument"])
+    )
     if not canonical_instrument or canonical_instrument != proof["instrument"]:
         raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+    if is_bundle:
+        authorized = proof["authorized_instruments"]
+        if (
+            proof.get("scope_version") != _CTP_EXECUTION_GATE_BUNDLE_SCOPE_VERSION
+            or not isinstance(authorized, (list, tuple))
+            or not 2 <= len(authorized) <= 3
+            or any(not isinstance(item, str) for item in authorized)
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+        canonical_authorized = tuple(
+            canonical_ctp_bundle_instrument(item) for item in authorized
+        )
+        if (
+            any(not item for item in canonical_authorized)
+            or tuple(authorized) != canonical_authorized
+            or tuple(sorted(canonical_authorized)) != canonical_authorized
+            or len(set(canonical_authorized)) != len(canonical_authorized)
+            or len({item.partition(".")[0] for item in canonical_authorized}) != 1
+            or proof["instrument"] not in canonical_authorized
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+        proof["authorized_instruments"] = list(canonical_authorized)
     generation = proof["connection_generation"]
     if type(generation) is not int or generation <= 0:
         raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
@@ -600,6 +886,13 @@ class _QueryAccumulator:
     late_callback_count: int = 0
     unsupported: bool = False
     submit_code: int | None = None
+    source_issuer: object | None = None
+    trading_day: str = ""
+    broker_id: str = ""
+    investor_id: str = ""
+    started_monotonic: float = 0.0
+    completed_monotonic: float | None = None
+    source_records_sha256: str | None = None
 
     def result(self) -> QueryResult[Any]:
         complete = (
@@ -609,7 +902,7 @@ class _QueryAccumulator:
             and not self.unsupported
             and self.error_code in (None, 0)
         )
-        return QueryResult(
+        result = QueryResult(
             request_type=self.request_type,
             request_id=self.request_id,
             connection_generation=self.connection_generation,
@@ -625,6 +918,26 @@ class _QueryAccumulator:
             late_callback_count=self.late_callback_count,
             unsupported=self.unsupported,
             submit_code=self.submit_code,
+        )
+        if self.source_issuer is None:
+            return result
+        return _attach_query_source(
+            result,
+            _new_query_source(
+                issuer=self.source_issuer,
+                request_type=self.request_type,
+                request_id=self.request_id,
+                account_fingerprint=self.account_fingerprint,
+                connection_generation=self.connection_generation,
+                trading_day=self.trading_day,
+                broker_id=self.broker_id,
+                investor_id=self.investor_id,
+                started_at_utc=self.started_at_utc,
+                completed_at_utc=self.completed_at_utc,
+                started_monotonic=self.started_monotonic,
+                completed_monotonic=self.completed_monotonic,
+                records_sha256=self.source_records_sha256,
+            ),
         )
 
 
@@ -1105,8 +1418,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 return
             self._c._on_front_connected()
             field = CThostFtdcReqAuthenticateField()
-            field.BrokerID = self._c.broker_id
-            field.UserID = self._c.user_id
+            field.BrokerID = self._c._bound_broker_id
+            field.UserID = self._c._bound_user_id
             field.AppID = self._c.app_id
             field.AuthCode = self._c.auth_code
             request_id = self._c._next_request_id()
@@ -1175,8 +1488,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
             else:
                 self._c._authentication_state = "authenticated"
                 field = CThostFtdcReqUserLoginField()
-                field.BrokerID = self._c.broker_id
-                field.UserID = self._c.user_id
+                field.BrokerID = self._c._bound_broker_id
+                field.UserID = self._c._bound_user_id
                 field.Password = self._c.password
                 request_id = self._c._next_request_id()
                 generation = self._c._connection_generation
@@ -1227,7 +1540,6 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
         login_callback = None
         error_callback = None
-        request_settlement_for_generation = None
         with self._c._query_state_lock:
             accepted = (
                 self._is_current_locked()
@@ -1259,19 +1571,18 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 self._c._settlement_readback_verified = False
                 self._c._settlement_proof_source = "none"
                 self._c._settlement_proof_query_request_id = None
-                if self._c.auto_settlement_confirm:
-                    request_settlement_for_generation = generation
-                else:
-                    self._c._settlement_state = "not_requested"
+                # Settlement confirmation is a real terminal write.  Do not
+                # synthesize an authorization from ``auto_settlement_confirm``
+                # during login: an SDK-managed, explicit confirmation with its
+                # opaque capability is required before this session can trade.
+                # Keeping the logged-in session read-only remains sufficient
+                # for account, position, instrument and quote discovery.
+                self._c._settlement_state = "not_requested"
                 login_callback = self._c.on_login
             else:
                 self._c._login_state = "failed"
                 self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
                 error_callback = self._c.on_error
-        if request_settlement_for_generation is not None:
-            self._c._request_settlement_confirmation(
-                expected_generation=request_settlement_for_generation
-            )
         if login_callback is not None:
             login_callback(pRspUserLogin)
         if error_callback is not None:
@@ -1341,6 +1652,32 @@ class _TraderSpi(CThostFtdcTraderSpi):
             return
         self._c._handle_query_callback(
             "instruments", pInstrument, pRspInfo, nRequestID, bIsLast
+        )
+
+    @_fence_trader_spi_callback
+    def OnRspQryDepthMarketData(self, pDepthMarketData, pRspInfo, nRequestID, bIsLast):
+        self._c._handle_query_callback(
+            "depth_market_data", pDepthMarketData, pRspInfo, nRequestID, bIsLast
+        )
+
+    @_fence_trader_spi_callback
+    def OnRspQryOptionInstrTradeCost(
+        self, pOptionInstrTradeCost, pRspInfo, nRequestID, bIsLast
+    ):
+        self._c._handle_query_callback(
+            "option_trade_cost", pOptionInstrTradeCost, pRspInfo, nRequestID, bIsLast
+        )
+
+    @_fence_trader_spi_callback
+    def OnRspQryOptionInstrCommRate(
+        self, pOptionInstrCommRate, pRspInfo, nRequestID, bIsLast
+    ):
+        self._c._handle_query_callback(
+            "option_commission_rate",
+            pOptionInstrCommRate,
+            pRspInfo,
+            nRequestID,
+            bIsLast,
         )
 
     @_fence_trader_spi_callback
@@ -1446,8 +1783,16 @@ class TraderClient:
         password,
         app_id="simnow_client_test",
         auth_code="0000000000000000",
-        auto_settlement_confirm=True,
+        auto_settlement_confirm=False,
     ):
+        # Keep the identity and TD front that created this client separate
+        # from the historically public compatibility attributes below.  A
+        # caller can mutate ``broker_id``/``user_id``/``front`` on a Python
+        # object, but that must not retarget a session whose preflight proof
+        # was bound to the original account and native front.
+        self._bound_front = str(front or "").strip()
+        self._bound_broker_id = str(broker_id or "").strip()
+        self._bound_user_id = str(user_id or "").strip()
         self.front = front
         self.broker_id = broker_id
         self.user_id = user_id
@@ -1456,7 +1801,7 @@ class TraderClient:
         self.auth_code = auth_code
         self.auto_settlement_confirm = bool(auto_settlement_confirm)
         self._account_fingerprint = hashlib.sha256(
-            f"{self.broker_id}:{self.user_id}".encode()
+            f"{self._bound_broker_id}:{self._bound_user_id}".encode()
         ).hexdigest()[:16]
 
         self.on_login = None  # callback(CThostFtdcRspUserLoginField)
@@ -1478,6 +1823,7 @@ class TraderClient:
         self._api_view = _ManagedTraderApiView(self)
         self._api = None
         self._session_native_api = None
+        self._session_native_front: str | None = None
         self._spi = None
         self._thread = None
         self._join_active = False
@@ -1510,14 +1856,25 @@ class TraderClient:
         self._query_lock = threading.Lock()
         self._query_state_lock = threading.RLock()
         self._query_history: dict[int, _QueryAccumulator] = {}
+        # Every typed query source and session scope from this client share an
+        # opaque issuer.  Equal account strings from a different object or a
+        # hand-built mapping can therefore never certify the same query.
+        self._query_evidence_issuer = object()
         self._orphan_query_callbacks: list[dict[str, Any]] = []
         self._request_counts: dict[str, int] = empty_ctp_request_counts()
         self._execution_gate_capability: object | None = None
         self._execution_gate_proof: dict[str, Any] | None = None
         self._execution_gate_proof_sha256: str | None = None
         self._execution_gate_environment_profile: str | None = None
+        self._execution_gate_strategy_identity_sha256: str | None = None
+        self._execution_gate_cycle_id: str | None = None
         self._execution_gate_revocation_reason: str | None = None
         self._execution_gate_native_api = None
+        # A settlement confirmation deliberately invalidates every arm proof
+        # issued before it.  It is a terminal account write, so a subsequent
+        # order arm must be based on a fresh preflight rather than a cached
+        # public session snapshot.
+        self._execution_preflight_epoch = 0
         self._last_query_submitted_at = 0.0
         try:
             self._query_interval = max(
@@ -1549,10 +1906,76 @@ class TraderClient:
                 self._revoke_execution_gate_locked(
                     "ctp_execution_gate_native_api_changed"
                 )
+            if hasattr(self, "_execution_preflight_epoch"):
+                self._execution_preflight_epoch += 1
             self._session_native_api = None
+            self._session_native_front = None
             # Any callbacks from the previous SPI become stale immediately.
             self._spi = None
             self.__native_api = value
+
+    def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
+        """Check that public compatibility attributes still name this session.
+
+        This predicate deliberately has no side effects because readiness
+        readers use it.  Mutating a public feed/client field may never switch
+        the account or front used by an already authenticated managed session.
+        """
+
+        current_fingerprint = hashlib.sha256(
+            f"{str(self.broker_id or '').strip()}:{str(self.user_id or '').strip()}".encode()
+        ).hexdigest()[:16]
+        if (
+            str(self.front or "").strip() != self._bound_front
+            or str(self.broker_id or "").strip() != self._bound_broker_id
+            or str(self.user_id or "").strip() != self._bound_user_id
+            or current_fingerprint != self._account_fingerprint
+        ):
+            return False
+        return (
+            not require_active_front or self._session_native_front == self._bound_front
+        )
+
+    def _require_bound_identity_locked(
+        self, *, require_active_front: bool = False
+    ) -> None:
+        """Fail closed before a managed native write can use mutable identity."""
+
+        if not self._bound_identity_is_current(require_active_front=False):
+            self._revoke_execution_gate_locked(
+                "ctp_execution_gate_account_identity_changed"
+            )
+            raise CtpExecutionGateError("ctp_execution_gate_account_identity_changed")
+        if require_active_front and self._session_native_front != self._bound_front:
+            self._revoke_execution_gate_locked(
+                "ctp_execution_gate_front_profile_mismatch"
+            )
+            raise CtpExecutionGateError("ctp_execution_gate_front_profile_mismatch")
+
+    def _require_native_field_identity_locked(
+        self,
+        field: Any,
+        *,
+        require_user_id: bool,
+    ) -> None:
+        """Bind each typed order field to the immutable authenticated account."""
+
+        self._require_bound_identity_locked(require_active_front=True)
+        broker_id = str(getattr(field, "BrokerID", "") or "")
+        investor_id = str(getattr(field, "InvestorID", "") or "")
+        user_id = str(getattr(field, "UserID", "") or "")
+        if (
+            broker_id != self._bound_broker_id
+            or investor_id != self._bound_user_id
+            or (require_user_id and user_id != self._bound_user_id)
+            or (not require_user_id and user_id and user_id != self._bound_user_id)
+        ):
+            self._revoke_execution_gate_locked(
+                "ctp_execution_gate_native_field_identity_mismatch"
+            )
+            raise CtpExecutionGateError(
+                "ctp_execution_gate_native_field_identity_mismatch"
+            )
 
     def _invoke_public_api_request(
         self,
@@ -1563,16 +1986,20 @@ class TraderClient:
         """Resolve a cached public Req* callable at invocation time."""
 
         with self._query_state_lock:
+            is_read_query = name.startswith(("ReqQry", "ReqQuery"))
+            if not is_read_query:
+                # Never expose native request writes through the public API
+                # view.  A caller could otherwise cache ``ReqOrderInsert``
+                # before the SDK installs its capability, then bypass the
+                # typed final-gate check entirely.  Authentication/login
+                # requests are internal lifecycle operations for the same
+                # reason.
+                raise CtpExecutionGateError("ctp_execution_gate_native_write_blocked")
             if self._execution_gate_capability is not None:
                 # Managed callers must use the typed query methods so request
                 # IDs, generation fencing and the one-query-at-a-time lock
                 # cannot be bypassed through a cached native Req* handle.
-                code = (
-                    "ctp_execution_gate_raw_request_blocked"
-                    if name.startswith(("ReqQry", "ReqQuery"))
-                    else "ctp_execution_gate_native_write_blocked"
-                )
-                raise CtpExecutionGateError(code)
+                raise CtpExecutionGateError("ctp_execution_gate_raw_request_blocked")
             api = self._api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
@@ -1596,9 +2023,13 @@ class TraderClient:
     ) -> Any:
         """Fence cached non-request native callables after gate installation."""
 
+        if name not in _CTP_PUBLIC_NATIVE_READ_CALLS:
+            # This guard applies before a managed capability is installed as
+            # well.  Otherwise a caller could cache/use RegisterFront, Init
+            # or Release on an unmanaged API, then promote that altered native
+            # session into a managed execution session later.
+            raise CtpExecutionGateError("ctp_execution_gate_native_lifecycle_blocked")
         with self._query_state_lock:
-            if self._execution_gate_capability is not None:
-                raise CtpExecutionGateError("ctp_execution_gate_native_write_blocked")
             api = self._api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
@@ -1617,6 +2048,12 @@ class TraderClient:
             ),
             "trading_day": proof.get("trading_day") if proof is not None else None,
             "instrument": proof.get("instrument") if proof is not None else None,
+            "scope_version": proof.get("scope_version") if proof is not None else None,
+            "authorized_instruments": (
+                list(proof["authorized_instruments"])
+                if _is_execution_gate_bundle(proof)
+                else None
+            ),
             "environment_profile": self._execution_gate_environment_profile,
             "proof_sha256": self._execution_gate_proof_sha256,
             "revocation_reason": self._execution_gate_revocation_reason,
@@ -1631,7 +2068,7 @@ class TraderClient:
     def configure_execution_gate(self, capability: object) -> dict[str, Any]:
         """Install the SDK-owned opaque capability and start disarmed."""
 
-        if capability is None:
+        if not _is_ctp_core_execution_authority(capability):
             raise CtpExecutionGateError("ctp_execution_gate_capability_required")
         with self._query_state_lock:
             installed = self._execution_gate_capability
@@ -1642,15 +2079,192 @@ class TraderClient:
                 self._execution_gate_proof = None
                 self._execution_gate_proof_sha256 = None
                 self._execution_gate_environment_profile = None
+                self._execution_gate_strategy_identity_sha256 = None
+                self._execution_gate_cycle_id = None
                 self._execution_gate_revocation_reason = None
             return self._execution_gate_state_locked()
+
+    def _issue_execution_authorization_for_core(
+        self,
+        capability: object,
+        proof: Mapping[str, Any],
+        *,
+        environment_profile: str,
+        environment_verified: bool,
+        strategy_identity_sha256: str,
+        execution_cycle_id: str,
+    ) -> object:
+        """Create one native arm grant after the core has checked preflight.
+
+        This intentionally private method is the only mapping-to-grant bridge.
+        ``arm_execution_gate`` itself accepts the returned opaque grant, never
+        a caller-provided proof mapping.  The grant is consumed by its first
+        arm attempt, including a failed context check.
+        """
+
+        with self._query_state_lock:
+            if not _is_ctp_core_execution_authority(capability):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_required")
+            if capability is not self._execution_gate_capability:
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            self._require_bound_identity_locked(require_active_front=True)
+            normalized, _proof_sha256 = _execution_gate_proof(proof)
+            profile = str(environment_profile or "").strip()
+            if self.auto_settlement_confirm is not False:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_auto_settlement_confirm_enabled"
+                )
+            if not self.is_trading_ready:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_session_not_trading_ready"
+                )
+            if (
+                environment_verified is not True
+                or not profile
+                or profile != normalized["environment_profile"]
+                or normalized["connection_generation"] != self._connection_generation
+                or normalized["account_fingerprint"]
+                != f"acct_{self._account_fingerprint}"
+                or normalized["trading_day"] != self._trading_day
+                or self._api is None
+                or self._api is not self._session_native_api
+            ):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_authorization_context_mismatch"
+                )
+            if (
+                not isinstance(strategy_identity_sha256, str)
+                or len(strategy_identity_sha256) != 64
+                or any(
+                    char not in "0123456789abcdef" for char in strategy_identity_sha256
+                )
+                or not isinstance(execution_cycle_id, str)
+                or not execution_cycle_id
+                or execution_cycle_id != execution_cycle_id.strip()
+                or len(execution_cycle_id) > 128
+            ):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_authorization_identity_invalid"
+                )
+            return _CtpExecutionAuthorization(
+                client=self,
+                capability=capability,
+                proof=normalized,
+                environment_profile=profile,
+                strategy_identity_sha256=strategy_identity_sha256,
+                execution_cycle_id=execution_cycle_id,
+                preflight_epoch=self._execution_preflight_epoch,
+            )
+
+    def _issue_settlement_authorization_for_core(
+        self,
+        capability: object,
+        *,
+        environment_profile: str,
+        environment_verified: bool,
+        scope: str = "settlement_confirmation",
+        budget: int = 1,
+    ) -> object:
+        """Create one independent, account/day/generation-bound write grant."""
+
+        with self._query_state_lock:
+            if not _is_ctp_core_execution_authority(capability):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_required")
+            if capability is not self._execution_gate_capability:
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            self._require_bound_identity_locked(require_active_front=True)
+            profile = str(environment_profile or "").strip()
+            if self.auto_settlement_confirm is not False:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_auto_settlement_confirm_enabled"
+                )
+            if (
+                environment_verified is not True
+                or not profile
+                or self._execution_gate_proof is not None
+                or not self.is_read_only_ready
+                or self._connection_generation <= 0
+                or not self._trading_day
+                or self._api is None
+                or self._api is not self._session_native_api
+                or scope != "settlement_confirmation"
+                or type(budget) is not int
+                or budget != 1
+            ):
+                raise CtpExecutionGateError(
+                    "ctp_settlement_authorization_context_mismatch"
+                )
+            return _CtpSettlementAuthorization(
+                client=self,
+                capability=capability,
+                account_fingerprint=f"acct_{self._account_fingerprint}",
+                trading_day=self._trading_day,
+                connection_generation=self._connection_generation,
+                environment_profile=profile,
+                scope=scope,
+                budget=budget,
+            )
+
+    def _issue_execution_authorization_for_test(
+        self,
+        capability: object,
+        proof: Mapping[str, Any],
+        *,
+        strategy_identity_sha256: str = "0" * 64,
+        execution_cycle_id: str = "controlled-test-cycle",
+    ) -> object:
+        """Explicit offline-only issuer for native contract tests.
+
+        It remains private and requires the separately marked test authority.
+        ``arm_execution_gate`` itself never accepts a proof mapping, including
+        in tests, so production and fixture call paths exercise the same
+        opaque one-shot consumption boundary.
+        """
+
+        if not _is_ctp_test_execution_authority(capability):
+            raise CtpExecutionGateError("ctp_execution_gate_authorization_required")
+        profile = str(proof.get("environment_profile") or "").strip()
+        return self._issue_execution_authorization_for_core(
+            capability,
+            proof,
+            environment_profile=profile,
+            environment_verified=True,
+            strategy_identity_sha256=strategy_identity_sha256,
+            execution_cycle_id=execution_cycle_id,
+        )
+
+    def _issue_settlement_authorization_for_test(
+        self,
+        capability: object,
+        *,
+        environment_profile: str = "controlled-test-environment",
+    ) -> object:
+        """Explicit offline-only issuer for a single settlement write."""
+
+        if not _is_ctp_test_execution_authority(capability):
+            raise CtpExecutionGateError("ctp_settlement_authorization_required")
+        return self._issue_settlement_authorization_for_core(
+            capability,
+            environment_profile=environment_profile,
+            environment_verified=True,
+        )
 
     def _revoke_execution_gate_locked(self, reason: Any) -> None:
         if self._execution_gate_capability is None:
             return
+        # A revocation must invalidate every independently issued, unconsumed
+        # arm grant from this native preflight.  The issuer permits more than
+        # one opaque grant for controlled core workflows, so clearing only the
+        # currently armed proof would otherwise leave a sibling grant usable
+        # on the same account/day/generation.
+        self._execution_preflight_epoch = (
+            getattr(self, "_execution_preflight_epoch", 0) + 1
+        )
         self._execution_gate_proof = None
         self._execution_gate_proof_sha256 = None
         self._execution_gate_environment_profile = None
+        self._execution_gate_strategy_identity_sha256 = None
+        self._execution_gate_cycle_id = None
         self._execution_gate_native_api = None
         self._execution_gate_revocation_reason = _execution_gate_reason(reason)
 
@@ -1662,9 +2276,10 @@ class TraderClient:
     ) -> None:
         installed = self._execution_gate_capability
         if installed is None:
-            return
+            raise CtpExecutionGateError("ctp_execution_gate_capability_required")
         if capability is not installed:
             raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+        self._require_bound_identity_locked(require_active_front=True)
         proof = self._execution_gate_proof
         if proof is None:
             raise CtpExecutionGateError("ctp_execution_gate_unarmed")
@@ -1692,8 +2307,13 @@ class TraderClient:
                 "ctp_execution_gate_session_not_trading_ready",
             ),
             (
-                canonical_ctp_instrument(instrument, exchange_id)
-                != proof["instrument"],
+                _canonical_execution_gate_instrument(
+                    proof,
+                    instrument,
+                    exchange_id,
+                    native_wire=True,
+                )
+                not in _execution_gate_instruments(proof),
                 "ctp_execution_gate_instrument_mismatch",
             ),
         )
@@ -1716,29 +2336,52 @@ class TraderClient:
     def arm_execution_gate(
         self,
         capability: object,
-        proof: Mapping[str, Any],
+        authorization: object,
         *,
-        environment_profile: str,
+        _environment_profile: object | None = None,
+        _environment_verified: object = False,
     ) -> dict[str, Any]:
-        """Bind native order writes to one current CTP connection and contract."""
+        """Consume one core-issued grant to bind native order writes.
+
+        A proof mapping is intentionally rejected here.  Public session state
+        and its hashes are evidence only; they cannot establish a native write
+        permission without the private, one-shot authorization created by the
+        core-owned issuer above.
+        """
 
         with self._query_state_lock:
-            if capability is not self._execution_gate_capability:
+            if (
+                not _is_ctp_core_execution_authority(capability)
+                or capability is not self._execution_gate_capability
+            ):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             try:
-                normalized, proof_sha256 = _execution_gate_proof(proof)
-                profile = str(environment_profile or "").strip()
-                if not profile or profile != normalized["environment_profile"]:
+                if (
+                    type(authorization) is not _CtpExecutionAuthorization
+                    or authorization._seal is not _CTP_EXECUTION_AUTHORIZATION_SEAL
+                    or authorization._client_ref() is not self
+                    or authorization._capability is not capability
+                    or authorization._used
+                ):
+                    raise CtpExecutionGateError(
+                        "ctp_execution_gate_authorization_required"
+                    )
+                self._require_bound_identity_locked(require_active_front=True)
+                normalized, proof_sha256 = _execution_gate_proof(authorization._proof)
+                profile = authorization._environment_profile
+                if (
+                    authorization._preflight_epoch != self._execution_preflight_epoch
+                    or not profile
+                    or profile != normalized["environment_profile"]
+                    or _environment_verified is not True
+                    or str(_environment_profile or "").strip() != profile
+                ):
                     raise CtpExecutionGateError(
                         "ctp_execution_gate_environment_profile_mismatch"
                     )
-                if self.auto_settlement_confirm:
+                if self.auto_settlement_confirm is not False:
                     raise CtpExecutionGateError(
                         "ctp_execution_gate_auto_settlement_confirm_enabled"
-                    )
-                if not self.is_trading_ready:
-                    raise CtpExecutionGateError(
-                        "ctp_execution_gate_session_not_trading_ready"
                     )
                 if normalized["connection_generation"] != self._connection_generation:
                     raise CtpExecutionGateError(
@@ -1759,20 +2402,25 @@ class TraderClient:
                     raise CtpExecutionGateError(
                         "ctp_execution_gate_native_api_mismatch"
                     )
+                if not self.is_trading_ready:
+                    raise CtpExecutionGateError(
+                        "ctp_execution_gate_session_not_trading_ready"
+                    )
                 if self._execution_gate_proof is not None:
-                    if (
-                        self._execution_gate_proof == normalized
-                        and self._execution_gate_proof_sha256 == proof_sha256
-                        and self._execution_gate_environment_profile == profile
-                    ):
-                        return self._execution_gate_state_locked()
                     raise CtpExecutionGateError("ctp_execution_gate_already_armed")
             except CtpExecutionGateError as exc:
+                if type(authorization) is _CtpExecutionAuthorization:
+                    authorization._used = True
                 self._revoke_execution_gate_locked(exc.code)
                 raise
+            authorization._used = True
             self._execution_gate_proof = normalized
             self._execution_gate_proof_sha256 = proof_sha256
             self._execution_gate_environment_profile = profile
+            self._execution_gate_strategy_identity_sha256 = (
+                authorization._strategy_identity_sha256
+            )
+            self._execution_gate_cycle_id = authorization._execution_cycle_id
             self._execution_gate_native_api = self._api
             self._execution_gate_revocation_reason = None
             return self._execution_gate_state_locked()
@@ -1790,8 +2438,15 @@ class TraderClient:
             bounded_reason = _execution_gate_reason(reason)
             if self._execution_gate_proof is not None:
                 self._revoke_execution_gate_locked(bounded_reason)
-            elif self._execution_gate_revocation_reason is None:
-                self._execution_gate_revocation_reason = bounded_reason
+            else:
+                # An explicit disarm is also a revocation boundary when no
+                # proof is currently armed: sibling opaque grants may still
+                # exist and must require a new preflight.
+                self._execution_preflight_epoch = (
+                    getattr(self, "_execution_preflight_epoch", 0) + 1
+                )
+                if self._execution_gate_revocation_reason is None:
+                    self._execution_gate_revocation_reason = bounded_reason
             return self._execution_gate_state_locked()
 
     def submit_order_insert(
@@ -1809,6 +2464,7 @@ class TraderClient:
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
             )
+            self._require_native_field_identity_locked(field, require_user_id=True)
             if self._api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             self._record_request("order_insert")
@@ -1829,6 +2485,7 @@ class TraderClient:
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
             )
+            self._require_native_field_identity_locked(field, require_user_id=False)
             if self._api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             self._record_request("order_action")
@@ -1879,7 +2536,11 @@ class TraderClient:
                 "ctp_execution_gate_connection_generation_changed"
             )
             self._session_native_api = self._api
+            # The registered front is fixed by start(); a reconnect does not
+            # accept a mutable public ``front`` replacement.
+            self._session_native_front = self._bound_front
             self._connection_generation += 1
+            self._execution_preflight_epoch += 1
             self._connected = True
             self._ready = False
             self._authentication_state = "authenticating"
@@ -1902,6 +2563,8 @@ class TraderClient:
         with self._query_state_lock:
             self._revoke_execution_gate_locked("ctp_execution_gate_disconnected")
             self._session_native_api = None
+            self._session_native_front = None
+            self._execution_preflight_epoch += 1
             self._connected = False
             self._ready = False
             self._authentication_state = "disconnected"
@@ -1929,14 +2592,37 @@ class TraderClient:
                 accumulator.event.set()
 
     def _require_settlement_write_locked(
-        self, execution_capability: object | None
-    ) -> None:
+        self,
+        execution_capability: object | None,
+        settlement_authorization: object | None,
+        settlement_environment_profile: object | None,
+        settlement_environment_verified: object,
+    ) -> _CtpSettlementAuthorization:
         installed = self._execution_gate_capability
-        if installed is None:
-            return
+        if installed is None or not _is_ctp_core_execution_authority(installed):
+            raise CtpExecutionGateError("ctp_execution_gate_capability_required")
         if execution_capability is not installed:
             raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
-        if self.auto_settlement_confirm:
+        self._require_bound_identity_locked(require_active_front=True)
+        if (
+            type(settlement_authorization) is not _CtpSettlementAuthorization
+            or settlement_authorization._seal is not _CTP_EXECUTION_AUTHORIZATION_SEAL
+            or settlement_authorization._client_ref() is not self
+            or settlement_authorization._capability is not installed
+            or settlement_authorization._used
+            or settlement_authorization._scope != "settlement_confirmation"
+            or settlement_authorization._budget != 1
+            or settlement_authorization._connection_generation
+            != self._connection_generation
+            or settlement_authorization._account_fingerprint
+            != f"acct_{self._account_fingerprint}"
+            or settlement_authorization._trading_day != self._trading_day
+            or settlement_environment_verified is not True
+            or str(settlement_environment_profile or "").strip()
+            != settlement_authorization._environment_profile
+        ):
+            raise CtpExecutionGateError("ctp_settlement_authorization_required")
+        if self.auto_settlement_confirm is not False:
             raise CtpExecutionGateError(
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
@@ -1954,15 +2640,24 @@ class TraderClient:
             )
         if self._api is None or self._api is not self._session_native_api:
             raise CtpExecutionGateError("ctp_execution_gate_native_api_mismatch")
+        return settlement_authorization
 
     def _request_settlement_confirmation(
         self,
         *,
         execution_capability: object | None = None,
+        settlement_authorization: object | None = None,
+        settlement_environment_profile: object | None = None,
+        settlement_environment_verified: object = False,
         expected_generation: int | None = None,
     ) -> bool:
         with self._query_state_lock:
-            self._require_settlement_write_locked(execution_capability)
+            authorization = self._require_settlement_write_locked(
+                execution_capability,
+                settlement_authorization,
+                settlement_environment_profile,
+                settlement_environment_verified,
+            )
             if (
                 expected_generation is not None
                 and expected_generation != self._connection_generation
@@ -1979,9 +2674,17 @@ class TraderClient:
             api = self._api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+            # The terminal write consumes its independently issued budget and
+            # invalidates every arm token/proof issued from the preceding
+            # preflight epoch before a native method can run.
+            authorization._used = True
+            self._execution_preflight_epoch += 1
+            self._revoke_execution_gate_locked(
+                "ctp_settlement_confirmation_invalidated_preflight"
+            )
             field = CThostFtdcSettlementInfoConfirmField()
-            field.BrokerID = self.broker_id
-            field.InvestorID = self.user_id
+            field.BrokerID = self._bound_broker_id
+            field.InvestorID = self._bound_user_id
             request_id = self._next_request_id()
             self._settlement_done.clear()
             self._settlement_state = "confirming"
@@ -2050,9 +2753,9 @@ class TraderClient:
                 or getattr(field, "ConfirmDate", "")
                 or ""
             )
-            if field_broker and field_broker != self.broker_id:
+            if field_broker and field_broker != self._bound_broker_id:
                 accepted = False
-            if field_investor and field_investor != self.user_id:
+            if field_investor and field_investor != self._bound_user_id:
                 accepted = False
             if field_trading_day and field_trading_day != self._trading_day:
                 accepted = False
@@ -2066,16 +2769,27 @@ class TraderClient:
         timeout: float = 5.0,
         *,
         _execution_capability: object | None = None,
+        _settlement_authorization: object | None = None,
+        _settlement_environment_profile: object | None = None,
+        _settlement_environment_verified: object = False,
     ) -> bool:
         """Submit confirmation; trading stays read-only until server readback."""
         with self._query_state_lock:
-            self._require_settlement_write_locked(_execution_capability)
+            self._require_settlement_write_locked(
+                _execution_capability,
+                _settlement_authorization,
+                _settlement_environment_profile,
+                _settlement_environment_verified,
+            )
             if not self.is_read_only_ready:
                 return False
             if self._settlement_state == "confirmed":
                 return True
         if not self._request_settlement_confirmation(
-            execution_capability=_execution_capability
+            execution_capability=_execution_capability,
+            settlement_authorization=_settlement_authorization,
+            settlement_environment_profile=_settlement_environment_profile,
+            settlement_environment_verified=_settlement_environment_verified,
         ):
             return False
         if not self._settlement_done.wait(max(float(timeout), 0.0)):
@@ -2135,9 +2849,41 @@ class TraderClient:
                     "connection_generation"
                 ],
                 "execution_gate_instrument": execution_gate["instrument"],
+                "execution_gate_scope_version": execution_gate["scope_version"],
+                "execution_gate_authorized_instruments": execution_gate[
+                    "authorized_instruments"
+                ],
                 "execution_gate_proof_sha256": execution_gate["proof_sha256"],
                 "execution_gate_revocation_reason": execution_gate["revocation_reason"],
             }
+
+    def get_query_session_scope(self) -> _QuerySessionScope:
+        """Return an opaque typed scope for strict read-only query consumers.
+
+        The returned object is issued by this client instance and carries the
+        current account/day/generation identity.  It is separate from the
+        historical mapping returned by :meth:`get_session_state`, which stays
+        a compatibility diagnostic view and cannot certify a query result.
+        """
+
+        # Capture this strict scope after the public session read.  This
+        # preserves query-completion-to-scope latency in the same clock
+        # domain when a client supplies a delayed session readback.  The
+        # mapping returned by that read is deliberately ignored: only the
+        # typed scope created below is trusted by evidence consumers.
+        self.get_session_state()
+        with self._query_state_lock:
+            return _new_query_session_scope(
+                issuer=self._query_evidence_issuer,
+                account_fingerprint=self._account_fingerprint,
+                connection_generation=self._connection_generation,
+                trading_day=self._trading_day,
+                broker_id=self._bound_broker_id,
+                investor_id=self._bound_user_id,
+                read_only_ready=self.is_read_only_ready,
+                captured_at_utc=datetime.now(timezone.utc),
+                captured_monotonic=time.monotonic(),
+            )
 
     def get_request_counts(self) -> dict[str, int]:
         """Return a read-only snapshot of native requests issued this session."""
@@ -2276,7 +3022,9 @@ class TraderClient:
         """启动连接（默认后台运行）"""
         _check_native_module()
         generation = self._reserve_start_generation()
-        flow = _flow_dir(f"td_{self.broker_id}_{self.user_id}")
+        with self._query_state_lock:
+            self._require_bound_identity_locked(require_active_front=False)
+        flow = _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
         try:
             api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
         except Exception:
@@ -2305,6 +3053,16 @@ class TraderClient:
 
         init_invoked = False
 
+        # ``RegisterFront`` below always receives this immutable value.  Keep
+        # the exact native-front binding alongside the native API so a later
+        # public ``front`` mutation cannot be mistaken for a verified
+        # environment on reconnect.
+        with self._query_state_lock:
+            if self._api is not api or self._spi is not spi:
+                self._abort_startup(api, spi, generation)
+                return
+            self._session_native_front = self._bound_front
+
         def init_native_api() -> None:
             nonlocal init_invoked
             init_invoked = True
@@ -2315,7 +3073,7 @@ class TraderClient:
                 lambda: api.RegisterSpi(spi),
                 lambda: api.SubscribePrivateTopic(2),
                 lambda: api.SubscribePublicTopic(2),
-                lambda: api.RegisterFront(self.front),
+                lambda: api.RegisterFront(self._bound_front),
             )
             for startup_call in startup_calls:
                 invoked, active = self._run_startup_call(
@@ -2401,6 +3159,11 @@ class TraderClient:
             connection_generation=self._connection_generation,
             account_fingerprint=self._account_fingerprint,
             started_at_utc=datetime.now(timezone.utc),
+            source_issuer=self._query_evidence_issuer,
+            trading_day=self._trading_day,
+            broker_id=self._bound_broker_id,
+            investor_id=self._bound_user_id,
+            started_monotonic=time.monotonic(),
         )
         with self._query_state_lock:
             self._query_history[request_id] = accumulator
@@ -2424,6 +3187,7 @@ class TraderClient:
         accumulator.error_message = message
         accumulator.unsupported = unsupported
         accumulator.completed_at_utc = datetime.now(timezone.utc)
+        accumulator.completed_monotonic = time.monotonic()
         accumulator.sealed = True
         accumulator.event.set()
         return accumulator.result()
@@ -2437,6 +3201,11 @@ class TraderClient:
         is_last: bool,
     ) -> None:
         error_code, error_message = _rsp_error(rsp_info)
+        terminal_callback_at_utc = None
+        terminal_callback_monotonic = None
+        if is_last or error_code not in (None, 0):
+            terminal_callback_at_utc = datetime.now(timezone.utc)
+            terminal_callback_monotonic = time.monotonic()
         with self._query_state_lock:
             accumulator = self._query_history.get(int(request_id))
             if accumulator is None or accumulator.request_type != request_type:
@@ -2477,6 +3246,7 @@ class TraderClient:
             if record is not None:
                 snapshot = _snapshot_query_record(record)
                 if request_type == "instruments":
+                    snapshot.update(normalize_ctp_instrument(snapshot))
                     # InstrumentField proves ExpireDate but carries neither an
                     # exchange trading calendar nor a prior-day market ranking.
                     snapshot.setdefault(
@@ -2496,6 +3266,23 @@ class TraderClient:
             if is_last:
                 accumulator.is_last_seen = True
             if is_last or error_code not in (None, 0):
+                # The terminal callback is the authoritative completion
+                # boundary.  Capture both clocks and the raw-row digest before
+                # releasing the state lock; a slow native return or a later
+                # adapter conversion must not renew or mutate this evidence.
+                if accumulator.completed_at_utc is None:
+                    accumulator.completed_at_utc = terminal_callback_at_utc
+                    accumulator.completed_monotonic = terminal_callback_monotonic
+                if accumulator.source_records_sha256 is None:
+                    try:
+                        accumulator.source_records_sha256 = _query_records_digest(
+                            tuple(accumulator.records)
+                        )
+                    except (TypeError, ValueError):
+                        # A malformed native row remains visible to legacy
+                        # callers, but cannot be promoted by the strict
+                        # evidence consumer without a bound digest.
+                        accumulator.source_records_sha256 = None
                 accumulator.event.set()
 
     def _handle_query_error(
@@ -2537,6 +3324,7 @@ class TraderClient:
                     f"query_submit_exception:{type(exc).__name__}"
                 )
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
+                accumulator.completed_monotonic = time.monotonic()
                 accumulator.sealed = True
                 accumulator.event.set()
                 return accumulator.result()
@@ -2546,6 +3334,7 @@ class TraderClient:
                 accumulator.error_code = int(ret)
                 accumulator.error_message = "query_submit_rejected"
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
+                accumulator.completed_monotonic = time.monotonic()
                 accumulator.sealed = True
                 accumulator.event.set()
                 return accumulator.result()
@@ -2560,7 +3349,9 @@ class TraderClient:
                 ):
                     accumulator.timed_out = True
                     accumulator.error_message = "query_timeout"
-                accumulator.completed_at_utc = datetime.now(timezone.utc)
+                if accumulator.completed_at_utc is None:
+                    accumulator.completed_at_utc = datetime.now(timezone.utc)
+                    accumulator.completed_monotonic = time.monotonic()
                 accumulator.sealed = True
                 accumulator.event.set()
                 return accumulator.result()
@@ -2573,8 +3364,8 @@ class TraderClient:
 
     def query_account_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQryTradingAccountField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         method = getattr(self._api, "ReqQryTradingAccount", None) if self._api else None
         return self._execute_query(
             "account",
@@ -2592,8 +3383,8 @@ class TraderClient:
 
     def query_positions_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQryInvestorPositionField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         method = (
             getattr(self._api, "ReqQryInvestorPosition", None) if self._api else None
         )
@@ -2615,8 +3406,8 @@ class TraderClient:
         self, instrument_id="", exchange_id="", order_sys_id="", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryOrderField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         if instrument_id:
             field.InstrumentID = str(instrument_id)
         if exchange_id:
@@ -2655,8 +3446,8 @@ class TraderClient:
         timeout=5,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryTradeField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         for name, value in (
             ("InstrumentID", instrument_id),
             ("ExchangeID", exchange_id),
@@ -2691,6 +3482,12 @@ class TraderClient:
     def query_instruments_result(
         self, instrument_id="", exchange_id="", product_id="", timeout=5
     ) -> QueryResult[Any]:
+        """Read all visible instruments with empty filters, including options.
+
+        Native fields are preserved alongside normalized reference metadata.
+        Only ``complete=True`` proves the matching terminal packet; visibility
+        is limited to the connected front, account and trading day.
+        """
         field = CThostFtdcQryInstrumentField()
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
@@ -2727,8 +3524,8 @@ class TraderClient:
         self, instrument_id, exchange_id="", hedge_flag="1", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryInstrumentMarginRateField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
             field.ExchangeID = str(exchange_id)
@@ -2763,8 +3560,8 @@ class TraderClient:
         self, instrument_id, exchange_id="", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryInstrumentCommissionRateField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
             field.ExchangeID = str(exchange_id)
@@ -2790,10 +3587,110 @@ class TraderClient:
             instrument_id, exchange_id=exchange_id, timeout=timeout
         ).first
 
+    def _query_reference_result(
+        self, request_type, field_type, method_name, values, timeout
+    ):
+        """Build a read request without silently dropping unsupported ABI fields."""
+        try:
+            field = field_type()
+            for name, value in values.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                request_type, "native_query_fields_unsupported", unsupported=True
+            )
+        method = getattr(self._api, method_name, None) if self._api else None
+        return self._execute_query(
+            request_type,
+            (
+                (lambda request_id: method(field, request_id))
+                if callable(method)
+                else None
+            ),
+            timeout,
+        )
+
+    def query_depth_market_data_result(
+        self, instrument_id="", exchange_id="", timeout=5
+    ) -> QueryResult[Any]:
+        """Query TD reference quotes, or all visible quotes with empty filters.
+
+        Raw source timestamps and prices are retained. A successful query is
+        not evidence that the quotes are fresh, synchronized or executable.
+        """
+        return self._query_reference_result(
+            "depth_market_data",
+            CThostFtdcQryDepthMarketDataField,
+            "ReqQryDepthMarketData",
+            {
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+            },
+            timeout,
+        )
+
+    def query_option_instrument_trade_cost_result(
+        self,
+        instrument_id,
+        exchange_id="",
+        hedge_flag="1",
+        input_price=0.0,
+        underlying_price=0.0,
+        timeout=5,
+    ) -> QueryResult[Any]:
+        """Read the broker's option trade-cost response for the supplied prices.
+
+        This preserves native FixedMargin/MiniMargin/Royalty fields; it is not
+        a portfolio margin calculation. Zero inputs are passed as native zero
+        without claiming a current executable price or a known pricing basis.
+        """
+        prices = {}
+        for name, value in (
+            ("InputPrice", input_price),
+            ("UnderlyingPrice", underlying_price),
+        ):
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be finite and non-negative")
+            price = float(value)
+            if not math.isfinite(price) or price < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            prices[name] = price
+        return self._query_reference_result(
+            "option_trade_cost",
+            CThostFtdcQryOptionInstrTradeCostField,
+            "ReqQryOptionInstrTradeCost",
+            {
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+                "HedgeFlag": str(hedge_flag or ""),
+                **prices,
+            },
+            timeout,
+        )
+
+    def query_option_instrument_commission_rate_result(
+        self, instrument_id, exchange_id="", timeout=5
+    ) -> QueryResult[Any]:
+        """Read native option open/close/close-today and strike commission fields."""
+        return self._query_reference_result(
+            "option_commission_rate",
+            CThostFtdcQryOptionInstrCommRateField,
+            "ReqQryOptionInstrCommRate",
+            {
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+            },
+            timeout,
+        )
+
     def query_settlement_confirmation_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQrySettlementInfoConfirmField()
-        field.BrokerID = self.broker_id
-        field.InvestorID = self.user_id
+        field.BrokerID = self._bound_broker_id
+        field.InvestorID = self._bound_user_id
         method = (
             getattr(self._api, "ReqQrySettlementInfoConfirm", None)
             if self._api
@@ -2841,9 +3738,9 @@ class TraderClient:
             confirmation_day = str(
                 getter("TradingDay", "") or getter("ConfirmDate", "") or ""
             )
-            if broker_id != self.broker_id:
+            if broker_id != self._bound_broker_id:
                 continue
-            if investor_id != self.user_id:
+            if investor_id != self._bound_user_id:
                 continue
             if not confirmation_day or confirmation_day != expected_trading_day:
                 continue
@@ -3008,6 +3905,10 @@ class TraderClient:
             self._connected
             and self._authentication_state == "authenticated"
             and self._login_state == "logged_in"
+            # Read-only discovery remains available with an offline/test
+            # native API.  The stronger active-front check is enforced only
+            # at arm, settlement, and native order final gates.
+            and self._bound_identity_is_current(require_active_front=False)
         )
 
     @property

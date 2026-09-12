@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bt_api_ctp.instrument import normalize_ctp_instrument
 from bt_api_ctp.query import QueryResult
 
 
@@ -18,4 +19,9 @@ def is_ctp_native_loaded() -> bool:
 
 
 __version__ = "2.0.0"
-__all__ = ["QueryResult", "get_ctp_native_diagnostics", "is_ctp_native_loaded"]
+__all__ = [
+    "QueryResult",
+    "get_ctp_native_diagnostics",
+    "is_ctp_native_loaded",
+    "normalize_ctp_instrument",
+]

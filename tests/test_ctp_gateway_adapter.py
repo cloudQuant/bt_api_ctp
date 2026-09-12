@@ -2,62 +2,61 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
+
+import pytest
 
 from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
 
 
-class _FakeOrderRow:
-    def get_order_id(self) -> str:
-        return ""
+class _PayloadReadProbe(dict[str, Any]):
+    """Fail if a direct gateway execution method inspects its payload."""
 
-    def get_client_order_id(self) -> str:
-        return "000000123411"
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
 
-    def get_order_exchange_id(self) -> str:
-        return "SHFE"
+    def _fail(self, operation: str) -> NoReturn:
+        self.reads += 1
+        raise AssertionError(
+            f"direct execution rejection inspected payload via {operation}"
+        )
 
-    @property
-    def front_id(self) -> int:
-        return 3
+    def get(self, key: str, default: Any = None) -> Any:
+        self._fail("get")
 
-    @property
-    def session_id(self) -> int:
-        return 18472
+    def __getitem__(self, key: str) -> Any:
+        self._fail("getitem")
 
-
-class _FakePlaceOrderEnvelope:
-    def get_status(self) -> bool:
-        return True
-
-    def get_data(self) -> list[Any]:
-        return [self]
-
-    def init_data(self) -> _FakeOrderRow:
-        return _FakeOrderRow()
+    def __contains__(self, key: object) -> bool:
+        self._fail("contains")
 
 
-class _FakeCancelEnvelope:
-    def get_status(self) -> bool:
-        return True
+class _ExecutionIoProbe:
+    """Counts any metadata/network-like read and native write attempt."""
 
-    def get_data(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "OrderRef": "000000123411",
-                "FrontID": 3,
-                "SessionID": 18472,
-                "ExchangeID": "SHFE",
-            }
-        ]
+    def __init__(self) -> None:
+        self.metadata_reads = 0
+        self.network_like_reads = 0
+        self.writes = 0
 
+    def get_symbol_info(self, *_args: Any, **_kwargs: Any) -> NoReturn:
+        self.metadata_reads += 1
+        raise AssertionError("direct execution rejection queried instrument metadata")
 
-class _FakeFeed:
-    def make_order(self, *args: Any, **kwargs: Any) -> _FakePlaceOrderEnvelope:
-        return _FakePlaceOrderEnvelope()
+    def make_order(self, *_args: Any, **_kwargs: Any) -> NoReturn:
+        self.writes += 1
+        raise AssertionError("direct execution rejection attempted an order write")
 
-    def cancel_order(self, *args: Any, **kwargs: Any) -> _FakeCancelEnvelope:
-        return _FakeCancelEnvelope()
+    def cancel_order(self, *_args: Any, **_kwargs: Any) -> NoReturn:
+        self.writes += 1
+        raise AssertionError("direct execution rejection attempted a cancel write")
+
+    def __getattr__(self, name: str) -> NoReturn:
+        self.network_like_reads += 1
+        raise AssertionError(
+            f"direct execution rejection accessed I/O attribute {name}"
+        )
 
 
 class _FakeTraderClient:
@@ -88,47 +87,35 @@ def test_get_session_state_forwards_underlying_trader_state() -> None:
     assert state["trading_day"] == "20260618"
 
 
-def test_place_order_does_not_promote_order_ref_to_external_id() -> None:
-    """Pending CTP orders must not expose OrderRef as an exchange order ID."""
+@pytest.mark.parametrize(
+    ("method_name", "operation"),
+    [
+        ("place_order", "order submission"),
+        ("cancel_order", "order cancellation"),
+    ],
+)
+def test_gateway_adapter_rejects_direct_execution_before_payload_or_io(
+    monkeypatch: pytest.MonkeyPatch, method_name: str, operation: str
+) -> None:
+    """The compatibility adapter must not even prepare a direct CTP request."""
+
     adapter = object.__new__(CtpGatewayAdapter)
-    adapter.feed = _FakeFeed()
-    adapter.last_price = {}
+    probe = _ExecutionIoProbe()
+    payload = _PayloadReadProbe()
+    adapter.feed = probe
+    adapter.last_price = probe
+    adapter._price_ticks = probe
+    adapter._quote_execution_eligible = probe
+    monkeypatch.setattr(CtpGatewayAdapter, "get_symbol_info", probe.get_symbol_info)
 
-    result = adapter.place_order(
-        {
-            "symbol": "rb2510.SHFE",
-            "side": "buy",
-            "offset": "open",
-            "size": 1,
-            "price": 3500.0,
-            "client_order_id": "client-1",
-        }
+    with pytest.raises(RuntimeError) as excinfo:
+        getattr(adapter, method_name)(payload)
+
+    assert str(excinfo.value) == (
+        f"CTP gateway {operation} is disabled without an SDK-managed "
+        "execution capability, arm, and preflight"
     )
-
-    assert result.get("id", "") == ""
-    assert result["order_ref"] == "000000123411"
-    assert result["order_id"] == ""
-    assert result["external_order_id"] == ""
-    assert result["order_sys_id"] == ""
-    assert result["id_source"] == "local_pending"
-
-
-def test_cancel_order_does_not_promote_order_ref_to_external_id() -> None:
-    """CTP cancel acknowledgements must keep OrderRef separate from OrderSysID."""
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.feed = _FakeFeed()
-
-    result = adapter.cancel_order(
-        {
-            "symbol": "rb2510.SHFE",
-            "order_ref": "000000123411",
-            "front_id": 3,
-            "session_id": 18472,
-        }
-    )
-
-    assert result.get("id", "") == ""
-    assert result["order_ref"] == "000000123411"
-    assert result["external_order_id"] == ""
-    assert result["order_sys_id"] == ""
-    assert result["id_source"] == "local_pending"
+    assert payload.reads == 0
+    assert probe.metadata_reads == 0
+    assert probe.network_like_reads == 0
+    assert probe.writes == 0
