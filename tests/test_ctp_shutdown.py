@@ -25,8 +25,7 @@ class _NativeApi:
     def RegisterSpi(self, spi: object | None) -> None:
         if spi is None and self._retained_spi is not None:
             assert any(
-                item[1] is self._retained_spi
-                for item in client_module._RETIRED_CTP_NATIVE_SESSIONS
+                item[1] is self._retained_spi for item in client_module._RETIRED_CTP_NATIVE_SESSIONS
             )
         self.calls.append(("register", spi))
 
@@ -190,9 +189,7 @@ def _install_live_md_session() -> tuple[MdClient, _NativeApi, object, _LiveJoinT
     return client, api, spi, thread
 
 
-def _install_live_trader_session() -> (
-    tuple[TraderClient, _NativeApi, object, _LiveJoinThread]
-):
+def _install_live_trader_session() -> tuple[TraderClient, _NativeApi, object, _LiveJoinThread]:
     client = TraderClient("tcp://test", "9999", "account", "secret")
     spi = object()
     thread = _LiveJoinThread()
@@ -210,9 +207,7 @@ def _patch_native_factory(
     create,
 ) -> None:
     factory_method = (
-        "CreateFtdcMdApi"
-        if api_factory_name == "CThostFtdcMdApi"
-        else "CreateFtdcTraderApi"
+        "CreateFtdcMdApi" if api_factory_name == "CThostFtdcMdApi" else "CreateFtdcTraderApi"
     )
     monkeypatch.setattr(
         client_module,
@@ -320,12 +315,8 @@ def test_nonblocking_start_marks_join_live_before_stop(
 
     retired = client_module._RETIRED_CTP_NATIVE_SESSIONS
     assert api.calls == [("register", spi), ("register", None)]
-    assert any(
-        entry_api is api and entry_spi is spi for entry_api, entry_spi, _ in retired
-    )
-    retired_thread = next(
-        thread for entry_api, _, thread in retired if entry_api is api
-    )
+    assert any(entry_api is api and entry_spi is spi for entry_api, entry_spi, _ in retired)
+    retired_thread = next(thread for entry_api, _, thread in retired if entry_api is api)
     assert retired_thread is not None
     retired_thread.join(1.0)
     assert not retired_thread.is_alive()

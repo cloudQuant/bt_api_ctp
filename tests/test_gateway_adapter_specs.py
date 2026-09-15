@@ -284,9 +284,7 @@ def test_ctp_gateway_rejects_order_submission_even_when_quote_is_eligible(
 
 
 @pytest.mark.parametrize("offset", ["close", "close_yesterday"])
-def test_ctp_gateway_rejects_order_submission_for_each_valid_close_offset(
-    monkeypatch, offset
-):
+def test_ctp_gateway_rejects_order_submission_for_each_valid_close_offset(monkeypatch, offset):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)
@@ -343,9 +341,7 @@ def test_ctp_gateway_get_open_orders_returns_remaining_orders(monkeypatch):
         {"symbol": "IF2506.CFFEX", "side": "hold", "size": 1, "price": 4000},
     ],
 )
-def test_ctp_gateway_place_order_rejects_any_payload_before_validation(
-    monkeypatch, payload
-):
+def test_ctp_gateway_place_order_rejects_any_payload_before_validation(monkeypatch, payload):
     monkeypatch.setattr(adapter_module, "CtpMarketStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", _FakeStream)
     monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", _FakeFeed)

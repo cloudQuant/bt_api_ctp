@@ -31,8 +31,8 @@ def feed():
             ReqOrderInsert=lambda *_args: pytest.fail("raw order request was used")
         ),
     )
-    trader._next_request_id = (
-        lambda: setattr(trader, "_req_id", trader._req_id + 1) or trader._req_id
+    trader._next_request_id = lambda: (
+        setattr(trader, "_req_id", trader._req_id + 1) or trader._req_id
     )
     trader._record_request = lambda _request_type: None
     trader.configure_execution_gate = lambda candidate: (
@@ -66,9 +66,7 @@ def feed():
         "DAY",
     ],
 )
-@pytest.mark.parametrize(
-    "offset,flag", [("close_today", "3"), ("close_yesterday", "4")]
-)
+@pytest.mark.parametrize("offset,flag", [("close_today", "3"), ("close_yesterday", "4")])
 def test_native_time_in_force_preserves_dated_close(feed, tif, offset, flag):
     client, calls = feed
     result = client.make_order(
@@ -168,18 +166,14 @@ def test_query_local_ref_requires_matching_front_and_session(feed):
         )
 
     client._trader.query_orders_result = query
-    response = client.query_order(
-        "rb2610", None, order_ref="123", front_id=11, session_id=22
-    )
+    response = client.query_order("rb2610", None, order_ref="123", front_id=11, session_id=22)
     assert queries[0]["order_sys_id"] == ""
     rows = [row.init_data() for row in response.get_data()]
     assert len(rows) == 1 and rows[0].get_order_id() == "SYS1"
 
 
 @pytest.mark.parametrize("subscribe_account,expected", [(True, 2), (False, 1)])
-def test_subscription_streams_are_owned_for_shutdown(
-    monkeypatch, subscribe_account, expected
-):
+def test_subscription_streams_are_owned_for_shutdown(monkeypatch, subscribe_account, expected):
     from bt_api_ctp import plugin
 
     class Stream:
@@ -191,9 +185,7 @@ def test_subscription_streams_are_owned_for_shutdown(
 
     monkeypatch.setattr(plugin, "CtpMarketStream", Stream)
     monkeypatch.setattr(plugin, "CtpTradeStream", Stream)
-    api = SimpleNamespace(
-        _subscription_streams=[], _subscription_flags={}, log=lambda _: None
-    )
+    api = SimpleNamespace(_subscription_streams=[], _subscription_flags={}, log=lambda _: None)
     plugin._ctp_future_subscribe_handler(
         queue.Queue(),
         {"subscribe_account": subscribe_account},
@@ -202,6 +194,4 @@ def test_subscription_streams_are_owned_for_shutdown(
     )
     assert len(api._subscription_streams) == expected
     assert all(stream.started for stream in api._subscription_streams)
-    assert (
-        bool(api._subscription_flags.get("CTP___FUTURE_account")) == subscribe_account
-    )
+    assert bool(api._subscription_flags.get("CTP___FUTURE_account")) == subscribe_account

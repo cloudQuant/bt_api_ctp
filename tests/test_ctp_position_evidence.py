@@ -112,12 +112,8 @@ def positions_result(records=(), *, live=False, **changes):
 
     accumulator = TEST_CLIENT._new_query_accumulator("positions")
     for record in records:
-        TEST_CLIENT._handle_query_callback(
-            "positions", record, None, accumulator.request_id, False
-        )
-    TEST_CLIENT._handle_query_callback(
-        "positions", None, None, accumulator.request_id, True
-    )
+        TEST_CLIENT._handle_query_callback("positions", record, None, accumulator.request_id, False)
+    TEST_CLIENT._handle_query_callback("positions", None, None, accumulator.request_id, True)
     if live:
         base = datetime.now(UTC)
         accumulator.started_at_utc = base - timedelta(seconds=1)
@@ -140,8 +136,7 @@ def positions_result(records=(), *, live=False, **changes):
     # this fixture only forces it true when a test explicitly asks to inspect
     # the later validator branch.
     if "complete" not in changes and any(
-        name in changes
-        for name in ("is_last_seen", "error_code", "timed_out", "unsupported")
+        name in changes for name in ("is_last_seen", "error_code", "timed_out", "unsupported")
     ):
         object.__setattr__(result, "complete", True)
     return result
@@ -195,9 +190,7 @@ def build(
         now = NOW + timedelta(seconds=2) if now is None else now
         expires = NOW + timedelta(seconds=30) if expires is None else expires
     if session is None:
-        session = (
-            TEST_CLIENT.get_query_session_scope() if source is not None else SESSION
-        )
+        session = TEST_CLIENT.get_query_session_scope() if source is not None else SESSION
     return build_ctp_position_evidence(
         result,
         session_state=session,
@@ -292,9 +285,7 @@ def test_independent_raw_rows_keep_exchange_identity_and_do_not_derive_buckets()
 def test_plain_mapping_session_scope_is_not_trusted_as_live_scope():
     session = {**SESSION, "synthetic": True}
 
-    with pytest.raises(
-        CtpPositionEvidenceError, match="position_session_scope_untrusted"
-    ):
+    with pytest.raises(CtpPositionEvidenceError, match="position_session_scope_untrusted"):
         build(session=session)
 
 
@@ -303,9 +294,7 @@ def test_public_feed_adapter_consumes_query_positions_result_without_writes():
     calls = []
     result = positions_result((position_row(),), live=True)
     feed._ensure_connected = lambda: calls.append("connected")
-    feed.query_positions_result = lambda timeout=5.0: (
-        calls.append(("query", timeout)) or result
-    )
+    feed.query_positions_result = lambda timeout=5.0: calls.append(("query", timeout)) or result
     feed.get_query_session_scope = lambda: TEST_CLIENT.get_query_session_scope()
 
     evidence = feed.query_positions_evidence(timeout=2.0, ttl_seconds=30.0)
@@ -353,9 +342,7 @@ def test_missing_position_field_is_explicitly_distinguished_and_rejected(field):
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), -1, 0.5])
-@pytest.mark.parametrize(
-    "field", ["Position", "TodayPosition", "YdPosition", "LongFrozen"]
-)
+@pytest.mark.parametrize("field", ["Position", "TodayPosition", "YdPosition", "LongFrozen"])
 def test_invalid_position_quantity_is_unknown_and_rejected(field, value):
     raw = position_row(**{field: value})
 
@@ -389,18 +376,12 @@ def test_unknown_position_identity_is_not_defaulted(field, value):
 
 def test_same_instrument_with_different_hedge_or_position_date_is_retained():
     rows = (
-        position_row(
-            HedgeFlag="1", PositionDate="1", Position=1, TodayPosition=1, YdPosition=0
-        ),
-        position_row(
-            HedgeFlag="2", PositionDate="2", Position=2, TodayPosition=0, YdPosition=2
-        ),
+        position_row(HedgeFlag="1", PositionDate="1", Position=1, TodayPosition=1, YdPosition=0),
+        position_row(HedgeFlag="2", PositionDate="2", Position=2, TodayPosition=0, YdPosition=2),
     )
     evidence = build(positions_result(rows))
 
-    assert [
-        (row.instrument_id, row.hedge_flag, row.position_date) for row in evidence.rows
-    ] == [
+    assert [(row.instrument_id, row.hedge_flag, row.position_date) for row in evidence.rows] == [
         ("m2701", "1", "1"),
         ("m2701", "2", "2"),
     ]
@@ -453,9 +434,7 @@ def test_incomplete_query_envelopes_cannot_prove_positions(change, code):
 
 def test_query_times_and_expiry_are_aware_current_and_bound():
     with pytest.raises(CtpPositionEvidenceError, match="position_query_clock_invalid"):
-        build(
-            positions_result((position_row(),), started_at_utc=NOW.replace(tzinfo=None))
-        )
+        build(positions_result((position_row(),), started_at_utc=NOW.replace(tzinfo=None)))
 
     with pytest.raises(CtpPositionEvidenceError, match="position_query_expired"):
         build(expires=NOW + timedelta(seconds=1.5), now=NOW + timedelta(seconds=2))
@@ -496,9 +475,7 @@ def test_feed_adapter_requires_session_day_instead_of_caller_override():
         TEST_CLIENT.get_query_session_scope(), trading_day=""
     )
 
-    with pytest.raises(
-        CtpPositionEvidenceError, match="position_session_trading_day_missing"
-    ):
+    with pytest.raises(CtpPositionEvidenceError, match="position_session_trading_day_missing"):
         feed.query_positions_evidence(timeout=1.0, ttl_seconds=30.0)
 
 
@@ -523,9 +500,7 @@ def test_optional_frozen_fields_remain_missing_without_becoming_zero():
 
 
 def test_unissued_query_and_matching_mapping_cannot_certify_empty_account():
-    with pytest.raises(
-        CtpPositionEvidenceError, match="position_session_scope_untrusted"
-    ):
+    with pytest.raises(CtpPositionEvidenceError, match="position_session_scope_untrusted"):
         build(
             bare_positions_result(()),
             session=dict(SESSION),
@@ -579,9 +554,7 @@ def test_mutating_a_public_query_record_breaks_trusted_source_digest():
     result = positions_result((position_row(),))
     result.records[0]["Position"] = 999
 
-    with pytest.raises(
-        CtpPositionEvidenceError, match="position_query_payload_mismatch"
-    ):
+    with pytest.raises(CtpPositionEvidenceError, match="position_query_payload_mismatch"):
         build(result)
 
 
@@ -591,8 +564,7 @@ def test_record_snapshot_wins_when_result_mutates_during_strict_parse():
     parse_line = next(
         first_line + offset
         for offset, line in enumerate(source_lines)
-        if "rows = tuple(parse_ctp_position_row(record) for record in result.records)"
-        in line
+        if "rows = tuple(parse_ctp_position_row(record) for record in result.records)" in line
     )
     ready = threading.Event()
     done = threading.Event()
@@ -641,9 +613,7 @@ def test_terminal_callback_clocks_survive_a_slow_native_query_return():
             self.callback_monotonic = None
 
         def ReqQryInvestorPosition(self, _field, request_id):
-            self.client._handle_query_callback(
-                "positions", position_row(), None, request_id, True
-            )
+            self.client._handle_query_callback("positions", position_row(), None, request_id, True)
             self.callback_monotonic = time.monotonic()
             time.sleep(0.04)
             return 0
@@ -685,11 +655,7 @@ def test_present_row_account_fields_are_checked_against_bound_session():
     assert build(positions_result((raw,))).rows[0].broker_id == BROKER_ID
 
     with pytest.raises(CtpPositionEvidenceError, match="position_row_account_mismatch"):
-        build(
-            positions_result(
-                (position_row(BrokerID="other-broker", InvestorID=INVESTOR_ID),)
-            )
-        )
+        build(positions_result((position_row(BrokerID="other-broker", InvestorID=INVESTOR_ID),)))
 
 
 class _MutableQuantity:

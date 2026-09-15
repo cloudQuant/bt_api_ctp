@@ -18,9 +18,7 @@ class _PayloadReadProbe(dict[str, Any]):
 
     def _fail(self, operation: str) -> NoReturn:
         self.reads += 1
-        raise AssertionError(
-            f"direct execution rejection inspected payload via {operation}"
-        )
+        raise AssertionError(f"direct execution rejection inspected payload via {operation}")
 
     def get(self, key: str, default: Any = None) -> Any:
         self._fail("get")
@@ -54,9 +52,7 @@ class _ExecutionIoProbe:
 
     def __getattr__(self, name: str) -> NoReturn:
         self.network_like_reads += 1
-        raise AssertionError(
-            f"direct execution rejection accessed I/O attribute {name}"
-        )
+        raise AssertionError(f"direct execution rejection accessed I/O attribute {name}")
 
 
 class _FakeTraderClient:

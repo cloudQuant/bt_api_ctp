@@ -403,12 +403,10 @@ def test_arm_token_is_one_shot_and_generation_bound_before_native_writes() -> No
     assert client.get_request_counts()["order_insert"] == 0
 
 
-def test_settlement_token_is_independent_one_shot_and_invalidates_arm_preflight() -> (
-    None
-):
+def test_settlement_token_is_independent_one_shot_and_invalidates_arm_preflight() -> None:
     feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = (
-        lambda _field, _request_id: native_calls.append(("settlement",)) or 0
+    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
+        native_calls.append(("settlement",)) or 0
     )
     capability = _core_capability()
     feed.configure_execution_gate(capability)
@@ -459,8 +457,8 @@ def test_settlement_token_revalidates_bound_environment_before_native_write() ->
     """A post-issuance front mutation cannot retarget a terminal write."""
 
     feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = (
-        lambda _field, _request_id: native_calls.append(("settlement",)) or 0
+    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
+        native_calls.append(("settlement",)) or 0
     )
     capability = _core_capability()
     feed.configure_execution_gate(capability)
@@ -488,9 +486,7 @@ def test_settlement_token_revalidates_bound_environment_before_native_write() ->
     assert client.get_request_counts()["order_action"] == 0
 
 
-def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_writes() -> (
-    None
-):
+def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_writes() -> None:
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
@@ -523,9 +519,7 @@ def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_wri
         auto_settlement_confirm=False,
     )
     client = _read_ready(
-        TraderClient(
-            td_front, "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient(td_front, "9999", "account", "secret", auto_settlement_confirm=False)
     )
     client._api = SimpleNamespace()
     client._session_native_api = client._api
@@ -1011,9 +1005,7 @@ def test_managed_trader_api_blocks_cached_raw_query_requests() -> None:
     feed, client, native_calls = _execution_ready_feed()
     raw_calls = []
     client._api.ReqQryOrder = lambda *_args: raw_calls.append("qry") or 0
-    client._api.ReqQueryBankAccountMoneyByFuture = (
-        lambda *_args: raw_calls.append("query") or 0
-    )
+    client._api.ReqQueryBankAccountMoneyByFuture = lambda *_args: raw_calls.append("query") or 0
     public_api = client.api
     cached_qry = public_api.ReqQryOrder
     cached_query = public_api.ReqQueryBankAccountMoneyByFuture
@@ -1087,9 +1079,7 @@ def test_public_trader_api_blocks_cached_lifecycle_and_front_mutation_calls() ->
     assert native_calls == []
 
 
-def test_cached_public_native_order_request_is_blocked_before_and_after_gate_installation() -> (
-    None
-):
+def test_cached_public_native_order_request_is_blocked_before_and_after_gate_installation() -> None:
     feed, client, native_calls = _execution_ready_feed()
     raw_api = client._api
     public_api = client.api
@@ -1242,8 +1232,8 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
     ):
         _arm(feed, client, capability, _ctp_execution_proof(client, feed))
 
-    client._api.ReqQrySettlementInfoConfirm = (
-        lambda _field, request_id: client._handle_query_callback(
+    client._api.ReqQrySettlementInfoConfirm = lambda _field, request_id: (
+        client._handle_query_callback(
             "settlement_confirmation",
             {
                 "BrokerID": "9999",
@@ -1589,12 +1579,8 @@ def test_query_result_accumulates_only_matching_request_and_terminal_packet() ->
 
     class Api:
         def ReqQryOrder(self, _field, request_id):
-            client._handle_query_callback(
-                "orders", {"OrderSysID": "A"}, None, request_id, False
-            )
-            client._handle_query_callback(
-                "orders", {"OrderSysID": "B"}, None, request_id, True
-            )
+            client._handle_query_callback("orders", {"OrderSysID": "A"}, None, request_id, False)
+            client._handle_query_callback("orders", {"OrderSysID": "B"}, None, request_id, True)
             return 0
 
     client._api = Api()
@@ -1611,9 +1597,7 @@ def test_query_result_accumulates_only_matching_request_and_terminal_packet() ->
     assert counts["order_action"] == 0
 
 
-def test_instrument_query_exposes_expiry_without_inventing_trading_day_ranking() -> (
-    None
-):
+def test_instrument_query_exposes_expiry_without_inventing_trading_day_ranking() -> None:
     client = _read_ready(TraderClient("tcp://test", "9999", "account", "secret"))
 
     class Api:
@@ -1687,9 +1671,7 @@ def test_instrument_product_filter_fails_closed_when_native_field_is_not_writabl
     client._api = SimpleNamespace(
         ReqQryInstrument=lambda *_args: pytest.fail("unfiltered native query submitted")
     )
-    monkeypatch.setattr(
-        client_module, "CThostFtdcQryInstrumentField", FieldWithoutProductID
-    )
+    monkeypatch.setattr(client_module, "CThostFtdcQryInstrumentField", FieldWithoutProductID)
 
     result = client.query_instruments_result(product_id="SA", timeout=0.01)
 
@@ -1700,9 +1682,7 @@ def test_instrument_product_filter_fails_closed_when_native_field_is_not_writabl
     assert client.get_request_counts()["query_instruments"] == 0
 
 
-def test_instrument_product_filter_is_forwarded_by_typed_and_public_feed_proxies() -> (
-    None
-):
+def test_instrument_product_filter_is_forwarded_by_typed_and_public_feed_proxies() -> None:
     seen = []
 
     class Trader:
@@ -1786,13 +1766,9 @@ def test_query_timeout_and_late_callback_never_become_empty_success() -> None:
     client._api = SimpleNamespace(ReqQryTradingAccount=lambda _field, _request_id: 0)
 
     result = client.query_account_result(timeout=0)
-    assert (
-        result.complete is False and result.timed_out is True and result.records == ()
-    )
+    assert result.complete is False and result.timed_out is True and result.records == ()
 
-    client._handle_query_callback(
-        "account", {"Balance": 1}, None, result.request_id, True
-    )
+    client._handle_query_callback("account", {"Balance": 1}, None, result.request_id, True)
     refreshed = client.get_query_result(result.request_id)
     assert refreshed is not None
     assert refreshed.complete is False and refreshed.late_callback_count == 1
@@ -1827,9 +1803,7 @@ def test_query_callback_after_terminal_packet_is_counted_as_late() -> None:
             client._handle_query_callback(
                 "orders", {"OrderSysID": "terminal"}, None, request_id, True
             )
-            client._handle_query_callback(
-                "orders", {"OrderSysID": "late"}, None, request_id, True
-            )
+            client._handle_query_callback("orders", {"OrderSysID": "late"}, None, request_id, True)
             return 0
 
     client._api = Api()
@@ -1858,9 +1832,7 @@ def test_old_generation_query_callback_is_orphaned() -> None:
 
 def test_read_only_login_cannot_insert_or_cancel_and_counts_zero_writes() -> None:
     client = _read_ready(
-        TraderClient(
-            "tcp://test", "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient("tcp://test", "9999", "account", "secret", auto_settlement_confirm=False)
     )
     calls = []
     client._api = SimpleNamespace(
@@ -1916,9 +1888,7 @@ def test_complete_empty_account_query_fails_account_snapshot() -> None:
     assert response.get_extra_data()["account_snapshot_complete"] is False
 
 
-def test_public_exchange_info_joins_terminal_instrument_margin_and_fee_queries() -> (
-    None
-):
+def test_public_exchange_info_joins_terminal_instrument_margin_and_fee_queries() -> None:
     class Trader:
         is_read_only_ready = True
         auto_settlement_confirm = False
@@ -2000,9 +1970,7 @@ def test_public_exchange_info_fails_when_fee_query_has_no_record() -> None:
             )
         )
         query_instrument_margin_rate_result = staticmethod(
-            lambda *_args, **_kwargs: _result(
-                "margin_rate", ({"InstrumentID": "SA601"},)
-            )
+            lambda *_args, **_kwargs: _result("margin_rate", ({"InstrumentID": "SA601"},))
         )
         query_instrument_commission_rate_result = staticmethod(
             lambda *_args, **_kwargs: _result("commission_rate", ())
@@ -2431,9 +2399,7 @@ def test_read_only_preflight_rejects_auto_settlement_before_client_construction(
     assert constructed == []
 
 
-def test_read_only_preflight_rejects_existing_unsafe_trader_without_native_requests() -> (
-    None
-):
+def test_read_only_preflight_rejects_existing_unsafe_trader_without_native_requests() -> None:
     query_calls = []
     unsafe_trader = SimpleNamespace(
         auto_settlement_confirm=True,
@@ -2465,9 +2431,7 @@ def test_read_only_preflight_rejects_existing_unsafe_trader_without_native_reque
     assert query_calls == []
 
 
-def test_login_with_automatic_settlement_enabled_never_submits_settlement_confirmation() -> (
-    None
-):
+def test_login_with_automatic_settlement_enabled_never_submits_settlement_confirmation() -> None:
     client = TraderClient(
         "tcp://test",
         "9999",
@@ -2482,9 +2446,7 @@ def test_login_with_automatic_settlement_enabled_never_submits_settlement_confir
     client._login_request_id = 1
     client._login_connection_generation = 1
     client._api = SimpleNamespace(
-        ReqSettlementInfoConfirm=lambda *_args: (_ for _ in ()).throw(
-            RuntimeError("boom")
-        )
+        ReqSettlementInfoConfirm=lambda *_args: (_ for _ in ()).throw(RuntimeError("boom"))
     )
     _TraderSpi(client).OnRspUserLogin(
         SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
@@ -2500,16 +2462,11 @@ def test_login_with_automatic_settlement_enabled_never_submits_settlement_confir
 
 def test_old_settlement_response_cannot_confirm_new_generation() -> None:
     client = _read_ready(
-        TraderClient(
-            "tcp://test", "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient("tcp://test", "9999", "account", "secret", auto_settlement_confirm=False)
     )
     request_ids = []
     client._api = SimpleNamespace(
-        ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(
-            request_id
-        )
-        or 0
+        ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(request_id) or 0
     )
     client._session_native_api = client._api
     client._session_native_front = client._bound_front
@@ -2562,16 +2519,11 @@ def test_old_settlement_response_cannot_confirm_new_generation() -> None:
 
 def test_settlement_response_for_wrong_trading_day_is_rejected() -> None:
     client = _read_ready(
-        TraderClient(
-            "tcp://test", "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient("tcp://test", "9999", "account", "secret", auto_settlement_confirm=False)
     )
     request_ids = []
     client._api = SimpleNamespace(
-        ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(
-            request_id
-        )
-        or 0
+        ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(request_id) or 0
     )
     client._session_native_api = client._api
     client._session_native_front = client._bound_front
@@ -2600,19 +2552,13 @@ def test_settlement_response_for_wrong_trading_day_is_rejected() -> None:
 
 def test_server_confirmation_query_promotes_only_matching_account_and_day() -> None:
     client = _read_ready(
-        TraderClient(
-            "tcp://test", "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient("tcp://test", "9999", "account", "secret", auto_settlement_confirm=False)
     )
 
     class Api:
         def ReqQrySettlementInfoConfirm(self, _field, request_id):
-            record = SimpleNamespace(
-                BrokerID="9999", InvestorID="account", ConfirmDate="20260909"
-            )
-            client._handle_query_callback(
-                "settlement_confirmation", record, None, request_id, True
-            )
+            record = SimpleNamespace(BrokerID="9999", InvestorID="account", ConfirmDate="20260909")
+            client._handle_query_callback("settlement_confirmation", record, None, request_id, True)
             return 0
 
     client._api = Api()
@@ -2703,9 +2649,7 @@ def test_server_confirmation_query_requires_exact_account_identity(
     broker_id: str, investor_id: str
 ) -> None:
     client = _read_ready(
-        TraderClient(
-            "tcp://test", "9999", "account", "secret", auto_settlement_confirm=False
-        )
+        TraderClient("tcp://test", "9999", "account", "secret", auto_settlement_confirm=False)
     )
 
     class Api:
@@ -3161,14 +3105,8 @@ def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer(
     assert event["upper_limit_price"] == 100.0
     assert event["bid_volume"] == 2.0
     assert event["ask_volume"] == 3.0
-    assert (
-        event["event_time_utc"]
-        == datetime.fromisoformat(payload["event_time_utc"]).timestamp()
-    )
-    assert (
-        event["recv_time_utc"]
-        == datetime.fromisoformat(payload["recv_time_utc"]).timestamp()
-    )
+    assert event["event_time_utc"] == datetime.fromisoformat(payload["event_time_utc"]).timestamp()
+    assert event["recv_time_utc"] == datetime.fromisoformat(payload["recv_time_utc"]).timestamp()
     # A transport payload cannot self-attest eligibility.  Parent-owned direct
     # ingress must issue the matching sealed attestation before this can turn
     # true, even when the adapter evidence itself is complete.
@@ -3274,9 +3212,7 @@ def test_market_stream_public_quote_metadata_cannot_qualify_native_receipt(
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr(
-        "bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient
-    )
+    monkeypatch.setattr("bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient)
     stream = CtpMarketStream(
         quote_v2_metadata={
             "asset_type": "option",
@@ -3425,9 +3361,7 @@ def test_market_stream_reconnect_advances_quote_v2_subscription_epoch(
         def stop(self) -> None:
             self.stopped = True
 
-    monkeypatch.setattr(
-        "bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient
-    )
+    monkeypatch.setattr("bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient)
     stream = CtpMarketStream(
         topics=[
             {
@@ -3508,9 +3442,7 @@ def test_market_stream_reconnect_fences_delayed_old_client_quotes(monkeypatch) -
             UpdateMillisec=0,
         )
 
-    monkeypatch.setattr(
-        "bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient
-    )
+    monkeypatch.setattr("bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient)
     stream = CtpMarketStream(
         topics=[
             {
@@ -3543,9 +3475,7 @@ def test_market_stream_reconnect_fences_delayed_old_client_quotes(monkeypatch) -
     assert [row.delta_volume for row in rows] == [0.0, 0.0, 2.0]
 
 
-def test_market_stream_native_reconnect_advances_generation_epoch_and_volume_scope() -> (
-    None
-):
+def test_market_stream_native_reconnect_advances_generation_epoch_and_volume_scope() -> None:
     def quote(total: int, second: int) -> SimpleNamespace:
         return SimpleNamespace(
             InstrumentID="SA701C1080",
@@ -3827,9 +3757,7 @@ def test_request_feed_reuses_disconnected_td_client_instead_of_replacing_it(
     monkeypatch.setattr(
         client_module,
         "TraderClient",
-        lambda *_args, **_kwargs: pytest.fail(
-            "existing TD client must not be replaced"
-        ),
+        lambda *_args, **_kwargs: pytest.fail("existing TD client must not be replaced"),
     )
     feed = CtpRequestDataFuture(td_front="tcp://td", md_front="tcp://md")
     feed._trader = trader
@@ -3919,8 +3847,7 @@ def test_ctp_package_manifest_is_sorted_and_deterministic() -> None:
     assert [entry["path"] for entry in manifest] == expected_paths
     assert all(set(entry) == {"path", "sha256"} for entry in manifest)
     assert all(
-        entry["sha256"]
-        == hashlib.sha256((package_root / entry["path"]).read_bytes()).hexdigest()
+        entry["sha256"] == hashlib.sha256((package_root / entry["path"]).read_bytes()).hexdigest()
         for entry in manifest
     )
     canonical = json.dumps(
@@ -3946,16 +3873,10 @@ def test_ctp_package_identity_excludes_caches_and_detects_source_drift(
     (cache / "ignored.py").write_text("IGNORE = True\n", encoding="utf-8")
     (subpackage / "ignored.pyc").write_bytes(b"compiled")
 
-    first_manifest, first_sha256 = client_module._ctp_python_package_identity(
-        package_root
-    )
-    repeated_manifest, repeated_sha256 = client_module._ctp_python_package_identity(
-        package_root
-    )
+    first_manifest, first_sha256 = client_module._ctp_python_package_identity(package_root)
+    repeated_manifest, repeated_sha256 = client_module._ctp_python_package_identity(package_root)
     source.write_text("VALUE = 'second'\n", encoding="utf-8")
-    changed_manifest, changed_sha256 = client_module._ctp_python_package_identity(
-        package_root
-    )
+    changed_manifest, changed_sha256 = client_module._ctp_python_package_identity(package_root)
 
     assert first_manifest == repeated_manifest
     assert first_sha256 == repeated_sha256
@@ -4028,9 +3949,7 @@ def test_submit_trader_user_login_fails_closed_when_shim_is_unverified(
 
     api = Api()
     field = object()
-    monkeypatch.setattr(
-        client_module, "_is_vendored_native_trader_api", lambda _api: True
-    )
+    monkeypatch.setattr(client_module, "_is_vendored_native_trader_api", lambda _api: True)
 
     def reject_login(*_args):
         raise client_module.CtpNativeAbiError("ctp_trader_login_abi_unverified")
@@ -4061,9 +3980,7 @@ def test_submit_trader_user_login_uses_mock_fallback(monkeypatch) -> None:
 
     api = MockApi()
     field = object()
-    monkeypatch.setattr(
-        client_module, "_is_vendored_native_trader_api", lambda _api: False
-    )
+    monkeypatch.setattr(client_module, "_is_vendored_native_trader_api", lambda _api: False)
     monkeypatch.setattr(
         client_module._ctp_base,
         "_submit_public_trader_user_login",

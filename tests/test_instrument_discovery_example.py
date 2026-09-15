@@ -37,13 +37,31 @@ def result(*, complete=True, records=None, request_type="instruments"):
         error_message="",
         timed_out=not complete,
         complete=complete,
-        records=tuple(records if records is not None else [
-            {"InstrumentID": "m2701", "ExchangeID": "DCE", "ProductClass": "1",
-             "VolumeMultiple": 10, "PriceTick": 1, "ExpireDate": "20270115"},
-            {"InstrumentID": "m2701-C-3000", "ExchangeID": "DCE", "ProductClass": "2",
-             "UnderlyingInstrID": "m2701", "StrikePrice": 3000, "OptionsType": "1",
-             "VolumeMultiple": 10, "PriceTick": 0.5, "ExpireDate": "20261207"},
-        ]),
+        records=tuple(
+            records
+            if records is not None
+            else [
+                {
+                    "InstrumentID": "m2701",
+                    "ExchangeID": "DCE",
+                    "ProductClass": "1",
+                    "VolumeMultiple": 10,
+                    "PriceTick": 1,
+                    "ExpireDate": "20270115",
+                },
+                {
+                    "InstrumentID": "m2701-C-3000",
+                    "ExchangeID": "DCE",
+                    "ProductClass": "2",
+                    "UnderlyingInstrID": "m2701",
+                    "StrikePrice": 3000,
+                    "OptionsType": "1",
+                    "VolumeMultiple": 10,
+                    "PriceTick": 0.5,
+                    "ExpireDate": "20261207",
+                },
+            ]
+        ),
     )
 
 
@@ -55,11 +73,20 @@ class FakeClient:
         self.stopped = False
         self.started = False
         self.queries = []
-        self.counts = {"settlement_confirm": 0, "order_insert": 0, "order_action": 0,
-                       "query_instruments": 0, "query_depth_market_data": 0}
-        self.session = {"read_only_ready": True, "auto_settlement_confirm": False,
-                        "account_fingerprint": "a" * 16, "connection_generation": 3,
-                        "trading_day": "20260910"}
+        self.counts = {
+            "settlement_confirm": 0,
+            "order_insert": 0,
+            "order_action": 0,
+            "query_instruments": 0,
+            "query_depth_market_data": 0,
+        }
+        self.session = {
+            "read_only_ready": True,
+            "auto_settlement_confirm": False,
+            "account_fingerprint": "a" * 16,
+            "connection_generation": 3,
+            "trading_day": "20260910",
+        }
 
     def start(self, block=False):
         self.started = True
@@ -81,9 +108,10 @@ class FakeClient:
     def query_depth_market_data_result(self, **kwargs):
         self.queries.append(("depth", kwargs))
         self.counts["query_depth_market_data"] += 1
-        return result(request_type="depth_market_data", records=[
-            {"InstrumentID": "m2701", "ExchangeID": "DCE", "LastPrice": 3000}
-        ])
+        return result(
+            request_type="depth_market_data",
+            records=[{"InstrumentID": "m2701", "ExchangeID": "DCE", "LastPrice": 3000}],
+        )
 
     def stop(self):
         self.stopped = True
@@ -112,19 +140,32 @@ def harness(example, tmp_path, monkeypatch):
 
         def selector(**kwargs):
             selected.append(kwargs)
-            return SimpleNamespace(environment="simnow", profile="set1_group1",
-                                   td_front="tcp://frozen", md_front="tcp://frozen-md")
+            return SimpleNamespace(
+                environment="simnow",
+                profile="set1_group1",
+                td_front="tcp://frozen",
+                md_front="tcp://frozen-md",
+            )
 
         report = example.run_discovery(
-            args, client_factory=factory, selector=selector_override or selector,
-            diagnostics_provider=lambda: diagnostics_override or {"native_loaded": True,
-                "runtime_source": "test_native", "loaded_module_sha256": "1" * 64,
-                "ctp_package_sha256": "2" * 64},
+            args,
+            client_factory=factory,
+            selector=selector_override or selector,
+            diagnostics_provider=lambda: (
+                diagnostics_override
+                or {
+                    "native_loaded": True,
+                    "runtime_source": "test_native",
+                    "loaded_module_sha256": "1" * 64,
+                    "ctp_package_sha256": "2" * 64,
+                }
+            ),
         )
         return report, client
 
-    return SimpleNamespace(run=run, args=args, constructed=constructed, selected=selected,
-                           output=tmp_path / "out")
+    return SimpleNamespace(
+        run=run, args=args, constructed=constructed, selected=selected, output=tmp_path / "out"
+    )
 
 
 def test_complete_export_is_full_visible_query_and_zero_write(harness):
@@ -133,9 +174,17 @@ def test_complete_export_is_full_visible_query_and_zero_write(harness):
     assert report["status"] == "COMPLETE_VISIBLE_UNIVERSE"
     assert client.stopped and client.started
     assert harness.constructed[0]["auto_settlement_confirm"] is False
-    assert client.queries == [("instruments", {
-        "instrument_id": "", "exchange_id": "", "product_id": "", "timeout": 120.0,
-    })]
+    assert client.queries == [
+        (
+            "instruments",
+            {
+                "instrument_id": "",
+                "exchange_id": "",
+                "product_id": "",
+                "timeout": 120.0,
+            },
+        )
+    ]
     assert harness.selected[0]["profile"] == "set1_group1"
     assert harness.selected[0]["require_profile"] == "set1_group1"
     assert report["read_only_proof"]["zero_writes"] is True
@@ -149,11 +198,17 @@ def test_complete_export_is_full_visible_query_and_zero_write(harness):
     assert "private-user" not in text and "private-password" not in text
 
 
-@pytest.mark.parametrize("change", [
-    {"complete": False, "is_last_seen": False, "timed_out": True},
-    {"is_last_seen": False}, {"error_code": 7}, {"unsupported": True},
-    {"connection_generation": 2}, {"account_fingerprint": "b" * 16},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"complete": False, "is_last_seen": False, "timed_out": True},
+        {"is_last_seen": False},
+        {"error_code": 7},
+        {"unsupported": True},
+        {"connection_generation": 2},
+        {"account_fingerprint": "b" * 16},
+    ],
+)
 def test_partial_or_mixed_identity_never_export_complete(harness, change):
     report, client = harness.run(FakeClient(replace(result(), **change)))
     assert report["complete"] is False
@@ -164,8 +219,10 @@ def test_partial_or_mixed_identity_never_export_complete(harness, change):
     assert exported["complete"] is False and len(exported["records"]) == 2
 
 
-@pytest.mark.parametrize("key,value", [("order_insert", 1), ("order_action", 1),
-                                      ("settlement_confirm", 1), ("order_insert", None)])
+@pytest.mark.parametrize(
+    "key,value",
+    [("order_insert", 1), ("order_action", 1), ("settlement_confirm", 1), ("order_insert", None)],
+)
 def test_write_counters_fail_closed(harness, key, value):
     client = FakeClient()
     if value is None:
@@ -210,8 +267,10 @@ def test_optional_depth_is_one_public_query(harness):
     harness.args.include_depth = True
     report, client = harness.run()
     assert report["complete"] is True
-    assert client.queries[1] == ("depth", {"instrument_id": "", "exchange_id": "",
-                                          "timeout": 120.0})
+    assert client.queries[1] == (
+        "depth",
+        {"instrument_id": "", "exchange_id": "", "timeout": 120.0},
+    )
     assert (harness.output / "depth_market_data.json").exists()
 
 
@@ -247,25 +306,32 @@ def test_only_explicit_env_file_is_read_and_process_wins(harness, tmp_path, monk
     assert harness.constructed[0]["user_id"] == "private-user"
 
 
-@pytest.mark.parametrize("option", [["--profile", "production"], ["--td-front", "tcp://x"],
-                                    ["--query-timeout", "nan"]])
+@pytest.mark.parametrize(
+    "option", [["--profile", "production"], ["--td-front", "tcp://x"], ["--query-timeout", "nan"]]
+)
 def test_cli_rejects_unfrozen_endpoint_and_invalid_timeouts(example, tmp_path, option):
     with pytest.raises(SystemExit):
         example.build_parser().parse_args(["--output-dir", str(tmp_path / "out"), *option])
 
 
 def test_custom_selection_is_rejected_before_client_construction(harness):
-    report, _ = harness.run(selector_override=lambda **_: SimpleNamespace(
-        environment="custom", profile="set1_group1", td_front="tcp://custom"))
+    report, _ = harness.run(
+        selector_override=lambda **_: SimpleNamespace(
+            environment="custom", profile="set1_group1", td_front="tcp://custom"
+        )
+    )
     assert report["complete"] is False
     assert not harness.constructed
 
 
 def test_known_unsupported_login_abi_is_blocked_before_network_probe(harness):
-    report, _ = harness.run(diagnostics_override={
-        "native_loaded": True, "trader_login_abi_verified": False,
-        "trader_login_abi_reason": "ctp_trader_login_abi_unverified",
-    })
+    report, _ = harness.run(
+        diagnostics_override={
+            "native_loaded": True,
+            "trader_login_abi_verified": False,
+            "trader_login_abi_reason": "ctp_trader_login_abi_unverified",
+        }
+    )
     assert report["status"] == "BLOCKED"
     assert "ctp_trader_login_abi_unverified" in report["errors"]
     assert not harness.selected and not harness.constructed
@@ -273,9 +339,11 @@ def test_known_unsupported_login_abi_is_blocked_before_network_probe(harness):
 
 def test_existing_public_login_guard_produces_stable_blocked_code(harness):
     client = FakeClient()
-    client.session.update(read_only_ready=False, login_state="failed",
-                          last_error={"error": "login_submit_failed",
-                                      "detail": "ctp_trader_login_abi_unverified"})
+    client.session.update(
+        read_only_ready=False,
+        login_state="failed",
+        last_error={"error": "login_submit_failed", "detail": "ctp_trader_login_abi_unverified"},
+    )
     report, _ = harness.run(client)
     assert report["status"] == "BLOCKED"
     assert "ctp_trader_login_abi_unverified" in report["errors"]
@@ -298,7 +366,8 @@ def test_progress_is_visible_before_query_returns(harness):
         progress = json.loads((harness.output / "progress.json").read_text())
         assert progress["phase"] == "querying_instruments"
         assert progress["write_counts"] == dict.fromkeys(
-            ("settlement_confirm", "order_insert", "order_action"), 0)
+            ("settlement_confirm", "order_insert", "order_action"), 0
+        )
         manifest = json.loads((harness.output / "discovery.json").read_text())
         assert manifest["complete"] is False
         return query(**kwargs)
@@ -309,11 +378,17 @@ def test_progress_is_visible_before_query_returns(harness):
     assert "discovery.json" not in report["artifacts_sha256"]
 
 
-@pytest.mark.parametrize("changed,code", [
-    ({"auth_state": "failed"}, "read_only_authentication_failed"),
-    ({"login_state": "failed", "last_error": {"detail": "private-user"}}, "read_only_login_failed"),
-    ({"auto_settlement_confirm": True}, "auto_settlement_confirm_not_disabled"),
-])
+@pytest.mark.parametrize(
+    "changed,code",
+    [
+        ({"auth_state": "failed"}, "read_only_authentication_failed"),
+        (
+            {"login_state": "failed", "last_error": {"detail": "private-user"}},
+            "read_only_login_failed",
+        ),
+        ({"auto_settlement_confirm": True}, "auto_settlement_confirm_not_disabled"),
+    ],
+)
 def test_login_failures_are_diagnostic_without_secret_text(harness, changed, code):
     client = FakeClient()
     client.session.update(read_only_ready=False, **changed)
@@ -341,7 +416,8 @@ def test_depth_partial_prevents_whole_run_success(harness):
     harness.args.include_depth = True
     client = FakeClient()
     client.query_depth_market_data_result = lambda **_: result(
-        complete=False, request_type="depth_market_data")
+        complete=False, request_type="depth_market_data"
+    )
     report, _ = harness.run(client)
     assert report["complete"] is False
     assert "depth_query_incomplete_or_identity_mismatch" in report["errors"]
@@ -361,20 +437,35 @@ def test_output_failure_leaves_partial_manifest_and_stops_client(example, harnes
 
 
 @pytest.mark.parametrize("complete,expected", [(True, 0), (False, 2)])
-def test_main_exit_code_reflects_completion(example, tmp_path, monkeypatch, capsys, complete, expected):
-    monkeypatch.setattr(example, "run_discovery", lambda args: {
-        "complete": complete, "status": "COMPLETE_VISIBLE_UNIVERSE" if complete else "PARTIAL",
-        "counts": {}, "read_only_proof": {"zero_writes": True},
-    })
+def test_main_exit_code_reflects_completion(
+    example, tmp_path, monkeypatch, capsys, complete, expected
+):
+    monkeypatch.setattr(
+        example,
+        "run_discovery",
+        lambda args: {
+            "complete": complete,
+            "status": "COMPLETE_VISIBLE_UNIVERSE" if complete else "PARTIAL",
+            "counts": {},
+            "read_only_proof": {"zero_writes": True},
+        },
+    )
     assert example.main(["--output-dir", str(tmp_path / "out")]) == expected
     assert json.loads(capsys.readouterr().out)["complete"] is complete
 
 
 def test_repeated_instrument_filters_keep_query_proofs_and_deduplicate_union(example, harness):
-    parsed = example.build_parser().parse_args([
-        "--output-dir", str(harness.output), "--include-depth",
-        "--instrument-filter", "DCE:m2701", "--instrument-filter", "DCE:m2701-C",
-    ])
+    parsed = example.build_parser().parse_args(
+        [
+            "--output-dir",
+            str(harness.output),
+            "--include-depth",
+            "--instrument-filter",
+            "DCE:m2701",
+            "--instrument-filter",
+            "DCE:m2701-C",
+        ]
+    )
     vars(harness.args).update(vars(parsed))
     client = FakeClient()
     report, client = harness.run(client)
@@ -386,7 +477,11 @@ def test_repeated_instrument_filters_keep_query_proofs_and_deduplicate_union(exa
     assert report["counts"]["instruments"] == 2
     assert report["counts"]["depth_market_data"] == 1
     assert [entry[1]["instrument_id"] for entry in client.queries] == [
-        "m2701", "m2701", "m2701-C", "m2701-C"]
+        "m2701",
+        "m2701",
+        "m2701-C",
+        "m2701-C",
+    ]
     assert len(report["selected_coverage"]) == 2
     assert all(row["complete"] for row in report["selected_coverage"])
 
@@ -410,5 +505,6 @@ def test_one_incomplete_filtered_query_makes_union_partial(harness):
 @pytest.mark.parametrize("value", ["m2701", "UNKNOWN:m2701", "DCE:", "DCE:m2701:bad"])
 def test_invalid_instrument_filter_is_rejected_by_parser(example, tmp_path, value):
     with pytest.raises(SystemExit):
-        example.build_parser().parse_args([
-            "--output-dir", str(tmp_path / "out"), "--instrument-filter", value])
+        example.build_parser().parse_args(
+            ["--output-dir", str(tmp_path / "out"), "--instrument-filter", value]
+        )

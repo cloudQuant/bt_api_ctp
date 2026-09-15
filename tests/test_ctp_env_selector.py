@@ -24,9 +24,7 @@ def test_get_ctp_fronts_prefers_set1_during_weekday_session(monkeypatch) -> None
     monkeypatch.setenv("CTP_SET1_TD_FRONT_2", "tcp://set1-td")
     monkeypatch.setenv("CTP_SET1_MD_FRONT_2", "tcp://set1-md")
 
-    td, md, env_name = get_ctp_fronts(
-        now=datetime(2026, 3, 16, 10, 0, 0), is_trading_day=True
-    )
+    td, md, env_name = get_ctp_fronts(now=datetime(2026, 3, 16, 10, 0, 0), is_trading_day=True)
 
     assert (td, md, env_name) == ("tcp://set1-td", "tcp://set1-md", "set1_group2")
 
@@ -174,9 +172,7 @@ def test_required_profile_rejects_unclaimed_explicit_fronts() -> None:
 
 def _offline_connector(*reachable_profiles: str):
     reachable_fronts = {
-        front
-        for profile in reachable_profiles
-        for front in official_simnow_fronts(profile)
+        front for profile in reachable_profiles for front in official_simnow_fronts(profile)
     }
     calls: list[tuple[str, float]] = []
 
@@ -198,9 +194,7 @@ def test_reachable_selector_uses_named_set2_alternate_after_local_pair_fails() -
     )
 
     assert selection.profile == "set2_7x24_vpn"
-    assert (selection.td_front, selection.md_front) == official_simnow_fronts(
-        "set2_7x24_vpn"
-    )
+    assert (selection.td_front, selection.md_front) == official_simnow_fronts("set2_7x24_vpn")
     assert selection.readiness == "tcp_pair_reachable"
     assert [endpoint for endpoint, _timeout in calls] == [
         *official_simnow_fronts("set2_7x24"),
@@ -240,9 +234,7 @@ def test_reachable_selector_keeps_exact_required_profile_exact() -> None:
             connector=connector,
         )
 
-    assert [endpoint for endpoint, _timeout in calls] == list(
-        official_simnow_fronts("set2_7x24")
-    )
+    assert [endpoint for endpoint, _timeout in calls] == list(official_simnow_fronts("set2_7x24"))
 
 
 def test_reachable_selector_keeps_named_4000x_pair_exact() -> None:
@@ -256,9 +248,7 @@ def test_reachable_selector_keeps_named_4000x_pair_exact() -> None:
     )
 
     assert selection.profile == "set2_7x24_4000x"
-    assert (selection.td_front, selection.md_front) == official_simnow_fronts(
-        "set2_7x24_4000x"
-    )
+    assert (selection.td_front, selection.md_front) == official_simnow_fronts("set2_7x24_4000x")
     assert [endpoint for endpoint, _timeout in calls] == list(
         official_simnow_fronts("set2_7x24_4000x")
     )
@@ -285,9 +275,7 @@ def test_reachable_selector_rejects_pair_when_only_one_front_connects() -> None:
     assert "182.254" not in str(excinfo.value)
 
 
-def test_reachable_selector_never_crosses_set_groups_for_profile_or_requirement() -> (
-    None
-):
+def test_reachable_selector_never_crosses_set_groups_for_profile_or_requirement() -> None:
     connector, calls = _offline_connector("set2_7x24", "set2_7x24_vpn")
 
     with pytest.raises(RuntimeError, match="no reachable"):
@@ -303,9 +291,7 @@ def test_reachable_selector_never_crosses_set_groups_for_profile_or_requirement(
     assert {endpoint for endpoint, _timeout in calls} <= set1_fronts
 
     with pytest.raises(RuntimeError, match="required CTP profile group"):
-        select_reachable_ctp_environment(
-            env="set1", require_profile="set2", connector=connector
-        )
+        select_reachable_ctp_environment(env="set1", require_profile="set2", connector=connector)
 
 
 @pytest.mark.parametrize(
@@ -347,9 +333,7 @@ def test_request_feed_auto_detects_once_when_no_complete_pair_is_explicit(
             explicit=True,
         )
 
-    monkeypatch.setattr(
-        live_ctp_feed, "select_reachable_ctp_environment", select_reachable
-    )
+    monkeypatch.setattr(live_ctp_feed, "select_reachable_ctp_environment", select_reachable)
     feed = CtpRequestDataFuture(
         auto_detect_fronts=True,
         ctp_env_profile="set2_7x24",
@@ -399,9 +383,7 @@ def test_request_feed_reprobes_stale_global_fronts_in_auto_detect_mode(
             explicit=True,
         )
 
-    monkeypatch.setattr(
-        live_ctp_feed, "select_reachable_ctp_environment", select_reachable
-    )
+    monkeypatch.setattr(live_ctp_feed, "select_reachable_ctp_environment", select_reachable)
     feed = CtpRequestDataFuture(auto_detect_fronts=True)
 
     assert calls == [
@@ -427,9 +409,7 @@ def test_explicit_complete_pair_skips_auto_detection(monkeypatch) -> None:
     def unexpected_probe(*_args, **_kwargs):
         raise AssertionError("explicit complete pair must not trigger a TCP probe")
 
-    monkeypatch.setattr(
-        live_ctp_feed, "select_reachable_ctp_environment", unexpected_probe
-    )
+    monkeypatch.setattr(live_ctp_feed, "select_reachable_ctp_environment", unexpected_probe)
     feed = CtpRequestDataFuture(
         auto_detect_fronts=True,
         ctp_env_profile="set2_7x24_vpn",
@@ -489,9 +469,7 @@ def test_gateway_pins_one_auto_detected_pair_before_creating_streams(
         def __init__(self, _queue, **kwargs) -> None:
             stream_calls.append(("trade", kwargs))
 
-    monkeypatch.setattr(
-        live_ctp_feed, "select_reachable_ctp_environment", select_reachable
-    )
+    monkeypatch.setattr(live_ctp_feed, "select_reachable_ctp_environment", select_reachable)
     monkeypatch.setattr(adapter_module, "CtpMarketStream", FakeMarketStream)
     monkeypatch.setattr(adapter_module, "CtpTradeStream", FakeTradeStream)
 

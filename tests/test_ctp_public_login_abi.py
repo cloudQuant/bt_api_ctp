@@ -142,8 +142,7 @@ def test_audited_public_login_shim_requires_exact_version_and_framework_hash(
     monkeypatch.setattr(
         _ctp_base,
         "_sha256_file",
-        lambda path: hash_paths.append(path)
-        or _ctp_base._AUDITED_DARWIN_ARM64_TRADER_SHA256,
+        lambda path: hash_paths.append(path) or _ctp_base._AUDITED_DARWIN_ARM64_TRADER_SHA256,
     )
     monkeypatch.setattr(
         _ctp_base,
@@ -160,11 +159,7 @@ def test_audited_public_login_shim_requires_exact_version_and_framework_hash(
 
     assert _ctp_base._has_audited_darwin_arm64_login_shim() is True
     assert hash_paths == [
-        tmp_path
-        / "thosttraderapi_se.framework"
-        / "Versions"
-        / "A"
-        / "thosttraderapi_se"
+        tmp_path / "thosttraderapi_se.framework" / "Versions" / "A" / "thosttraderapi_se"
     ]
 
 

@@ -267,12 +267,8 @@ class TestCtpTickerData:
         assert data["source_clock_error_ms"] == 1
         assert data["receive_clock_error_ms"] == 1
         assert data["freshness_verified"] is True
-        assert data["event_time_utc"] == datetime(
-            2026, 9, 9, 1, 30, 1, tzinfo=timezone.utc
-        )
-        assert data["recv_time_utc"] == datetime(
-            2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc
-        )
+        assert data["event_time_utc"] == datetime(2026, 9, 9, 1, 30, 1, tzinfo=timezone.utc)
+        assert data["recv_time_utc"] == datetime(2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc)
         assert data["quality_flags"] == []
         assert data["execution_eligible"] is False
         ticker.execution_eligible = True

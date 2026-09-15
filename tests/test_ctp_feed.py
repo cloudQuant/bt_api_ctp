@@ -106,9 +106,7 @@ class TestCtpImports:
 
         assert ExchangeRegistry.has_exchange("CTP___FUTURE")
         assert ExchangeRegistry.get_balance_handler("CTP___FUTURE") is not None
-        assert (
-            ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
-        )
+        assert ExchangeRegistry.get_stream_class("CTP___FUTURE", "subscribe") is not None
 
     def test_split_submodule_imports(self):
         """验证拆分后的子模块可以独立导入"""
@@ -389,9 +387,7 @@ class TestCtpOrderThreadingRegression:
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
         seen_order_refs = []
-        client.on_order = lambda order_field: seen_order_refs.append(
-            order_field.OrderRef
-        )
+        client.on_order = lambda order_field: seen_order_refs.append(order_field.OrderRef)
         spi = _TraderSpi(client)
 
         spi.OnRtnOrder(MockOrderField())
@@ -424,9 +420,7 @@ class TestCtpOrderThreadingRegression:
             def ReqQryOrder(self, field, req_id):
                 self.field = field
                 self.req_id = req_id
-                self.client._handle_query_callback(
-                    "orders", MockOrderField(), None, req_id, True
-                )
+                self.client._handle_query_callback("orders", MockOrderField(), None, req_id, True)
                 return 0
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
@@ -436,9 +430,7 @@ class TestCtpOrderThreadingRegression:
         client._query_interval = 0
         client._api = FakeApi(client)
 
-        rows = client.query_orders(
-            instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01
-        )
+        rows = client.query_orders(instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01)
 
         assert rows[0].OrderSysID == "SYS001"
         assert client._api.field.BrokerID == "9999"
@@ -462,9 +454,7 @@ class TestCtpOrderThreadingRegression:
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
         seen_errors = []
-        client.on_error = lambda rsp_info: seen_errors.append(
-            (rsp_info.ErrorID, rsp_info.ErrorMsg)
-        )
+        client.on_error = lambda rsp_info: seen_errors.append((rsp_info.ErrorID, rsp_info.ErrorMsg))
         spi = _TraderSpi(client)
 
         spi.OnErrRtnOrderInsert(MockInputOrder(), MockRspInfo())

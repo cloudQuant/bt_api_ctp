@@ -65,17 +65,13 @@ def _runtime_config() -> tuple[dict[str, str], str, str, str]:
     from bt_api_ctp.ctp_env_selector import apply_ctp_env
 
     td_front, md_front, env_name = apply_ctp_env()
-    broker_id = (
-        os.environ.get("CTP_BROKER_ID") or os.environ.get("SIMNOW_BROKER_ID") or "9999"
-    )
+    broker_id = os.environ.get("CTP_BROKER_ID") or os.environ.get("SIMNOW_BROKER_ID") or "9999"
     user_id = os.environ.get("CTP_USER_ID") or os.environ.get("SIMNOW_USER_ID") or ""
     password = os.environ.get("CTP_PASSWORD") or os.environ.get("SIMNOW_PASSWORD") or ""
     app_id = os.environ.get("CTP_APP_ID", "simnow_client_test")
     auth_code = os.environ.get("CTP_AUTH_CODE", "0000000000000000")
     if not user_id or not password:
-        pytest.skip(
-            "CTP_USER_ID/CTP_PASSWORD or SIMNOW_USER_ID/SIMNOW_PASSWORD not configured"
-        )
+        pytest.skip("CTP_USER_ID/CTP_PASSWORD or SIMNOW_USER_ID/SIMNOW_PASSWORD not configured")
     config = {
         "broker_id": broker_id,
         "user_id": user_id,
@@ -106,9 +102,7 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 
     try:
         feed.connect()
-        assert (
-            feed._connected
-        ), f"CtpRequestDataFuture failed to connect via auto env {env_name}"
+        assert feed._connected, f"CtpRequestDataFuture failed to connect via auto env {env_name}"
         assert feed.trader_client is not None
         assert feed.trader_client.is_ready
     finally:
@@ -120,9 +114,7 @@ def test_ctp_request_feed_uses_auto_env_fronts_and_connects() -> None:
 
     try:
         feed.connect()
-        assert (
-            feed._connected
-        ), f"BtApi CTP feed failed to connect via auto env {env_name}"
+        assert feed._connected, f"BtApi CTP feed failed to connect via auto env {env_name}"
         assert feed.trader_client is not None
         assert feed.trader_client.is_ready
     finally:
