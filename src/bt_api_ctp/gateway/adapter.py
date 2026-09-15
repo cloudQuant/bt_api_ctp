@@ -177,9 +177,7 @@ def _ctp_tick_timestamp_datetime(
     update_time = str(row.update_time_val or "")
     if len(day) == 8 and day.isdigit() and update_time:
         try:
-            local_dt = datetime.strptime(
-                f"{day} {update_time}", "%Y%m%d %H:%M:%S"
-            ).replace(
+            local_dt = datetime.strptime(f"{day} {update_time}", "%Y%m%d %H:%M:%S").replace(
                 microsecond=int(row.update_millisec or 0) * 1000,
                 tzinfo=_CTP_TZ,
             )
@@ -262,22 +260,14 @@ def _quote_v2_execution_eligible(
     does not synthesize that evidence from local receipt time.
     """
 
-    if not (
-        bool(row.volume_complete) and str(row.volume_quality).upper() == "CONTINUOUS"
-    ):
+    if not (bool(row.volume_complete) and str(row.volume_quality).upper() == "CONTINUOUS"):
         _append_quote_quality_flag(row, "VOLUME_NOT_CONTINUOUS")
     if bid_size is None or ask_size is None or bid_size <= 0 or ask_size <= 0:
         _append_quote_quality_flag(row, "TOP_OF_BOOK_UNAVAILABLE")
-    if (
-        lower_limit is None
-        or upper_limit is None
-        or lower_limit <= 0
-        or upper_limit <= lower_limit
-    ):
+    if lower_limit is None or upper_limit is None or lower_limit <= 0 or upper_limit <= lower_limit:
         _append_quote_quality_flag(row, "DAILY_PRICE_LIMIT_INVALID")
     elif any(
-        value is None or value < lower_limit or value > upper_limit
-        for value in (bid, ask, last)
+        value is None or value < lower_limit or value > upper_limit for value in (bid, ask, last)
     ):
         _append_quote_quality_flag(row, "QUOTE_OUTSIDE_DAILY_LIMIT")
 
@@ -295,12 +285,8 @@ def _quote_v2_execution_eligible(
         _append_quote_quality_flag(row, "PRODUCT_CLASS_MISMATCH")
     if asset_type == "option":
         option_type = str(getattr(row, "option_type", "") or "").strip().lower()
-        underlying_instrument = str(
-            getattr(row, "underlying_instrument", "") or ""
-        ).strip()
-        strike_price = _optional_ctp_quote_number(
-            getattr(row, "strike_price", None), positive=True
-        )
+        underlying_instrument = str(getattr(row, "underlying_instrument", "") or "").strip()
+        strike_price = _optional_ctp_quote_number(getattr(row, "strike_price", None), positive=True)
         if option_type not in {"call", "put"}:
             _append_quote_quality_flag(row, "OPTION_TYPE_UNKNOWN")
         if not underlying_instrument:
@@ -328,21 +314,15 @@ def _quote_v2_execution_eligible(
     if not _has_provenance_identity(getattr(row, "clock_domain_id", "")):
         _append_quote_quality_flag(row, "CLOCK_DOMAIN_UNKNOWN")
 
-    source_error = _finite_nonnegative_number(
-        getattr(row, "source_clock_error_ms", None)
-    )
-    receive_error = _finite_nonnegative_number(
-        getattr(row, "receive_clock_error_ms", None)
-    )
+    source_error = _finite_nonnegative_number(getattr(row, "source_clock_error_ms", None))
+    receive_error = _finite_nonnegative_number(getattr(row, "receive_clock_error_ms", None))
     source_time = getattr(row, "event_time_utc", None)
     receive_time = getattr(row, "recv_time_utc", None)
     source_clock_verified = (
-        str(getattr(row, "source_clock_quality", "") or "").strip().lower()
-        == "verified"
+        str(getattr(row, "source_clock_quality", "") or "").strip().lower() == "verified"
     )
     receive_clock_verified = (
-        str(getattr(row, "receive_clock_quality", "") or "").strip().lower()
-        == "verified"
+        str(getattr(row, "receive_clock_quality", "") or "").strip().lower() == "verified"
     )
     timing_complete = (
         getattr(row, "freshness_verified", False) is True
@@ -357,10 +337,7 @@ def _quote_v2_execution_eligible(
     )
     if not timing_complete:
         _append_quote_quality_flag(row, "FRESHNESS_UNVERIFIED")
-    elif (
-        source_time.timestamp()
-        > receive_time.timestamp() + (source_error + receive_error) / 1000
-    ):
+    elif source_time.timestamp() > receive_time.timestamp() + (source_error + receive_error) / 1000:
         _append_quote_quality_flag(row, "SOURCE_TIME_AFTER_RECEIVE")
 
     return (
@@ -375,15 +352,9 @@ def _quote_v2_execution_eligible(
 class CtpGatewayAdapter(BaseGatewayAdapter):
     def __init__(self, **kwargs: Any) -> None:
         normalized = dict(kwargs)
-        normalized["md_front"] = (
-            normalized.get("md_front") or normalized.get("md_address") or ""
-        )
-        normalized["td_front"] = (
-            normalized.get("td_front") or normalized.get("td_address") or ""
-        )
-        normalized["user_id"] = (
-            normalized.get("user_id") or normalized.get("investor_id") or ""
-        )
+        normalized["md_front"] = normalized.get("md_front") or normalized.get("md_address") or ""
+        normalized["td_front"] = normalized.get("td_front") or normalized.get("td_address") or ""
+        normalized["user_id"] = normalized.get("user_id") or normalized.get("investor_id") or ""
         super().__init__(**normalized)
         self.q: queue.Queue[Any] = queue.Queue()
         self._stream_kwargs = normalized
@@ -400,9 +371,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self._symbol_specs: dict[str, dict[str, Any]] = {}
         self.running = False
         self.thread: threading.Thread | None = None
-        self.timeout = float(
-            normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0
-        )
+        self.timeout = float(normalized.get("gateway_startup_timeout_sec", 10.0) or 10.0)
         configured_attempts = normalized.get("gateway_startup_attempts")
         if configured_attempts is None:
             configured_attempts = 3 if self.timeout >= 30.0 else 1
@@ -416,15 +385,11 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         self.feed = CtpRequestDataFuture(None, **self._stream_kwargs)
         self._pin_request_feed_fronts()
         self.market = CtpMarketStream(self.q, **self._stream_kwargs)
-        self.trade = CtpTradeStream(
-            self.q, request_feed=self.feed, **self._stream_kwargs
-        )
+        self.trade = CtpTradeStream(self.q, request_feed=self.feed, **self._stream_kwargs)
 
     def _pin_request_feed_fronts(self) -> None:
         """Reuse a request-feed auto-detection result for both gateway streams."""
-        if not _auto_detect_fronts_enabled(
-            self._stream_kwargs.get("auto_detect_fronts")
-        ):
+        if not _auto_detect_fronts_enabled(self._stream_kwargs.get("auto_detect_fronts")):
             return
         if getattr(self.feed, "ctp_env_readiness", None) != "tcp_pair_reachable":
             return
@@ -569,16 +534,10 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             raise RuntimeError("ctp account query incomplete")
         rows = response.get_data()
         if not rows:
-            raise RuntimeError(
-                "ctp account query complete but returned no account snapshot"
-            )
+            raise RuntimeError("ctp account query complete but returned no account snapshot")
         row = rows[0].init_data()
-        balance = float(
-            getattr(row, "balance", None) or row.get_total_wallet_balance() or 0.0
-        )
-        available = float(
-            getattr(row, "available", None) or row.get_available_margin() or 0.0
-        )
+        balance = float(getattr(row, "balance", None) or row.get_total_wallet_balance() or 0.0)
+        available = float(getattr(row, "available", None) or row.get_available_margin() or 0.0)
         used_margin = float(getattr(row, "curr_margin", None) or 0.0)
         position_profit = float(getattr(row, "position_profit", None) or 0.0)
         return {
@@ -670,9 +629,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         extra = dict(response.get_extra_data() or {})
         return {
             "complete": bool(response.get_status() and extra.get("query_complete")),
-            "evidence_complete": bool(
-                response.get_status() and extra.get("evidence_complete")
-            ),
+            "evidence_complete": bool(response.get_status() and extra.get("evidence_complete")),
             "records": list(response.get_data() or []),
             "query_result": extra.get("query_result", {}),
         }
@@ -685,9 +642,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             if cached:
                 return dict(cached)
 
-        trader = getattr(self.feed, "trader_client", None) or getattr(
-            self.feed, "_trader", None
-        )
+        trader = getattr(self.feed, "trader_client", None) or getattr(self.feed, "_trader", None)
         if trader is None:
             return {}
 
@@ -707,10 +662,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 result_methods[2], instrument, exchange_id=exchange_id, timeout=2
             )
             results = (instrument_result, margin_result, commission_result)
-            if any(
-                result is None or not getattr(result, "complete", False)
-                for result in results
-            ):
+            if any(result is None or not getattr(result, "complete", False) for result in results):
                 return {}
             session_getter = getattr(trader, "get_session_state", None)
             current_session = session_getter() if callable(session_getter) else None
@@ -787,9 +739,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         if tick > 0:
             self._price_ticks[instrument] = tick
             return tick
-        raise RuntimeError(
-            f"CTP metadata incomplete for {instrument}: positive PriceTick required"
-        )
+        raise RuntimeError(f"CTP metadata incomplete for {instrument}: positive PriceTick required")
 
     @staticmethod
     def _reject_direct_execution(operation: str) -> None:
@@ -852,12 +802,8 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
         last = _optional_ctp_quote_number(row.get_last_price(), positive=True)
         bid_size = _optional_ctp_quote_number(row.get_bid_volume())
         ask_size = _optional_ctp_quote_number(row.get_ask_volume())
-        upper_limit_price = _optional_ctp_quote_number(
-            row.get_upper_limit_price(), positive=True
-        )
-        lower_limit_price = _optional_ctp_quote_number(
-            row.get_lower_limit_price(), positive=True
-        )
+        upper_limit_price = _optional_ctp_quote_number(row.get_upper_limit_price(), positive=True)
+        lower_limit_price = _optional_ctp_quote_number(row.get_lower_limit_price(), positive=True)
         execution_eligible = _quote_v2_execution_eligible(
             row,
             quote_valid=quote_valid,
@@ -870,9 +816,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
             upper_limit=upper_limit_price,
         )
         continuity_status = (
-            "continuous"
-            if volume_complete and volume_quality == "CONTINUOUS"
-            else "gap"
+            "continuous" if volume_complete and volume_quality == "CONTINUOUS" else "gap"
         )
         eligibility = getattr(self, "_quote_execution_eligible", None)
         if eligibility is None:
@@ -938,9 +882,7 @@ class CtpGatewayAdapter(BaseGatewayAdapter):
                 receive_clock_error_ms=getattr(row, "receive_clock_error_ms", None),
                 freshness_verified=getattr(row, "freshness_verified", False) is True,
                 product_class=getattr(row, "product_class", None),
-                contract_type=str(
-                    getattr(row, "contract_type", "unknown") or "unknown"
-                ),
+                contract_type=str(getattr(row, "contract_type", "unknown") or "unknown"),
                 option_type=getattr(row, "option_type", None),
                 underlying_instrument=getattr(row, "underlying_instrument", None),
                 strike_price=getattr(row, "strike_price", None),
@@ -984,9 +926,7 @@ def _normalize_instrument(instrument: str, exchange_id: str = "") -> str:
         return text
     prefix, digits = match.groups()
     exchange = str(exchange_id or "").strip().upper()
-    if exchange == "CZCE" or (
-        not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES
-    ):
+    if exchange == "CZCE" or (not exchange and prefix.upper() in _CZCE_PRODUCT_PREFIXES):
         return f"{prefix}{digits[-3:]}"
     return text
 

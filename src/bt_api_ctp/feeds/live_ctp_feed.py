@@ -103,8 +103,7 @@ def _get_ctp_managed_quote_v2_receipt(
         or receipt._seal is not _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL
         or receipt._ticker is not ticker
         or receipt._stream is not stream
-        or receipt._stream_token
-        is not getattr(stream, "_managed_quote_v2_stream_token", None)
+        or receipt._stream_token is not getattr(stream, "_managed_quote_v2_stream_token", None)
     ):
         return None
     try:
@@ -187,9 +186,7 @@ def _positive_int_lot(value: Any, field_name: str) -> int:
     try:
         lot = Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(
-            f"CTP order {field_name} must be a positive integer lot."
-        ) from exc
+        raise ValueError(f"CTP order {field_name} must be a positive integer lot.") from exc
     if not lot.is_finite() or lot <= 0 or lot != lot.to_integral_value():
         raise ValueError(f"CTP order {field_name} must be a positive integer lot.")
     return int(lot)
@@ -202,23 +199,15 @@ _CTP_QUOTE_INVALID_FLOAT_THRESHOLD = float_info.max / 2
 def _positive_ctp_price(value: Any, field_name: str = "price") -> float:
     """Reject non-finite values and CTP's DBL_MAX missing-value sentinel."""
     if isinstance(value, bool) or value in (None, ""):
-        raise ValueError(
-            f"CTP order {field_name} must be a positive price with a finite value."
-        )
+        raise ValueError(f"CTP order {field_name} must be a positive price with a finite value.")
     try:
         price = Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(
             f"CTP order {field_name} must be a positive price with a finite value."
         ) from exc
-    if (
-        not price.is_finite()
-        or price <= 0
-        or abs(price) >= _CTP_INVALID_FLOAT_THRESHOLD
-    ):
-        raise ValueError(
-            f"CTP order {field_name} must be a positive price with a finite value."
-        )
+    if not price.is_finite() or price <= 0 or abs(price) >= _CTP_INVALID_FLOAT_THRESHOLD:
+        raise ValueError(f"CTP order {field_name} must be a positive price with a finite value.")
     return float(price)
 
 
@@ -255,9 +244,7 @@ def _validate_ctp_quote(row: CtpTickerData) -> bool:
         ("BID_PRICE", "BidPrice1", row.get_bid_price()),
         ("ASK_PRICE", "AskPrice1", row.get_ask_price()),
     ):
-        if not _valid_ctp_quote_number(
-            _raw_quote_value(row, raw_name, value), positive=True
-        ):
+        if not _valid_ctp_quote_number(_raw_quote_value(row, raw_name, value), positive=True):
             _append_quote_quality_flag(row, f"INVALID_{field_name}")
             valid = False
     for field_name, raw_name, value in (
@@ -271,9 +258,7 @@ def _validate_ctp_quote(row: CtpTickerData) -> bool:
             valid = False
     bid = row.get_bid_price()
     ask = row.get_ask_price()
-    if _valid_ctp_quote_number(bid, positive=True) and _valid_ctp_quote_number(
-        ask, positive=True
-    ):
+    if _valid_ctp_quote_number(bid, positive=True) and _valid_ctp_quote_number(ask, positive=True):
         if float(bid) > float(ask):
             _append_quote_quality_flag(row, "CROSSED_BOOK")
             valid = False
@@ -297,22 +282,16 @@ def _safe_ctp_quote_number(value: Any) -> float:
 
 def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
     resolved = dict(kwargs)
-    broker_id = str(
-        resolved.get("broker_id") or os.environ.get("CTP_BROKER_ID") or ""
-    ).strip()
+    broker_id = str(resolved.get("broker_id") or os.environ.get("CTP_BROKER_ID") or "").strip()
     user_id = str(
         resolved.get("user_id")
         or resolved.get("investor_id")
         or os.environ.get("CTP_USER_ID")
         or ""
     ).strip()
-    password = str(
-        resolved.get("password") or os.environ.get("CTP_PASSWORD") or ""
-    ).strip()
+    password = str(resolved.get("password") or os.environ.get("CTP_PASSWORD") or "").strip()
     auth_code = str(
-        resolved.get("auth_code")
-        or os.environ.get("CTP_AUTH_CODE")
-        or "0000000000000000"
+        resolved.get("auth_code") or os.environ.get("CTP_AUTH_CODE") or "0000000000000000"
     ).strip()
     app_id = str(
         resolved.get("app_id") or os.environ.get("CTP_APP_ID") or "simnow_client_test"
@@ -335,27 +314,16 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
     auto_detect_fronts = _as_bool(resolved.get("auto_detect_fronts"), default=False)
     supplied_td = td_front or static_td
     supplied_md = md_front or static_md
-    if (
-        claimed_profile
-        and not auto_detect_fronts
-        and bool(supplied_td) != bool(supplied_md)
-    ):
-        raise ValueError(
-            "claimed CTP profile requires both td_front and md_front, or neither"
-        )
+    if claimed_profile and not auto_detect_fronts and bool(supplied_td) != bool(supplied_md):
+        raise ValueError("claimed CTP profile requires both td_front and md_front, or neither")
     required_profile = (
-        str(
-            resolved.get("require_ctp_profile")
-            or resolved.get("ctp_required_profile")
-            or ""
-        )
+        str(resolved.get("require_ctp_profile") or resolved.get("ctp_required_profile") or "")
         .strip()
         .lower()
     )
     if required_profile and (td_front or md_front) and not claimed_profile:
         raise RuntimeError(
-            "required CTP profile cannot be proven from explicit fronts without "
-            "ctp_env_profile"
+            "required CTP profile cannot be proven from explicit fronts without ctp_env_profile"
         )
     if claimed_profile and required_profile:
         required_matches = (
@@ -374,9 +342,7 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
     auto_detected_selection = False
     if auto_detect_fronts:
         if bool(td_front) != bool(md_front):
-            raise ValueError(
-                "auto-detected CTP front override requires both td_front and md_front"
-            )
+            raise ValueError("auto-detected CTP front override requires both td_front and md_front")
         if not td_front and not md_front:
             # Process-wide CTP_TD/MD variables are compatibility state, not a
             # per-call override. Re-probe from the frozen profile family so a
@@ -423,9 +389,7 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
             )
         env_name = claimed_profile
         env_readiness = (
-            "tcp_pair_reachable"
-            if auto_detected_selection
-            else "explicit_official_pair"
+            "tcp_pair_reachable" if auto_detected_selection else "explicit_official_pair"
         )
         selected_environment = "simnow"
     else:
@@ -589,10 +553,7 @@ class CtpRequestData(Feed):
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
         trader = self._trader
-        if (
-            trader is not None
-            and getattr(trader, "auto_settlement_confirm", None) is not False
-        ):
+        if trader is not None and getattr(trader, "auto_settlement_confirm", None) is not False:
             raise ctp_client.CtpExecutionGateError(
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
@@ -601,16 +562,12 @@ class CtpRequestData(Feed):
         """Install the SDK-owned gate without changing legacy feed behavior."""
 
         if not ctp_client._is_ctp_core_execution_authority(capability):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_capability_required"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_required")
         with self._connect_lock:
             self._ensure_read_only_connection_safe()
             installed = self._execution_gate_capability
             if installed is not None and installed is not capability:
-                raise ctp_client.CtpExecutionGateError(
-                    "ctp_execution_gate_already_configured"
-                )
+                raise ctp_client.CtpExecutionGateError("ctp_execution_gate_already_configured")
             self._execution_gate_capability = capability
             trader = self._trader
             if trader is not None:
@@ -644,19 +601,14 @@ class CtpRequestData(Feed):
             or str(info.get("profile") or "").strip() != profile
             or not profile
         ):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_environment_unverified"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_environment_unverified")
         trader = self._trader
         identity_is_current = getattr(trader, "_bound_identity_is_current", None)
         if (
             trader is None
-            or str(getattr(trader, "_bound_front", "") or "")
-            != self._execution_bound_td_front
-            or str(getattr(trader, "_bound_broker_id", "") or "")
-            != self._execution_bound_broker_id
-            or str(getattr(trader, "_bound_user_id", "") or "")
-            != self._execution_bound_user_id
+            or str(getattr(trader, "_bound_front", "") or "") != self._execution_bound_td_front
+            or str(getattr(trader, "_bound_broker_id", "") or "") != self._execution_bound_broker_id
+            or str(getattr(trader, "_bound_user_id", "") or "") != self._execution_bound_user_id
             or str(getattr(trader, "_session_native_front", "") or "")
             != self._execution_bound_td_front
             or not callable(identity_is_current)
@@ -682,9 +634,7 @@ class CtpRequestData(Feed):
 
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
-                raise ctp_client.CtpExecutionGateError(
-                    "ctp_execution_gate_capability_mismatch"
-                )
+                raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             environment = self._execution_environment_proof()
             trader = self._trader
             method = getattr(trader, "_issue_execution_authorization_for_core", None)
@@ -708,9 +658,7 @@ class CtpRequestData(Feed):
 
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
-                raise ctp_client.CtpExecutionGateError(
-                    "ctp_execution_gate_capability_mismatch"
-                )
+                raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             environment = self._execution_environment_proof()
             trader = self._trader
             method = getattr(trader, "_issue_settlement_authorization_for_core", None)
@@ -733,9 +681,7 @@ class CtpRequestData(Feed):
 
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
-                raise ctp_client.CtpExecutionGateError(
-                    "ctp_execution_gate_capability_mismatch"
-                )
+                raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             trader = self._trader
             method = getattr(trader, "arm_execution_gate", None)
             if trader is None or not callable(method):
@@ -765,9 +711,7 @@ class CtpRequestData(Feed):
 
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
-                raise ctp_client.CtpExecutionGateError(
-                    "ctp_execution_gate_capability_mismatch"
-                )
+                raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             trader = self._trader
             if trader is None:
                 return self.get_execution_gate_state()
@@ -810,25 +754,17 @@ class CtpRequestData(Feed):
             # but it must never retain the former unguarded order path.  The
             # opaque capability is installed only by the owning SDK execution
             # session before an arming proof is accepted.
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_capability_required"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_required")
         if capability is not installed:
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_capability_mismatch"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
         trader = self._trader
         method = getattr(trader, "require_execution_write", None)
         state_reader = getattr(trader, "get_execution_gate_state", None)
         if trader is None or not callable(method) or not callable(state_reader):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         state = state_reader()
         if not isinstance(state, dict) or state.get("managed") is not True:
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         if state.get("armed") is not True:
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_unarmed")
         method(capability, symbol, exchange_id)
@@ -847,38 +783,24 @@ class CtpRequestData(Feed):
         """
 
         installed = self._execution_gate_capability
-        if installed is None or not ctp_client._is_ctp_core_execution_authority(
-            installed
-        ):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_capability_required"
-            )
+        if installed is None or not ctp_client._is_ctp_core_execution_authority(installed):
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_required")
         if capability is not installed:
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_capability_mismatch"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
         trader = self._trader
         method = getattr(trader, "confirm_settlement", None)
         state_reader = getattr(trader, "get_execution_gate_state", None)
         if trader is None or not callable(method) or not callable(state_reader):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         state = state_reader()
         if not isinstance(state, dict) or state.get("managed") is not True:
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         if state.get("armed") is not False:
             raise ctp_client.CtpExecutionGateError(
                 "ctp_execution_gate_settlement_requires_disarmed"
             )
-        if settlement_authorization is None or isinstance(
-            settlement_authorization, Mapping
-        ):
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_settlement_authorization_required"
-            )
+        if settlement_authorization is None or isinstance(settlement_authorization, Mapping):
+            raise ctp_client.CtpExecutionGateError("ctp_settlement_authorization_required")
         # Re-read the provider-verified front/profile at consumption time, not
         # only when the token was issued.  A mutable feed/client attribute or
         # reconnect must not make a previously valid settlement grant usable
@@ -895,9 +817,7 @@ class CtpRequestData(Feed):
         if self._trader is None or not self._trader.is_read_only_ready:
             self.connect()
         if not self._trader or not self._trader.is_read_only_ready:
-            raise BtConnectionError(
-                "CTP", "TraderClient not read-only ready after connect()"
-            )
+            raise BtConnectionError("CTP", "TraderClient not read-only ready after connect()")
 
     def _ensure_trading_ready(self):
         self._ensure_connected()
@@ -941,9 +861,7 @@ class CtpRequestData(Feed):
         if trader is not None:
             if capability is not None:
                 with suppress(Exception):
-                    trader.disarm_execution_gate(
-                        capability, "ctp_execution_gate_feed_disconnected"
-                    )
+                    trader.disarm_execution_gate(capability, "ctp_execution_gate_feed_disconnected")
             trader.stop()
         self._connected = False
 
@@ -964,9 +882,7 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], "get_account", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "get_account", symbol, extra_data, status=False)
         result = trader.query_account_result(timeout=kwargs.get("timeout", 5))
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
@@ -979,9 +895,7 @@ class CtpRequestData(Feed):
         if result.complete and not rows:
             payload["account_snapshot_error"] = "complete_query_returned_no_account"
         elif result.complete and len(rows) > 1:
-            payload["account_snapshot_error"] = (
-                "complete_query_returned_multiple_accounts"
-            )
+            payload["account_snapshot_error"] = "complete_query_returned_multiple_accounts"
         return self._make_request_data(
             rows if snapshot_complete else [],
             "get_account",
@@ -997,9 +911,7 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], "get_position", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "get_position", symbol, extra_data, status=False)
         result = trader.query_positions_result(timeout=kwargs.get("timeout", 5))
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
@@ -1007,9 +919,7 @@ class CtpRequestData(Feed):
         for raw in result.records:
             data = _ctp_field_to_dict(raw)
             rows.append(
-                CtpPositionData(
-                    data, data.get("InstrumentID", symbol), self.asset_type, True
-                )
+                CtpPositionData(data, data.get("InstrumentID", symbol), self.asset_type, True)
             )
         return self._make_request_data(
             rows if result.complete else [],
@@ -1023,14 +933,10 @@ class CtpRequestData(Feed):
         return self._make_request_data([], "get_tick", symbol, extra_data, status=False)
 
     def get_depth(self, symbol, count=5, extra_data=None, **kwargs):
-        return self._make_request_data(
-            [], "get_depth", symbol, extra_data, status=False
-        )
+        return self._make_request_data([], "get_depth", symbol, extra_data, status=False)
 
     def get_kline(self, symbol, period, count=100, extra_data=None, **kwargs):
-        return self._make_request_data(
-            [], "get_kline", symbol, extra_data, status=False
-        )
+        return self._make_request_data([], "get_kline", symbol, extra_data, status=False)
 
     def make_order(
         self,
@@ -1050,9 +956,7 @@ class CtpRequestData(Feed):
         self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], "make_order", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "make_order", symbol, extra_data, status=False)
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         try:
             side, order_kind = str(order_type or "").lower().split("-", 1)
@@ -1092,9 +996,7 @@ class CtpRequestData(Feed):
         field.OrderPriceType = "2"
         field.TimeCondition = "3"
         field.VolumeCondition = "1"
-        time_in_force = str(
-            kwargs.get("time_in_force") or kwargs.get("tif") or "GFD"
-        ).upper()
+        time_in_force = str(kwargs.get("time_in_force") or kwargs.get("tif") or "GFD").upper()
         if time_in_force == "DAY":
             time_in_force = "GFD"
         if time_in_force != "GFD":
@@ -1121,17 +1023,13 @@ class CtpRequestData(Feed):
             # Do not preserve a raw ``ReqOrderInsert`` compatibility fallback:
             # it would bypass the locked final gate in ``TraderClient`` after
             # the feed has validated its initial authorization.
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         order_dict = _ctp_field_to_dict(field)
         order_dict["_ret"] = ret
         order_dict["FrontID"] = getattr(trader, "_front_id", 0)
         order_dict["SessionID"] = getattr(trader, "_session_id", 0)
         if ret != 0:
-            return self._make_request_data(
-                [], "make_order", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "make_order", symbol, extra_data, status=False)
         return self._make_request_data(
             [CtpOrderData(order_dict, symbol, self.asset_type, True)],
             "make_order",
@@ -1146,9 +1044,7 @@ class CtpRequestData(Feed):
         self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], "cancel_order", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "cancel_order", symbol, extra_data, status=False)
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         field = CThostFtdcInputOrderActionField()
         field.BrokerID = self.broker_id
@@ -1177,9 +1073,7 @@ class CtpRequestData(Feed):
         else:
             # See the insert path above.  A cancellation is also a real CTP
             # write and must cross the typed, locked native gate.
-            raise ctp_client.CtpExecutionGateError(
-                "ctp_execution_gate_native_contract_unavailable"
-            )
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
         return self._make_request_data(
             [_ctp_field_to_dict(field)],
             "cancel_order",
@@ -1191,9 +1085,7 @@ class CtpRequestData(Feed):
     def query_order(self, symbol=None, order_id=None, extra_data=None, **kwargs):
         trader = self._trader
         if trader is None or not getattr(trader, "is_read_only_ready", False):
-            return self._make_request_data(
-                [], "query_order", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "query_order", symbol, extra_data, status=False)
         result = trader.query_orders_result(
             instrument_id=symbol or "",
             exchange_id=kwargs.get("exchange_id", ""),
@@ -1209,8 +1101,7 @@ class CtpRequestData(Feed):
             # The native query filters OrderSysID; filter the alternative
             # client reference here before returning public order containers.
             if any(
-                kwargs.get(key) is not None
-                and str(data.get(native_key, "")) != str(kwargs[key])
+                kwargs.get(key) is not None and str(data.get(native_key, "")) != str(kwargs[key])
                 for key, native_key in (
                     ("order_ref", "OrderRef"),
                     ("front_id", "FrontID"),
@@ -1218,11 +1109,7 @@ class CtpRequestData(Feed):
                 )
             ):
                 continue
-            rows.append(
-                CtpOrderData(
-                    data, data.get("InstrumentID", symbol), self.asset_type, True
-                )
-            )
+            rows.append(CtpOrderData(data, data.get("InstrumentID", symbol), self.asset_type, True))
         return self._make_request_data(
             rows if result.complete else [],
             "query_order",
@@ -1255,9 +1142,7 @@ class CtpRequestData(Feed):
                 continue
             if int(order.volume_total or 0) > 0:
                 rows.append(order)
-        return self._make_request_data(
-            rows, "get_open_orders", symbol, response.get_extra_data()
-        )
+        return self._make_request_data(rows, "get_open_orders", symbol, response.get_extra_data())
 
     def get_deals(
         self,
@@ -1270,9 +1155,7 @@ class CtpRequestData(Feed):
     ):
         trader = self._trader
         if trader is None or not getattr(trader, "is_read_only_ready", False):
-            return self._make_request_data(
-                [], "get_deals", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "get_deals", symbol, extra_data, status=False)
         result = trader.query_trades_result(
             instrument_id=symbol or "",
             exchange_id=kwargs.get("exchange_id", ""),
@@ -1286,11 +1169,7 @@ class CtpRequestData(Feed):
         rows = []
         for raw in result.records:
             data = raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
-            rows.append(
-                CtpTradeData(
-                    data, data.get("InstrumentID", symbol), self.asset_type, True
-                )
-            )
+            rows.append(CtpTradeData(data, data.get("InstrumentID", symbol), self.asset_type, True))
         total_records = len(rows)
         truncated = False
         if count is not None:
@@ -1317,9 +1196,7 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         trader = self._trader
         if trader is None:
-            return self._make_request_data(
-                [], "get_instruments", symbol, extra_data, status=False
-            )
+            return self._make_request_data([], "get_instruments", symbol, extra_data, status=False)
         query_kwargs = {
             "instrument_id": symbol or "",
             "exchange_id": kwargs.get("exchange_id", ""),
@@ -1331,10 +1208,7 @@ class CtpRequestData(Feed):
         result = trader.query_instruments_result(**query_kwargs)
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
-        rows = [
-            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
-            for raw in result.records
-        ]
+        rows = [raw if isinstance(raw, dict) else _ctp_field_to_dict(raw) for raw in result.records]
         return self._make_request_data(
             rows if result.complete else [],
             "get_instruments",
@@ -1353,10 +1227,7 @@ class CtpRequestData(Feed):
         )
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
-        rows = [
-            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
-            for raw in result.records
-        ]
+        rows = [raw if isinstance(raw, dict) else _ctp_field_to_dict(raw) for raw in result.records]
         return self._make_request_data(
             rows if result.complete else [],
             "get_instrument_margin_rate",
@@ -1374,10 +1245,7 @@ class CtpRequestData(Feed):
         )
         payload = dict(extra_data or {})
         payload.update(_query_evidence(result))
-        rows = [
-            raw if isinstance(raw, dict) else _ctp_field_to_dict(raw)
-            for raw in result.records
-        ]
+        rows = [raw if isinstance(raw, dict) else _ctp_field_to_dict(raw) for raw in result.records]
         return self._make_request_data(
             rows if result.complete else [],
             "get_instrument_commission_rate",
@@ -1389,9 +1257,7 @@ class CtpRequestData(Feed):
     def get_exchange_info(self, symbol=None, extra_data=None, **kwargs):
         """Bridge terminal instrument/margin/fee queries to one strict public spec."""
         if not symbol:
-            response = self.get_instruments(
-                symbol=None, extra_data=extra_data, **kwargs
-            )
+            response = self.get_instruments(symbol=None, extra_data=extra_data, **kwargs)
             payload = dict(response.get_extra_data() or {})
             payload.update(
                 metadata_complete=False,
@@ -1444,27 +1310,18 @@ class CtpRequestData(Feed):
         results = (instrument_result, margin_result, commission_result)
         payload = dict(extra_data or {})
         payload["component_queries"] = {
-            result.request_type: result.as_dict(include_records=False)
-            for result in results
+            result.request_type: result.as_dict(include_records=False) for result in results
         }
-        record_complete = all(
-            result.complete and len(result.records) == 1 for result in results
-        )
+        record_complete = all(result.complete and len(result.records) == 1 for result in results)
         session_getter = getattr(self._trader, "get_session_state", None)
         current_session = session_getter() if callable(session_getter) else None
-        bundle_errors = ctp_query_bundle_errors(
-            results, current_session=current_session
-        )
+        bundle_errors = ctp_query_bundle_errors(results, current_session=current_session)
         if not record_complete or bundle_errors:
             payload["metadata_error"] = (
-                "query_record_incomplete"
-                if not record_complete
-                else ",".join(bundle_errors)
+                "query_record_incomplete" if not record_complete else ",".join(bundle_errors)
             )
             payload.update(metadata_complete=False, evidence_complete=False)
-            return self._make_request_data(
-                [], "get_exchange_info", text, payload, status=False
-            )
+            return self._make_request_data([], "get_exchange_info", text, payload, status=False)
 
         spec = build_ctp_instrument_spec(
             instrument,
@@ -1509,8 +1366,7 @@ class CtpRequestData(Feed):
         profile = str(self.ctp_env_profile or "").strip()
         binding_is_current = (
             profile == self._execution_bound_profile
-            and str(self.ctp_environment or "").strip()
-            == self._execution_bound_environment
+            and str(self.ctp_environment or "").strip() == self._execution_bound_environment
             and str(self.td_front or "").strip() == self._execution_bound_td_front
             and str(self.md_front or "").strip() == self._execution_bound_md_front
             and str(self.broker_id or "").strip() == self._execution_bound_broker_id
@@ -1579,10 +1435,8 @@ class CtpRequestData(Feed):
     ) -> bool:
         with self._connect_lock:
             self._ensure_read_only_connection_safe()
-            settlement_authorization, environment = (
-                self._ensure_settlement_confirmation_permitted(
-                    _execution_capability, _settlement_authorization
-                )
+            settlement_authorization, environment = self._ensure_settlement_confirmation_permitted(
+                _execution_capability, _settlement_authorization
             )
             return bool(
                 self._trader.confirm_settlement(
@@ -1590,9 +1444,7 @@ class CtpRequestData(Feed):
                     _execution_capability=_execution_capability,
                     _settlement_authorization=settlement_authorization,
                     _settlement_environment_profile=environment["environment_profile"],
-                    _settlement_environment_verified=environment[
-                        "environment_verified"
-                    ],
+                    _settlement_environment_verified=environment["environment_verified"],
                 )
             )
 
@@ -1678,9 +1530,7 @@ class CtpRequestData(Feed):
             query_kwargs["product_id"] = product_id
         return self._trader.query_instruments_result(**query_kwargs)
 
-    def query_instrument_margin_rate_result(
-        self, *args: Any, **kwargs: Any
-    ) -> QueryResult[Any]:
+    def query_instrument_margin_rate_result(self, *args: Any, **kwargs: Any) -> QueryResult[Any]:
         self._ensure_connected()
         return self._trader.query_instrument_margin_rate_result(*args, **kwargs)
 
@@ -1708,9 +1558,7 @@ class CtpRequestData(Feed):
         self, *args: Any, **kwargs: Any
     ) -> QueryResult[Any]:
         self._ensure_connected()
-        return self._trader.query_option_instrument_commission_rate_result(
-            *args, **kwargs
-        )
+        return self._trader.query_option_instrument_commission_rate_result(*args, **kwargs)
 
 
 class CtpMarketStream(BaseDataStream):
@@ -1747,9 +1595,7 @@ class CtpMarketStream(BaseDataStream):
         self._quote_v2_default_metadata = self._quote_v2_metadata(
             resolved_kwargs.get("quote_v2_metadata")
         )
-        raw_metadata_by_instrument = resolved_kwargs.get(
-            "quote_v2_metadata_by_instrument"
-        )
+        raw_metadata_by_instrument = resolved_kwargs.get("quote_v2_metadata_by_instrument")
         self._quote_v2_metadata_by_instrument = {
             str(instrument): self._quote_v2_metadata(metadata)
             for instrument, metadata in (
@@ -1849,9 +1695,7 @@ class CtpMarketStream(BaseDataStream):
         for metadata in self._quote_v2_subscription_metadata.values():
             metadata["subscription_epoch"] = self._subscription_epoch
 
-    def _advance_quote_v2_connection_generation(
-        self, *, advance_subscription_epoch: bool
-    ) -> None:
+    def _advance_quote_v2_connection_generation(self, *, advance_subscription_epoch: bool) -> None:
         """Start a new stream-local quote generation.
 
         CTP's native generation belongs to one ``MdClient`` instance, whereas
@@ -1911,28 +1755,26 @@ class CtpMarketStream(BaseDataStream):
                 advance_subscription_epoch=self._has_connected_once
             )
             self._observed_client_generation = None
-            client = ctp_client.MdClient(
-                self.md_front, self.broker_id, self.user_id, self.password
-            )
+            client = ctp_client.MdClient(self.md_front, self.broker_id, self.user_id, self.password)
             self._md_client = client
             # Bind the callback to this concrete client and its lifecycle
             # token.  A late callback from a stopped/replaced client cannot be
             # relabelled with the current client's generation or epoch.
-            client.on_tick = lambda tick_field, _client=client, _token=client_token, _capability=callback_capability: self._on_tick(
-                tick_field,
-                client=_client,
-                client_token=_token,
-                _managed_callback_capability=_capability,
-            )
-            client.on_login = (
-                lambda login_field, _client=client, _token=client_token: self._on_login(
-                    login_field, client=_client, client_token=_token
+            client.on_tick = (
+                lambda tick_field, _client=client, _token=client_token, _capability=callback_capability: (
+                    self._on_tick(
+                        tick_field,
+                        client=_client,
+                        client_token=_token,
+                        _managed_callback_capability=_capability,
+                    )
                 )
             )
-            client.on_error = (
-                lambda rsp_info, _client=client, _token=client_token: self._on_error(
-                    rsp_info, client=_client, client_token=_token
-                )
+            client.on_login = lambda login_field, _client=client, _token=client_token: (
+                self._on_login(login_field, client=_client, client_token=_token)
+            )
+            client.on_error = lambda rsp_info, _client=client, _token=client_token: self._on_error(
+                rsp_info, client=_client, client_token=_token
             )
             instruments = list(self._quote_v2_subscription_metadata)
             if instruments:
@@ -1940,13 +1782,9 @@ class CtpMarketStream(BaseDataStream):
             client.start(block=False)
             self._has_connected_once = True
 
-    def _on_login(
-        self, login_field, *, client: Any = None, client_token: int | None = None
-    ):
+    def _on_login(self, login_field, *, client: Any = None, client_token: int | None = None):
         with self._md_callback_lock:
-            if client is not None and not self._is_current_md_callback(
-                client, client_token
-            ):
+            if client is not None and not self._is_current_md_callback(client, client_token):
                 return
             self.state = ConnectionState.AUTHENTICATED
 
@@ -1965,8 +1803,7 @@ class CtpMarketStream(BaseDataStream):
             native_managed_callback = (
                 client is not None
                 and self._managed_quote_v2_callback_capability is not None
-                and _managed_callback_capability
-                is self._managed_quote_v2_callback_capability
+                and _managed_callback_capability is self._managed_quote_v2_callback_capability
                 and self._is_current_md_callback(client, client_token)
             )
             if client is None:
@@ -1981,22 +1818,16 @@ class CtpMarketStream(BaseDataStream):
             tick_dict = _ctp_field_to_dict(tick_field)
             symbol = str(tick_dict.get("InstrumentID", "") or "")
             try:
-                client_generation = int(
-                    getattr(client, "connection_generation", 0) or 0
-                )
+                client_generation = int(getattr(client, "connection_generation", 0) or 0)
             except (TypeError, ValueError):
                 client_generation = 0
             if self._observed_client_generation is None:
                 self._observed_client_generation = client_generation
                 if self._connection_generation <= 0:
-                    self._advance_quote_v2_connection_generation(
-                        advance_subscription_epoch=False
-                    )
+                    self._advance_quote_v2_connection_generation(advance_subscription_epoch=False)
             elif client_generation != self._observed_client_generation:
                 self._observed_client_generation = client_generation
-                self._advance_quote_v2_connection_generation(
-                    advance_subscription_epoch=True
-                )
+                self._advance_quote_v2_connection_generation(advance_subscription_epoch=True)
             self._ingest_seq += 1
             metadata = dict(self._quote_v2_default_metadata)
             metadata.update(self._quote_v2_metadata_by_instrument.get(symbol, {}))
@@ -2035,13 +1866,9 @@ class CtpMarketStream(BaseDataStream):
                 self._attach_managed_quote_v2_receipt(row)
             self.push_data(row)
 
-    def _on_error(
-        self, rsp_info, *, client: Any = None, client_token: int | None = None
-    ):
+    def _on_error(self, rsp_info, *, client: Any = None, client_token: int | None = None):
         with self._md_callback_lock:
-            if client is not None and not self._is_current_md_callback(
-                client, client_token
-            ):
+            if client is not None and not self._is_current_md_callback(client, client_token):
                 return
             self.state = ConnectionState.ERROR
 
@@ -2102,9 +1929,7 @@ class CtpTradeStream(BaseDataStream):
             self._owns_trader = False
             if self._trader is None:
                 self.state = ConnectionState.ERROR
-                raise BtConnectionError(
-                    "CTP", "shared request feed has no TraderClient"
-                )
+                raise BtConnectionError("CTP", "shared request feed has no TraderClient")
             if getattr(self._trader, "auto_settlement_confirm", None) is not False:
                 raise ctp_client.CtpExecutionGateError(
                     "ctp_execution_gate_auto_settlement_confirm_enabled"

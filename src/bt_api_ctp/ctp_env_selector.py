@@ -93,9 +93,7 @@ def _in_trading_session(now: datetime) -> bool:
     return any(start <= current <= end for start, end in _TRADING_SESSIONS)
 
 
-def _get_set1_selection(
-    *, explicit: bool, calendar_verified: bool
-) -> CtpEnvironmentSelection:
+def _get_set1_selection(*, explicit: bool, calendar_verified: bool) -> CtpEnvironmentSelection:
     group = str(os.environ.get("CTP_SET1_GROUP") or "1").strip()
     if group not in _SET1_DEFAULTS:
         raise ValueError(f"unsupported CTP_SET1_GROUP {group!r}; expected '1' or '2'")
@@ -121,9 +119,7 @@ def _get_set1_selection(
     )
 
 
-def _get_set2_selection(
-    *, explicit: bool, calendar_verified: bool
-) -> CtpEnvironmentSelection:
+def _get_set2_selection(*, explicit: bool, calendar_verified: bool) -> CtpEnvironmentSelection:
     td = str(os.environ.get("CTP_SET2_TD_FRONT") or _SET2_DEFAULT[0]).strip()
     md = str(os.environ.get("CTP_SET2_MD_FRONT") or _SET2_DEFAULT[1]).strip()
     if not td or not md:
@@ -167,18 +163,12 @@ def select_ctp_environment(
     """
     selected_env = str(env or os.environ.get("CTP_ENV") or "auto").strip().lower()
     if selected_env not in {"auto", "set1", "set2"}:
-        raise ValueError(
-            f"unsupported CTP_ENV {selected_env!r}; expected auto, set1, or set2"
-        )
+        raise ValueError(f"unsupported CTP_ENV {selected_env!r}; expected auto, set1, or set2")
     current = now or datetime.now()
     if selected_env == "set1":
-        selection = _get_set1_selection(
-            explicit=True, calendar_verified=is_trading_day is True
-        )
+        selection = _get_set1_selection(explicit=True, calendar_verified=is_trading_day is True)
     elif selected_env == "set2":
-        selection = _get_set2_selection(
-            explicit=True, calendar_verified=is_trading_day is not None
-        )
+        selection = _get_set2_selection(explicit=True, calendar_verified=is_trading_day is not None)
     elif is_trading_day is True and _in_trading_session(current):
         selection = _get_set1_selection(explicit=False, calendar_verified=True)
     else:
@@ -210,9 +200,7 @@ def _profile_group(profile: str) -> str:
     raise ValueError(f"unsupported CTP profile {profile!r}")
 
 
-def _optional_profile_group(
-    profile: str | None, *, label: str
-) -> tuple[str, str] | None:
+def _optional_profile_group(profile: str | None, *, label: str) -> tuple[str, str] | None:
     name = str(profile or "").strip().lower()
     if not name:
         return None
@@ -225,9 +213,7 @@ def _optional_profile_group(
 def _configured_environment(env: str) -> str:
     selected_env = str(env or os.environ.get("CTP_ENV") or "auto").strip().lower()
     if selected_env not in {"auto", "set1", "set2"}:
-        raise ValueError(
-            f"unsupported CTP_ENV {selected_env!r}; expected auto, set1, or set2"
-        )
+        raise ValueError(f"unsupported CTP_ENV {selected_env!r}; expected auto, set1, or set2")
     return selected_env
 
 
@@ -338,26 +324,16 @@ def select_reachable_ctp_environment(
         )
     ):
         raise RuntimeError("configured CTP profile conflicts with required CTP profile")
-    if (
-        requested is not None
-        and configured_env != "auto"
-        and requested[1] != configured_env
-    ):
-        raise RuntimeError(
-            "configured CTP profile conflicts with selected CTP environment"
-        )
+    if requested is not None and configured_env != "auto" and requested[1] != configured_env:
+        raise RuntimeError("configured CTP profile conflicts with selected CTP environment")
 
     if requested is not None:
         # Explicit named profiles retain their existing role as an intentional
         # set selection.  Detection may use only its immutable local/alternate
         # family, never the other logical set.
-        base_selection = select_ctp_environment(
-            requested[1], now, is_trading_day=is_trading_day
-        )
+        base_selection = select_ctp_environment(requested[1], now, is_trading_day=is_trading_day)
         base_profile = (
-            requested[0]
-            if requested[0] in _SIMNOW_PROFILE_FRONTS
-            else base_selection.profile
+            requested[0] if requested[0] in _SIMNOW_PROFILE_FRONTS else base_selection.profile
         )
     else:
         # Keep the existing calendar policy intact.  In particular, ``auto``
@@ -403,10 +379,7 @@ def verify_official_simnow_profile(td_front: str, md_front: str, profile: str) -
     """Verify that a claimed profile uses its frozen endpoint pair exactly."""
     name = str(profile or "").strip().lower()
     expected = _SIMNOW_PROFILE_FRONTS.get(name)
-    return (
-        expected is not None
-        and (str(td_front).strip(), str(md_front).strip()) == expected
-    )
+    return expected is not None and (str(td_front).strip(), str(md_front).strip()) == expected
 
 
 def official_simnow_fronts(profile: str) -> tuple[str, str]:

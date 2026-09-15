@@ -127,9 +127,7 @@ class CtpPositionData(PositionData):
         if self.position_volume and self.position_volume > 0:
             multiplier = float(contract_multiplier or 0.0)
             denominator = (
-                self.position_volume * multiplier
-                if multiplier > 0
-                else self.position_volume
+                self.position_volume * multiplier if multiplier > 0 else self.position_volume
             )
             return float(self.position_cost or 0.0) / denominator
         return 0.0

@@ -34,14 +34,12 @@ def _ctp_future_subscribe_handler(
         bt_api._subscription_streams.append(market_stream)
         bt_api.log("CTP market stream started")
 
-    if exchange_params.get(
-        "subscribe_account", True
-    ) and not bt_api._subscription_flags.get("CTP___FUTURE_account", False):
+    if exchange_params.get("subscribe_account", True) and not bt_api._subscription_flags.get(
+        "CTP___FUTURE_account", False
+    ):
         trade_kwargs = dict(exchange_params.items())
         trade_kwargs["stream_name"] = "ctp_trade_stream"
-        trade_kwargs["request_feed"] = getattr(bt_api, "exchange_feeds", {}).get(
-            "CTP___FUTURE"
-        )
+        trade_kwargs["request_feed"] = getattr(bt_api, "exchange_feeds", {}).get("CTP___FUTURE")
         trade_stream = CtpTradeStream(data_queue, **trade_kwargs)
         trade_stream.start()
         bt_api._subscription_streams.append(trade_stream)

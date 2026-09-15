@@ -98,12 +98,8 @@ class CtpTickerData(TickerData):
         self.rules_hash = str(rules_hash or "")
         self.clock_domain_id = str(clock_domain_id or "")
         self.source = str(source or "unknown")
-        self.source_clock_quality = (
-            str(source_clock_quality or "unknown").strip().lower()
-        )
-        self.receive_clock_quality = (
-            str(receive_clock_quality or "unknown").strip().lower()
-        )
+        self.source_clock_quality = str(source_clock_quality or "unknown").strip().lower()
+        self.receive_clock_quality = str(receive_clock_quality or "unknown").strip().lower()
         self.source_clock_error_ms = source_clock_error_ms
         self.receive_clock_error_ms = receive_clock_error_ms
         # A source must explicitly attest freshness.  CTP native fields alone
@@ -251,9 +247,7 @@ class CtpTickerData(TickerData):
         update_time = str(self.update_time_val or "")
         if len(day) == 8 and day.isdigit() and update_time:
             try:
-                local_time = datetime.strptime(
-                    f"{day} {update_time}", "%Y%m%d %H:%M:%S"
-                ).replace(
+                local_time = datetime.strptime(f"{day} {update_time}", "%Y%m%d %H:%M:%S").replace(
                     microsecond=int(self.update_millisec or 0) * 1000,
                     tzinfo=timezone(timedelta(hours=8)),
                 )

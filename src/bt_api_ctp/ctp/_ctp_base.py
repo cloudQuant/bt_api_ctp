@@ -138,9 +138,7 @@ def _expected_ctp_extension_names() -> list[str]:
 def _available_ctp_extension_names() -> list[str]:
     package_dir = _ctp_package_dir()
     return sorted(
-        p.name
-        for p in package_dir.glob("_ctp*")
-        if p.is_file() and p.name != "_ctp_base.py"
+        p.name for p in package_dir.glob("_ctp*") if p.is_file() and p.name != "_ctp_base.py"
     )
 
 
@@ -162,11 +160,7 @@ def _format_ctp_import_warning(import_error: Exception) -> str:
 
 
 try:
-    if (
-        getattr(globals().get("__spec__"), "parent", None)
-        or __package__
-        or "." in __name__
-    ):
+    if getattr(globals().get("__spec__"), "parent", None) or __package__ or "." in __name__:
         from . import _ctp
     else:
         import _ctp
@@ -217,11 +211,7 @@ def _has_audited_darwin_arm64_login_shim() -> bool:
     except Exception:
         return False
     framework = (
-        _ctp_package_dir()
-        / "thosttraderapi_se.framework"
-        / "Versions"
-        / "A"
-        / "thosttraderapi_se"
+        _ctp_package_dir() / "thosttraderapi_se.framework" / "Versions" / "A" / "thosttraderapi_se"
     )
     return (
         version == _AUDITED_DARWIN_ARM64_TRADER_VERSION
@@ -254,8 +244,7 @@ def get_ctp_native_diagnostics() -> dict[str, object]:
     matching = [name for name in available if name in expected]
     matching_paths = [package_dir / name for name in matching]
     matching_sha256 = {
-        str(path): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in matching_paths
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in matching_paths
     }
     native_loaded = is_ctp_native_loaded()
     import_error = get_ctp_import_error()
@@ -373,9 +362,7 @@ def _swig_repr(self):
         else:
             values.append(f'{key}: "{value}"')
 
-    return (
-        f"<{self.__class__.__module__}.{self.__class__.__name__}; {', '.join(values)}>"
-    )
+    return f"<{self.__class__.__module__}.{self.__class__.__name__}; {', '.join(values)}>"
 
 
 __all__ = [

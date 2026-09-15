@@ -60,9 +60,7 @@ def _canonical_query_value(value: Any) -> Any:
     # Unsupported mutable/native objects are intentionally never normalized
     # via ``str`` or ``repr``.  The type marker keeps the terminal payload
     # bound while the strict parser rejects the field as non-native.
-    return {
-        "__unsupported_type__": f"{type(value).__module__}.{type(value).__qualname__}"
-    }
+    return {"__unsupported_type__": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
 def _query_records_digest(records: Iterable[Any]) -> str:
@@ -140,9 +138,7 @@ def _new_query_source(
             seconds=_QUERY_EVIDENCE_MAX_TTL_SECONDS
         )
     if completed_monotonic is not None:
-        trusted_expires_monotonic = (
-            completed_monotonic + _QUERY_EVIDENCE_MAX_TTL_SECONDS
-        )
+        trusted_expires_monotonic = completed_monotonic + _QUERY_EVIDENCE_MAX_TTL_SECONDS
     return _QuerySource(
         _seal=_QUERY_SOURCE_SEAL,
         issuer=issuer,
@@ -164,9 +160,7 @@ def _new_query_source(
     )
 
 
-def _attach_query_source(
-    result: QueryResult[Any], source: _QuerySource
-) -> QueryResult[Any]:
+def _attach_query_source(result: QueryResult[Any], source: _QuerySource) -> QueryResult[Any]:
     if type(source) is not _QuerySource or source._seal is not _QUERY_SOURCE_SEAL:
         raise TypeError("invalid query source")
     object.__setattr__(result, "_source", source)
@@ -224,9 +218,7 @@ class QueryResult(Generic[T]):
     late_callback_count: int = 0
     unsupported: bool = False
     submit_code: int | None = None
-    _source: _QuerySource | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
+    _source: _QuerySource | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def query_source(self) -> _QuerySource | None:
@@ -255,9 +247,7 @@ class QueryResult(Generic[T]):
             "account_fingerprint": self.account_fingerprint,
             "started_at_utc": self.started_at_utc.isoformat(),
             "completed_at_utc": (
-                self.completed_at_utc.isoformat()
-                if self.completed_at_utc is not None
-                else None
+                self.completed_at_utc.isoformat() if self.completed_at_utc is not None else None
             ),
             "is_last_seen": self.is_last_seen,
             "error_code": self.error_code,

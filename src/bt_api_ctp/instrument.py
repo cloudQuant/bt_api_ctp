@@ -100,9 +100,7 @@ def normalize_ctp_instrument(instrument_info: Any) -> dict[str, Any]:
         "multiplier": _reference_number(
             instrument_info, "VolumeMultiple", "multiplier", "contract_size"
         ),
-        "price_tick": _reference_number(
-            instrument_info, "PriceTick", "price_tick", "tick_size"
-        ),
+        "price_tick": _reference_number(instrument_info, "PriceTick", "price_tick", "tick_size"),
         "min_limit_order_volume": _reference_number(
             instrument_info, "MinLimitOrderVolume", "min_limit_order_volume"
         ),
@@ -119,17 +117,11 @@ def normalize_ctp_instrument(instrument_info: Any) -> dict[str, Any]:
             text("UnderlyingInstrID", "underlying_instrument") if is_option else None
         ),
         "strike_price": (
-            _reference_number(instrument_info, "StrikePrice", "strike_price")
-            if is_option
-            else None
+            _reference_number(instrument_info, "StrikePrice", "strike_price") if is_option else None
         ),
-        "option_type": (
-            {"1": "call", "2": "put"}.get(text("OptionsType")) if is_option else None
-        ),
+        "option_type": ({"1": "call", "2": "put"}.get(text("OptionsType")) if is_option else None),
         "underlying_multiple": (
-            _reference_number(
-                instrument_info, "UnderlyingMultiple", "underlying_multiple"
-            )
+            _reference_number(instrument_info, "UnderlyingMultiple", "underlying_multiple")
             if is_option
             else None
         ),
@@ -139,9 +131,7 @@ def normalize_ctp_instrument(instrument_info: Any) -> dict[str, Any]:
         "start_delivery_date": text("StartDelivDate", "start_delivery_date"),
         "end_delivery_date": text("EndDelivDate", "end_delivery_date"),
         "delivery_year": field_value(instrument_info, "DeliveryYear", "delivery_year"),
-        "delivery_month": field_value(
-            instrument_info, "DeliveryMonth", "delivery_month"
-        ),
+        "delivery_month": field_value(instrument_info, "DeliveryMonth", "delivery_month"),
         "life_phase": {
             "0": "not_started",
             "1": "started",
@@ -150,9 +140,7 @@ def normalize_ctp_instrument(instrument_info: Any) -> dict[str, Any]:
         }.get(text("InstLifePhase"), "unknown"),
         "is_trading": is_trading,
         "status": (
-            "trading"
-            if is_trading is True
-            else "disabled" if is_trading is False else "unknown"
+            "trading" if is_trading is True else "disabled" if is_trading is False else "unknown"
         ),
         "exercise_style": None,
     }
@@ -196,16 +184,10 @@ def ctp_instrument_evidence_errors(
         elif expected_instrument and actual_instrument != expected_instrument:
             errors.append(f"mismatched_{label}_instrument_id")
         actual_exchange = str(field_value(source, "ExchangeID") or "").strip().upper()
-        if (
-            expected_exchange
-            and actual_exchange
-            and actual_exchange != expected_exchange
-        ):
+        if expected_exchange and actual_exchange and actual_exchange != expected_exchange:
             errors.append(f"mismatched_{label}_exchange_id")
 
-    multiplier = field_float(
-        instrument_info, "VolumeMultiple", "contract_size", "multiplier"
-    )
+    multiplier = field_float(instrument_info, "VolumeMultiple", "contract_size", "multiplier")
     price_tick = field_float(instrument_info, "PriceTick", "price_tick", "tick_size")
     if multiplier is None or not math.isfinite(multiplier) or multiplier <= 0:
         errors.append("invalid_volume_multiple")
@@ -250,19 +232,13 @@ def ctp_query_bundle_errors(
 ) -> tuple[str, ...]:
     """Require one account and connection generation across a query bundle."""
     errors: list[str] = []
-    generations = {
-        int(getattr(result, "connection_generation", 0) or 0) for result in results
-    }
+    generations = {int(getattr(result, "connection_generation", 0) or 0) for result in results}
     account_fingerprints = {
         str(getattr(result, "account_fingerprint", "") or "") for result in results
     }
     if len(generations) != 1 or not generations or 0 in generations:
         errors.append("mixed_query_connection_generation")
-    if (
-        len(account_fingerprints) != 1
-        or not account_fingerprints
-        or "" in account_fingerprints
-    ):
+    if len(account_fingerprints) != 1 or not account_fingerprints or "" in account_fingerprints:
         errors.append("mixed_query_account_fingerprint")
 
     session = current_session or {}
@@ -284,9 +260,7 @@ def ctp_query_bundle_identity_error(
 ) -> str | None:
     """Require every component query to belong to one current account generation."""
     generations = {getattr(result, "connection_generation", None) for result in results}
-    fingerprints = {
-        str(getattr(result, "account_fingerprint", "") or "") for result in results
-    }
+    fingerprints = {str(getattr(result, "account_fingerprint", "") or "") for result in results}
     if len(generations) != 1 or None in generations:
         return "component_query_generation_mismatch"
     if len(fingerprints) != 1 or "" in fingerprints:
@@ -328,20 +302,12 @@ def build_ctp_instrument_spec(
     metadata = normalize_ctp_instrument(instrument_info)
     multiplier = metadata["multiplier"]
     price_tick = metadata["price_tick"]
-    long_margin_rate = field_float(
-        margin_info, "LongMarginRatioByMoney", "long_margin_rate"
-    )
-    short_margin_rate = field_float(
-        margin_info, "ShortMarginRatioByMoney", "short_margin_rate"
-    )
+    long_margin_rate = field_float(margin_info, "LongMarginRatioByMoney", "long_margin_rate")
+    short_margin_rate = field_float(margin_info, "ShortMarginRatioByMoney", "short_margin_rate")
     open_fee_rate = field_float(commission_info, "OpenRatioByMoney", "open_fee_rate")
-    open_fee_amount = field_float(
-        commission_info, "OpenRatioByVolume", "open_fee_amount"
-    )
+    open_fee_amount = field_float(commission_info, "OpenRatioByVolume", "open_fee_amount")
     close_fee_rate = field_float(commission_info, "CloseRatioByMoney", "close_fee_rate")
-    close_fee_amount = field_float(
-        commission_info, "CloseRatioByVolume", "close_fee_amount"
-    )
+    close_fee_amount = field_float(commission_info, "CloseRatioByVolume", "close_fee_amount")
     close_today_fee_rate = field_float(
         commission_info,
         "CloseTodayRatioByMoney",
@@ -352,12 +318,8 @@ def build_ctp_instrument_spec(
         "CloseTodayRatioByVolume",
         "close_today_fee_amount",
     )
-    margin_rate = (
-        long_margin_rate if long_margin_rate is not None else short_margin_rate
-    )
-    max_quantity = field_float(
-        instrument_info, "MaxLimitOrderVolume", "max_limit_order_volume"
-    )
+    margin_rate = long_margin_rate if long_margin_rate is not None else short_margin_rate
+    max_quantity = field_float(instrument_info, "MaxLimitOrderVolume", "max_limit_order_volume")
 
     spec: dict[str, Any] = {
         **metadata,
@@ -390,7 +352,9 @@ def build_ctp_instrument_spec(
         "linear": (
             True
             if metadata["asset_type"] == "future"
-            else False if metadata["asset_type"] in {"option", "spot_option"} else None
+            else False
+            if metadata["asset_type"] in {"option", "spot_option"}
+            else None
         ),
         "margin": margin_rate,
         "margin_rate": margin_rate,

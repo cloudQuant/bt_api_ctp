@@ -71,9 +71,9 @@ class CtpTradeData(TradeData):
             self.trade_time_text = from_dict_get_string(info, "TradeTime")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
             self.trading_day = from_dict_get_string(info, "TradingDay")
-            self.account_id = from_dict_get_string(
-                info, "AccountID"
-            ) or from_dict_get_string(info, "InvestorID")
+            self.account_id = from_dict_get_string(info, "AccountID") or from_dict_get_string(
+                info, "InvestorID"
+            )
         self._data_initialized = True
         self._initialized = True
         return self

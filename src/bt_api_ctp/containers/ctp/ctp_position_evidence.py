@@ -273,9 +273,7 @@ class CtpPositionEvidence:
 
 def _is_aware(value: Any) -> bool:
     return (
-        isinstance(value, datetime)
-        and value.tzinfo is not None
-        and value.utcoffset() is not None
+        isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
     )
 
 
@@ -396,14 +394,10 @@ def _text_field(name: str, present: bool, raw: Any) -> CtpPositionField:
         return _unknown_field(name, raw, "unknown_position_date")
     if name == "TradingDay" and not _valid_day(raw):
         return _unknown_field(name, raw, "invalid_trading_day")
-    return CtpPositionField(
-        name=name, present=True, state="value", raw_value=raw, value=raw
-    )
+    return CtpPositionField(name=name, present=True, state="value", raw_value=raw, value=raw)
 
 
-def _decimal_field(
-    name: str, present: bool, raw: Any, *, integer: bool
-) -> CtpPositionField:
+def _decimal_field(name: str, present: bool, raw: Any, *, integer: bool) -> CtpPositionField:
     if not present:
         return _field_missing(name)
     if type(raw) not in (int, float, str, Decimal):
@@ -417,9 +411,7 @@ def _decimal_field(
     if integer and parsed != parsed.to_integral_value():
         return _unknown_field(name, raw, "fractional_contract_quantity")
     value: Any = int(parsed) if integer else parsed
-    return CtpPositionField(
-        name=name, present=True, state="value", raw_value=raw, value=value
-    )
+    return CtpPositionField(name=name, present=True, state="value", raw_value=raw, value=value)
 
 
 def parse_ctp_position_row(source: Any) -> CtpPositionRowEvidence:
@@ -447,11 +439,7 @@ def parse_ctp_position_row(source: Any) -> CtpPositionRowEvidence:
 
     errors = tuple(name for name in _REQUIRED_FIELDS if fields[name].state != "value")
     for name in (*CTP_POSITION_ACCOUNT_FIELDS, *CTP_POSITION_FROZEN_FIELDS):
-        if (
-            fields[name].present
-            and fields[name].state != "value"
-            and name not in errors
-        ):
+        if fields[name].present and fields[name].state != "value" and name not in errors:
             errors += (name,)
     return CtpPositionRowEvidence(
         raw_record=_freeze(raw_record),
@@ -475,8 +463,7 @@ def _session_scope(session_state: Any) -> _QuerySessionScope:
     if (
         type(session_state.account_fingerprint) is not str
         or not session_state.account_fingerprint
-        or session_state.account_fingerprint
-        != session_state.account_fingerprint.strip()
+        or session_state.account_fingerprint != session_state.account_fingerprint.strip()
         or type(session_state.broker_id) is not str
         or not session_state.broker_id
         or session_state.broker_id != session_state.broker_id.strip()
@@ -567,9 +554,7 @@ def _query_source(
         or not isfinite(source.trusted_expires_monotonic)
         or source.trusted_expires_monotonic <= source.completed_monotonic
         or abs(
-            (
-                _utc(source.trusted_expires_at_utc) - _utc(source.completed_at_utc)
-            ).total_seconds()
+            (_utc(source.trusted_expires_at_utc) - _utc(source.completed_at_utc)).total_seconds()
             - _QUERY_EVIDENCE_MAX_TTL_SECONDS
         )
         > 1e-6
@@ -668,10 +653,7 @@ def build_ctp_position_evidence(
     account = scope.account_fingerprint
     generation = scope.connection_generation
     trading_day = source.trading_day
-    if (
-        result.account_fingerprint != account
-        or result.connection_generation != generation
-    ):
+    if result.account_fingerprint != account or result.connection_generation != generation:
         raise CtpPositionEvidenceError("position_query_scope_mismatch")
     if not result.complete:
         raise CtpPositionEvidenceError("position_query_incomplete")
@@ -690,9 +672,7 @@ def build_ctp_position_evidence(
     if not _is_aware(result.started_at_utc) or not _is_aware(result.completed_at_utc):
         _invalid_time("position_query_time_invalid", "query timestamps must be aware")
     if not _is_aware(current) or not _is_aware(expires_at_utc):
-        _invalid_time(
-            "position_query_time_invalid", "evidence timestamps must be aware"
-        )
+        _invalid_time("position_query_time_invalid", "evidence timestamps must be aware")
     started = _utc(result.started_at_utc)
     completed = _utc(result.completed_at_utc)
     current = _utc(current)
@@ -700,9 +680,7 @@ def build_ctp_position_evidence(
     if started > completed or completed > current:
         _invalid_time("position_query_time_invalid", "query interval is not current")
     if requested_expires <= completed:
-        _invalid_time(
-            "position_query_time_invalid", "expiry must follow query completion"
-        )
+        _invalid_time("position_query_time_invalid", "expiry must follow query completion")
     requested_ttl_seconds = (requested_expires - completed).total_seconds()
     if not isfinite(requested_ttl_seconds) or requested_ttl_seconds <= 0:
         _invalid_time("position_query_time_invalid", "expiry interval is invalid")
@@ -717,10 +695,7 @@ def build_ctp_position_evidence(
         or isinstance(monotonic_expires_at, bool)
         or not isfinite(monotonic_expires_at)
         or monotonic_expires_at <= source.completed_monotonic
-        or abs(
-            (monotonic_expires_at - source.completed_monotonic) - requested_ttl_seconds
-        )
-        > 1e-6
+        or abs((monotonic_expires_at - source.completed_monotonic) - requested_ttl_seconds) > 1e-6
     ):
         _invalid_time("position_query_clock_invalid", "monotonic expiry is not bound")
     # The caller may shorten the issuer's deadline, but cannot replace it
@@ -728,9 +703,7 @@ def build_ctp_position_evidence(
     # deadline captured by the trusted query source.
     trusted_expires = _utc(source.trusted_expires_at_utc)
     expires = min(requested_expires, trusted_expires)
-    monotonic_expires = min(
-        float(monotonic_expires_at), float(source.trusted_expires_monotonic)
-    )
+    monotonic_expires = min(float(monotonic_expires_at), float(source.trusted_expires_monotonic))
     ttl_seconds = (expires - completed).total_seconds()
     if (
         not isfinite(ttl_seconds)
@@ -740,9 +713,7 @@ def build_ctp_position_evidence(
     ):
         _invalid_time("position_query_clock_invalid", "monotonic expiry is not bound")
     if mono_current < source.completed_monotonic:
-        _invalid_time(
-            "position_query_clock_invalid", "monotonic query interval is invalid"
-        )
+        _invalid_time("position_query_clock_invalid", "monotonic query interval is invalid")
     if current >= expires or mono_current >= monotonic_expires:
         raise CtpPositionEvidenceError("position_query_expired")
 
@@ -788,11 +759,7 @@ def build_ctp_position_evidence(
         code = (
             "position_row_account_mismatch"
             if account_mismatch
-            else (
-                "position_row_scope_mismatch"
-                if day_mismatch
-                else "position_row_incomplete"
-            )
+            else ("position_row_scope_mismatch" if day_mismatch else "position_row_incomplete")
         )
         raise CtpPositionEvidenceError(code, rows=tuple(row_errors))
 

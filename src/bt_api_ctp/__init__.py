@@ -18,7 +18,7 @@ def is_ctp_native_loaded() -> bool:
     return bool(get_ctp_native_diagnostics()["native_loaded"])
 
 
-__version__ = "2.0.0"
+__version__ = "2.0.2"
 __all__ = [
     "QueryResult",
     "get_ctp_native_diagnostics",
