@@ -76,7 +76,7 @@ def _query_records_digest(records: Iterable[Any]) -> str:
     return sha256(serialized).hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _QuerySource:
     """Typed provenance issued by one live ``TraderClient`` query lane."""
 
@@ -99,7 +99,7 @@ class _QuerySource:
     trusted_expires_monotonic: float | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _QuerySessionScope:
     """Current session scope issued by the same ``TraderClient`` instance."""
 

@@ -53,7 +53,7 @@ from bt_api_ctp.query import QueryResult
 _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL = object()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _CtpManagedQuoteV2Receipt:
     """Opaque proof that one row came from a live native MD callback.
 

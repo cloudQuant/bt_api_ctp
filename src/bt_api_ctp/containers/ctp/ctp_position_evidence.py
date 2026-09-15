@@ -82,7 +82,7 @@ class CtpPositionEvidenceError(ValueError):
         super().__init__(f"{code}: {message or code}")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class CtpPositionField:
     """One raw field with an explicit presence/validity state."""
 
@@ -102,7 +102,7 @@ class CtpPositionField:
         return self.known and self.value == 0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class CtpPositionRowEvidence:
     """Immutable raw identity and quantities for one position row."""
 
@@ -182,7 +182,7 @@ class CtpPositionRowEvidence:
         return tuple(self._value(name) for name in CTP_POSITION_IDENTITY_FIELDS)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class CtpPositionEvidence:
     """Frozen evidence for exactly one complete positions query."""
 
