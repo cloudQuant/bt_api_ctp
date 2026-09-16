@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from bt_api_ctp.collector.protocols import (
     DEFAULT_ASSET_TYPES,
     EXCHANGES,
     InstrumentProvider,
+    InstrumentSpec,
     MarketDataSubscriber,
     TickRecord,
 )
@@ -130,12 +132,7 @@ class TickCollectionEngine:
         if callable(set_exchanges):
             set_exchanges({spec.instrument_id: spec.exchange_id for spec in selected})
         self._subscriber.subscribe([spec.instrument_id for spec in selected])
-        _logger.info(
-            "subscribed %d instruments (shard=%s, flush=%ss)",
-            len(selected),
-            self._config.shard.strategy,
-            self._config.flush_interval_sec,
-        )
+        self._report_subscription(selected)
 
         poll_seconds = min(_MAX_POLL_SECONDS, max(self._config.flush_interval_sec, 0.001))
         deadline = None
@@ -191,6 +188,45 @@ class TickCollectionEngine:
             buffer.dropped_count(),
         )
         return report
+
+    def _report_subscription(self, selected: list[InstrumentSpec]) -> None:
+        """Log the requested universe per asset type, then the acknowledgement."""
+        counts = Counter(spec.asset_type for spec in selected)
+        breakdown = ", ".join(f"{name}={counts[name]}" for name in sorted(counts))
+        _logger.info(
+            "subscribed %d instruments (shard=%s, flush=%ss): %s",
+            len(selected),
+            self._config.shard.strategy,
+            self._config.flush_interval_sec,
+            breakdown,
+        )
+        stats = self._await_subscription_ack(len(selected))
+        if stats:
+            _logger.info(
+                "subscribe acknowledged: ok=%s failed=%s",
+                stats.get("ok", "n/a"),
+                stats.get("failed", "n/a"),
+            )
+
+    def _await_subscription_ack(self, expected: int, timeout_sec: float = 15.0) -> dict[str, Any]:
+        """Wait briefly for the per-batch subscribe responses to come back.
+
+        Responses arrive on the native callback thread *after* ``subscribe``
+        returns, so reading the counters immediately reports a partial result.
+        The wait is bounded: a slow counter must never delay collection.
+        """
+        stats_fn = getattr(self._subscriber, "subscription_stats", None)
+        if not callable(stats_fn):
+            return {}
+        deadline = time.monotonic() + timeout_sec
+        stats = stats_fn()
+        while (
+            int(stats.get("ok", 0) or 0) + int(stats.get("failed", 0) or 0) < expected
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.1)
+            stats = stats_fn()
+        return stats
 
     def _flush(self, sink: ParquetSink, buffer: TickBuffer, trading_day: str) -> str:
         drained = buffer.drain()

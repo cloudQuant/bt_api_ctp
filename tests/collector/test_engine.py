@@ -71,6 +71,9 @@ class _FakeSubscriber:
     def subscribe(self, instruments):
         self.subscribed = list(instruments)
 
+    def subscription_stats(self):
+        return {"ok": len(self.subscribed or []), "failed": 0}
+
     def run(self):
         return None
 
@@ -430,6 +433,87 @@ class TestTickMilestoneLogging:
         milestones = self._milestones(caplog)
         assert len(milestones) == 1
         assert "rb2510" in milestones[0]
+
+
+class TestSubscriptionLogging:
+    """订阅日志要能看出期货/期权各多少，以及柜台是否确认了订阅。"""
+
+    def test_reports_counts_by_asset_type(self, tmp_path, caplog):
+        import logging
+
+        specs = [
+            _spec("rb2510", "SHFE", "future"),
+            _spec("m2701", "DCE", "future"),
+            _spec("m2701-C-3000", "DCE", "option"),
+        ]
+        subscriber = _FakeSubscriber()
+        engine, _ = _engine(tmp_path, specs, subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "future=2" in messages
+        assert "option=1" in messages
+
+    def test_reports_subscribe_acknowledgement(self, tmp_path, caplog):
+        import logging
+
+        specs = [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")]
+        subscriber = _FakeSubscriber()
+        engine, _ = _engine(tmp_path, specs, subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        acks = [r.getMessage() for r in caplog.records if "acknowledged" in r.getMessage()]
+        assert acks, "订阅完成后应记录确认结果"
+        assert "ok=2" in acks[0]
+        assert "failed=0" in acks[0]
+
+    def test_subscriber_without_stats_still_logs_the_request(self, tmp_path, caplog):
+        import logging
+
+        class _NoStatsSubscriber(_FakeSubscriber):
+            subscription_stats = None  # 宿主不提供统计接口
+
+        subscriber = _NoStatsSubscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)  # 不得因此崩溃
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "future=1" in messages
+        assert "acknowledged" not in messages
+
+    def test_waits_for_late_acknowledgements(self, tmp_path, caplog, monkeypatch):
+        import logging
+
+        from bt_api_ctp.collector import engine as engine_module
+
+        class _SlowAckSubscriber(_FakeSubscriber):
+            def __init__(self):
+                super().__init__()
+                self.polls = 0
+
+            def subscription_stats(self):
+                self.polls += 1
+                # 先报 0，第二次才给出真实结果，模拟响应陆续到达
+                if self.polls < 2:
+                    return {"ok": 0, "failed": 0}
+                return {"ok": len(self.subscribed or []), "failed": 0}
+
+        monkeypatch.setattr(engine_module.time, "sleep", lambda *_: None)
+        subscriber = _SlowAckSubscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        acks = [r.getMessage() for r in caplog.records if "acknowledged" in r.getMessage()]
+        assert acks
+        assert "ok=1" in acks[0]
 
 
 class TestFlushFailureSafety:
