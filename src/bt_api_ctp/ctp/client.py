@@ -993,7 +993,12 @@ class _MdSpi(CThostFtdcMdSpi):
             callback(pDepthMarketData)
 
     def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
-        pass
+        with self._c._state_lock:
+            if not self._is_current_locked():
+                return
+            callback = self._c.on_subscribe
+        if callback is not None:
+            callback(pSpecificInstrument, pRspInfo)
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
         with self._c._state_lock:
@@ -1023,6 +1028,8 @@ class MdClient:
         self.on_tick = None  # callback(CThostFtdcDepthMarketDataField)
         self.on_login = None  # callback(CThostFtdcRspUserLoginField)
         self.on_error = None  # callback(CThostFtdcRspInfoField)
+        # callback(CThostFtdcSpecificInstrumentField, CThostFtdcRspInfoField)
+        self.on_subscribe = None
 
         self._connected = False
         self._loggedin = False
@@ -1176,6 +1183,34 @@ class MdClient:
             pending_instruments = list(self._pending_instruments)
         if api is not None:
             api.SubscribeMarketData(pending_instruments)
+
+    def subscribe_batched(self, instruments, *, batch_size=100, interval_sec=0.1):
+        """分批订阅合约列表（可在 start 前或后调用）
+
+        与 :meth:`subscribe` 的差异：
+
+        - ``_pending_instruments`` 始终保存 **全量** 合约，因此断线重连后
+          ``OnRspUserLogin`` 仍会重订阅全部合约，不会漏订；
+        - 已登录时按 ``batch_size`` 分批提交，避免单次订阅过大；
+        - 未登录时只记录待订阅全集，登录成功后统一订阅。
+
+        Args:
+            instruments: 合约代码列表
+            batch_size: 每批订阅数量，必须 >= 1
+            interval_sec: 批次之间的间隔秒数，0 表示不等待
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        pending = list(instruments)
+        with self._state_lock:
+            self._pending_instruments = pending
+            api = self._api if self._loggedin else None
+        if api is None or not pending:
+            return
+        for start in range(0, len(pending), batch_size):
+            api.SubscribeMarketData(pending[start : start + batch_size])
+            if interval_sec > 0 and start + batch_size < len(pending):
+                time.sleep(interval_sec)
 
     def start(self, block=True):
         """启动连接

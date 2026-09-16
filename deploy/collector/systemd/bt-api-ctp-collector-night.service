@@ -1,0 +1,22 @@
+[Unit]
+Description=bt_api_ctp tick collector (night session)
+Documentation=https://github.com/cloudQuant/bt_api_py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trader
+Group=trader
+WorkingDirectory=/opt/bt_api_py
+EnvironmentFile=/opt/bt_api_py/.env
+# --night 要求"当晚有夜盘"才会采集：
+#   周日晚自动退出；法定节假日前一交易日晚自动退出；周五晚正常采集（归属下周一交易日）
+ExecStart=/opt/bt_api_py/.venv/bin/python -m bt_api_ctp.collector \
+    --config /etc/bt-api-ctp/collector.yaml \
+    --night --until-close --wait-open
+TimeoutStartSec=infinity
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

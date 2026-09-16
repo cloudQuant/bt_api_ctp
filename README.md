@@ -79,6 +79,52 @@ msg = data_queue.get(timeout=10)
 print(type(msg).__name__, msg)
 ```
 
+### Tick Collection and Parquet Storage
+
+The package ships an exchange-agnostic collector that subscribes to the **whole market**
+(futures + options, all six exchanges) and persists every depth snapshot to Parquet:
+
+```bash
+python -m bt_api_ctp.collector --config collector.yaml --until-close --wait-open
+```
+
+Run it before the open; it waits for the session, collects to the close (day session
+ends 15:15, night session 02:30), then writes the completeness report and exits by
+itself — designed for cron/systemd/launchd scheduling. See
+[`deploy/collector/README.md`](deploy/collector/README.md) for ready-to-use units and
+the checklist (holiday calendar file, logging, exit codes).
+
+Files land as `<data_root>/<trading_day>/<exchange>/<instrument_id>.parquet`. The
+directory names the **trading day**: Friday night data belongs to the following
+Monday and is stored next to Monday's day session, matching the exchange calendar.
+
+**Reading the data** — one file per instrument, one row per snapshot, sorted by
+`(action_day, update_time, update_millisec)` and deduplicated:
+
+```python
+import pyarrow.parquet as pq
+
+table = pq.read_table("20260916/SHFE/rb2701.parquet")
+rows = table.to_pylist()
+# Key columns per row:
+#   trading_day / action_day        "20260916" (night ticks: action_day = previous day)
+#   update_time / update_millisec   "21:00:01" / 500        quote time, ms precision
+#   local_receive_time              1789539477726693000     local wall clock (ns)
+#   last_price, volume, turnover, open_interest
+#   open/high/low/average_price, upper_limit/lower_limit
+#   pre_settlement/pre_close/pre_open_interest
+#   bid_price_1..5 / bid_volume_1..5 / ask_price_1..5 / ask_volume_1..5
+# Missing values are NULL (CTP sends DBL_MAX for absent prices; it is normalized).
+
+# With pandas:
+import pandas as pd
+df = pq.read_table("20260916/SHFE/rb2701.parquet").to_pandas()
+```
+
+`<data_root>/<trading_day>/report.json` lists per-instrument row counts, first/last
+quote time and in-session gaps — scheduled breaks (10:15-10:30, lunch, overnight)
+are not counted as gaps.
+
 ### CtpGatewayAdapter API
 
 The `CtpGatewayAdapter` provides direct access to CTP futures:
@@ -303,6 +349,50 @@ data_queue = api.get_data_queue("CTP___FUTURE")
 msg = data_queue.get(timeout=10)
 print(type(msg).__name__, msg)
 ```
+
+### 全市场 Tick 采集与 Parquet 落盘
+
+内置交易所解耦的采集器，可订阅**全市场**（期货 + 期权，六大交易所）并把每条
+深度行情快照写入 Parquet：
+
+```bash
+python -m bt_api_ctp.collector --config collector.yaml --until-close --wait-open
+```
+
+在开盘前启动即可：脚本等待开盘、一直采到收盘（白盘 15:15、夜盘 02:30）后自动
+写完整性报告并退出 —— 专为 cron/systemd/launchd 无人值守设计。开箱即用的
+调度单元与检查清单（节假日日历、日志、退出码）见
+[`deploy/collector/README.md`](deploy/collector/README.md)。
+
+数据按 `<data_root>/<交易日>/<交易所>/<合约代码>.parquet` 落盘。目录名是
+**交易日**：周五夜盘的数据属于下周一，与周一白盘数据存放在同一目录，与交易所
+口径一致。
+
+**读取数据** —— 每个合约一个文件，每行一条快照，已按
+`(action_day, update_time, update_millisec)` 去重排序：
+
+```python
+import pyarrow.parquet as pq
+
+table = pq.read_table("20260916/SHFE/rb2701.parquet")
+rows = table.to_pylist()
+# 每行关键列：
+#   trading_day / action_day        "20260916"（夜盘 tick 的 action_day 为前一自然日）
+#   update_time / update_millisec   "21:00:01" / 500        行情时间，毫秒精度
+#   local_receive_time              1789539477726693000     本地墙钟接收时间（纳秒）
+#   last_price、volume、turnover、open_interest
+#   open/high/low/average_price、upper_limit/lower_limit
+#   pre_settlement/pre_close/pre_open_interest
+#   bid_price_1..5 / bid_volume_1..5 / ask_price_1..5 / ask_volume_1..5
+# 缺失值为 NULL（CTP 对无价档位发送 DBL_MAX 哨兵，已归一化为 NULL）。
+
+# 用 pandas 读取：
+import pandas as pd
+df = pq.read_table("20260916/SHFE/rb2701.parquet").to_pandas()
+```
+
+`<data_root>/<交易日>/report.json` 记录每个合约的行数、首末行情时间与
+**交易时段内**的缺口 —— 小节休息（10:15-10:30）、午休、隔夜均不计为缺口。
 
 ### CtpGatewayAdapter API
 

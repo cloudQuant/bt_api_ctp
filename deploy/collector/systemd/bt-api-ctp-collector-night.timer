@@ -1,0 +1,14 @@
+[Unit]
+Description=Start CTP tick collection before the night session
+
+[Timer]
+# 夜盘 21:00 开盘，提前 15 分钟启动。
+# 注意：夜盘在交易日的前一晚进行 —— 周五晚的夜盘属于下周一交易日，
+# 因此这里用 Mon..Fri（周日晚不启动）。
+OnCalendar=Mon..Fri 20:45:00
+AccuracySec=1s
+Persistent=false
+Unit=bt-api-ctp-collector-night.service
+
+[Install]
+WantedBy=timers.target

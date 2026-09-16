@@ -1,0 +1,55 @@
+# 迭代04 CTP 全市场 tick 采集配置示例
+#
+# 用法：
+#   python -m bt_api_ctp.collector --config collector.yaml --once --duration 60
+#   python -m bt_api_ctp.collector --config collector.yaml --check-calendar
+#   python -m bt_api_ctp.collector --config collector.yaml --validate-shards
+
+data_root: /data/tick
+
+# 本机负责的合约范围（分片）
+shard:
+  strategy: by_exchange          # by_exchange | by_prefix | hash_mod
+  exchanges: [SHFE, DCE]         # by_exchange：本机负责的交易所
+  # strategy: by_prefix
+  # prefixes: [rb, cu, m]
+  # strategy: hash_mod
+  # shard_id: 0
+  # total_shards: 3
+
+# 多机分片校验（--validate-shards 使用）：列出所有机器的分片配置
+# shard_all:
+#   - {strategy: by_exchange, exchanges: [SHFE, INE]}
+#   - {strategy: by_exchange, exchanges: [DCE, CZCE]}
+#   - {strategy: by_exchange, exchanges: [CFFEX, GFEX]}
+
+# 订阅的合约类型（默认仅期货与期权）
+asset_types: [future, option]
+
+buffer:
+  per_instrument_cap: 100000     # 单合约缓冲上限
+  overflow_policy: drop          # drop=丢弃并告警 | flush=触发刷盘
+  flush_interval_sec: 5          # 定时刷盘间隔
+
+sink:
+  merge_existing: true           # 当日重跑时与已落盘数据合并去重（中断恢复）
+  gap_threshold_sec: 60          # 缺口检测阈值（秒）
+
+subscription:
+  batch_size: 100                # 分批订阅每批数量
+  batch_interval_sec: 0.1        # 批次间隔
+
+calendar:
+  holidays_file: ""              # 节假日 JSON 列表文件，如 ["20261001", "20261002"]
+
+ctp:
+  env: simnow                    # simnow | production
+  md_front: tcp://182.254.243.31:30011
+  td_front: tcp://182.254.243.31:30001
+  # 账号留空时回退到环境变量 CTP_BROKER_ID / CTP_USER_ID / CTP_PASSWORD
+  broker_id: ""
+  user_id: ""
+  password: ""
+  app_id: simnow_client_test
+  auth_code: "0000000000000000"
+  login_timeout_sec: 30

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.btapi.ctp.collector.day</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USER/bt_api_py/.venv312/bin/python</string>
+        <string>-m</string>
+        <string>bt_api_ctp.collector</string>
+        <string>--config</string>
+        <string>/Users/USER/bt-api-ctp/collector.yaml</string>
+        <string>--until-close</string>
+        <string>--wait-open</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USER/bt_api_py</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Users/USER/bt_api_py/bt_api/bt_api_ctp/src</string>
+        <key>CTP_BROKER_ID</key>
+        <string>9999</string>
+        <key>CTP_USER_ID</key>
+        <string>REPLACE_ME</string>
+        <key>CTP_PASSWORD</key>
+        <string>REPLACE_ME</string>
+        <key>CTP_MD_FRONT</key>
+        <string>tcp://182.254.243.31:30011</string>
+        <key>CTP_TD_FRONT</key>
+        <string>tcp://182.254.243.31:30001</string>
+    </dict>
+
+    <!-- 白盘 09:00 开盘，08:45 启动（脚本内部等待开盘）。Weekday: 0=周日 … 5=周五 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>45</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USER/bt-api-ctp/logs/day.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USER/bt-api-ctp/logs/day.log</string>
+</dict>
+</plist>

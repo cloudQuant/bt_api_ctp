@@ -1,0 +1,23 @@
+[Unit]
+Description=bt_api_ctp tick collector (day session)
+Documentation=https://github.com/cloudQuant/bt_api_py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trader
+Group=trader
+WorkingDirectory=/opt/bt_api_py
+# .env 提供 CTP_BROKER_ID / CTP_USER_ID / CTP_PASSWORD / CTP_MD_FRONT ...
+EnvironmentFile=/opt/bt_api_py/.env
+# --until-close 让进程自己在本组收盘后结束；--wait-open 允许 08:45 启动后等到 09:00
+ExecStart=/opt/bt_api_py/.venv/bin/python -m bt_api_ctp.collector \
+    --config /etc/bt-api-ctp/collector.yaml \
+    --until-close --wait-open
+TimeoutStartSec=infinity
+Nice=5
+# 日志走 journald：journalctl -u bt-api-ctp-collector-day -f
+
+[Install]
+WantedBy=multi-user.target

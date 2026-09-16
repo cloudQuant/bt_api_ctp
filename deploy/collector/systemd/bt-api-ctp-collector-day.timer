@@ -1,0 +1,12 @@
+[Unit]
+Description=Start CTP tick collection before the day session
+
+[Timer]
+# 白盘 09:00 开盘，提前 15 分钟启动，脚本内部等待开盘
+OnCalendar=Mon..Fri 08:45:00
+AccuracySec=1s
+Persistent=false
+Unit=bt-api-ctp-collector-day.service
+
+[Install]
+WantedBy=timers.target
