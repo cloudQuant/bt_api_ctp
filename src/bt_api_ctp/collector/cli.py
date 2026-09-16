@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import signal
 import sys
@@ -278,6 +279,32 @@ def _print_report(report: SinkReport) -> None:
         )
 
 
+def _configure_logging(*, verbosity: int = 0, quiet: bool = False) -> None:
+    """Make collector progress logs visible on the console.
+
+    The engine reports subscribe/heartbeat/flush progress through
+    ``logging.INFO``; without a configured root logger those records are
+    dropped and an unattended run looks frozen until it finally prints the
+    report hours later.
+
+    Args:
+        verbosity: How many ``-v`` flags were given; any value above zero
+            switches the console to ``DEBUG``.
+        quiet: When true only warnings and errors are shown.
+    """
+    if quiet:
+        level = logging.WARNING
+    elif verbosity > 0:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="bt_api_ctp.collector",
@@ -328,11 +355,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="check shard_all for overlaps and gaps, then exit",
     )
     parser.add_argument("--date", default=None, help="override the date (YYYYMMDD)")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        dest="verbosity",
+        help="log collector progress; repeat (-vv) for debug level",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="only log warnings and errors",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    _configure_logging(verbosity=args.verbosity, quiet=args.quiet)
 
     try:
         config = load_config(args.config)

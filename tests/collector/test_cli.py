@@ -302,3 +302,58 @@ class TestNightMode:
         code = main(["--config", str(path), "--night", "--date", "20260919"])
 
         assert code == EXIT_NOT_TRADING_DAY
+
+
+class TestLoggingSetup:
+    """engine 的进度日志全是 INFO；CLI 不配置 logging 就会全程静默。"""
+
+    def test_default_level_is_info(self, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        captured = {}
+        monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+        cli._configure_logging(verbosity=0, quiet=False)
+
+        assert captured["level"] == cli.logging.INFO
+
+    def test_verbose_raises_level_to_debug(self, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        captured = {}
+        monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+        cli._configure_logging(verbosity=1, quiet=False)
+
+        assert captured["level"] == cli.logging.DEBUG
+
+    def test_quiet_lowers_level_to_warning(self, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        captured = {}
+        monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+        cli._configure_logging(verbosity=0, quiet=True)
+
+        assert captured["level"] == cli.logging.WARNING
+
+    def test_verbose_flag_is_counted(self):
+        from bt_api_ctp.collector import cli
+
+        assert cli._parse_args(["--config", "c.yaml", "-vv"]).verbosity == 2
+
+    def test_quiet_flag_parses(self):
+        from bt_api_ctp.collector import cli
+
+        assert cli._parse_args(["--config", "c.yaml", "--quiet"]).quiet is True
+
+    def test_main_configures_logging(self, tmp_path, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        path = _write_config(tmp_path, {"data_root": str(tmp_path / "data")})
+        calls = []
+        monkeypatch.setattr(cli, "_configure_logging", lambda **kwargs: calls.append(kwargs))
+
+        cli.main(["--config", str(path), "--check-calendar"])
+
+        assert calls, "main() 必须先配置 logging，否则采集进度不可见"
