@@ -309,6 +309,129 @@ class TestHeartbeatLogging:
         assert "finished" in messages
 
 
+class TestTickMilestoneLogging:
+    """每个合约累计到阈值要能报进度，否则无法确认全市场合约都在收数据。"""
+
+    def _milestones(self, caplog):
+        return [r.getMessage() for r in caplog.records if "tick milestone" in r.getMessage()]
+
+    def test_first_mode_reports_only_the_first_threshold(self, tmp_path, caplog):
+        import logging
+
+        ticks = [_tick(update_millisec=index) for index in range(250)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="first",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        milestones = self._milestones(caplog)
+        assert len(milestones) == 1
+        assert "rb2510" in milestones[0]
+        assert "reached 100 ticks" in milestones[0]
+
+    def test_every_mode_reports_each_multiple(self, tmp_path, caplog):
+        import logging
+
+        ticks = [_tick(update_millisec=index) for index in range(250)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="every",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        milestones = self._milestones(caplog)
+        assert len(milestones) == 2
+        assert "reached 100 ticks" in milestones[0]
+        assert "reached 200 ticks" in milestones[1]
+
+    def test_below_threshold_logs_nothing(self, tmp_path, caplog):
+        import logging
+
+        subscriber = _FakeSubscriber(ticks_on_connect=[_tick()])
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="first",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        assert self._milestones(caplog) == []
+
+    def test_off_mode_logs_nothing(self, tmp_path, caplog):
+        import logging
+
+        ticks = [_tick(update_millisec=index) for index in range(250)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="off",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        assert self._milestones(caplog) == []
+
+    def test_zero_interval_disables_milestones(self, tmp_path, caplog):
+        import logging
+
+        ticks = [_tick(update_millisec=index) for index in range(250)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            tick_log_interval=0,
+            tick_log_mode="every",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        assert self._milestones(caplog) == []
+
+    def test_milestones_are_tracked_per_instrument(self, tmp_path, caplog):
+        import logging
+
+        ticks = [_tick("rb2510", "SHFE", update_millisec=i) for i in range(120)]
+        ticks += [_tick("m2701", "DCE", update_millisec=i) for i in range(30)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="first",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        milestones = self._milestones(caplog)
+        assert len(milestones) == 1
+        assert "rb2510" in milestones[0]
+
+
 class TestFlushFailureSafety:
     """落盘失败（磁盘满/IO 错误）不得静默丢掉整批 tick。"""
 

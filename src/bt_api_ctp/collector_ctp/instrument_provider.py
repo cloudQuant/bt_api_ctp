@@ -13,11 +13,14 @@ SimNow, whereas one exchange at a time completes reliably.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from bt_api_ctp.collector.protocols import DEFAULT_ASSET_TYPES, EXCHANGES, InstrumentSpec
 from bt_api_ctp.instrument import normalize_ctp_instrument
+
+_logger = logging.getLogger(__name__)
 
 
 class CtpInstrumentProvider:
@@ -86,6 +89,7 @@ class CtpInstrumentProvider:
         stop = getattr(self._trader, "stop", None)
         if callable(stop):
             stop()
+        _logger.info("CTP trader session closed")
 
     def _collect(self, records: Any, specs: list[InstrumentSpec], seen: set) -> None:
         for record in records:

@@ -21,9 +21,10 @@ from typing import Any
 import yaml
 
 from bt_api_ctp.collector.engine import CollectionConfig, TickCollectionEngine
-from bt_api_ctp.collector.protocols import DEFAULT_ASSET_TYPES, EXCHANGES, InstrumentSpec
+from bt_api_ctp.collector.protocols import DEFAULT_ASSET_TYPES, EXCHANGES
 from bt_api_ctp.collector.schedule import (
     TradingCalendar,
+    group_index,
     group_length_seconds,
     next_open_group_index,
     seconds_until_close,
@@ -39,6 +40,8 @@ EXIT_NOT_TRADING_DAY = 3
 EXIT_COLLECTION_FAILED = 4
 
 _STRATEGIES = ("by_exchange", "by_prefix", "hash_mod")
+
+_logger = logging.getLogger(__name__)
 
 
 class SessionClosedError(RuntimeError):
@@ -139,6 +142,7 @@ def build_collection_config(config: dict[str, Any]) -> CollectionConfig:
 
     buffer_payload = config.get("buffer") or {}
     sink_payload = config.get("sink") or {}
+    logging_payload = config.get("logging") or {}
     asset_types = tuple(config.get("asset_types") or DEFAULT_ASSET_TYPES)
 
     return CollectionConfig(
@@ -151,6 +155,8 @@ def build_collection_config(config: dict[str, Any]) -> CollectionConfig:
         merge_existing=bool(sink_payload.get("merge_existing", True)),
         gap_threshold_sec=float(sink_payload.get("gap_threshold_sec", 60.0)),
         heartbeat_interval_sec=float(buffer_payload.get("heartbeat_interval_sec", 60.0)),
+        tick_log_interval=int(logging_payload.get("tick_interval", 1000)),
+        tick_log_mode=str(logging_payload.get("tick_mode", "first")),
     )
 
 
@@ -193,9 +199,15 @@ def build_engine(config: dict[str, Any], *, env: dict[str, str] | None = None):
         auth_code=field("auth_code", "CTP_AUTH_CODE", "0000000000000000"),
     )
     trader.start(block=False)
-    if trader.wait_ready(timeout=float(ctp.get("login_timeout_sec", 30))) is not True:
+    login_timeout_sec = float(ctp.get("login_timeout_sec", 30))
+    _logger.info("CTP trader login: front=%s broker=%s user=%s", td_front, broker_id, user_id)
+    if trader.wait_ready(timeout=login_timeout_sec) is not True:
         trader.stop()
+        _logger.error(
+            "CTP trader login timeout after %ss (front=%s)", login_timeout_sec, td_front
+        )
         raise RuntimeError("ctp_trader_login_timeout")
+    _logger.info("CTP trader login OK (front=%s)", td_front)
 
     md_client = MdClient(md_front, broker_id, user_id, password)
     subscriber = CtpMdSubscriber(
@@ -279,10 +291,15 @@ def _print_report(report: SinkReport) -> None:
         )
 
 
-def _configure_logging(*, verbosity: int = 0, quiet: bool = False) -> None:
-    """Make collector progress logs visible on the console.
+def _configure_logging(
+    *,
+    verbosity: int = 0,
+    quiet: bool = False,
+    log_file: Path | None = None,
+) -> None:
+    """Make collector progress logs visible on the console and in a file.
 
-    The engine reports subscribe/heartbeat/flush progress through
+    The engine reports subscribe/heartbeat/flush/milestone progress through
     ``logging.INFO``; without a configured root logger those records are
     dropped and an unattended run looks frozen until it finally prints the
     report hours later.
@@ -291,6 +308,8 @@ def _configure_logging(*, verbosity: int = 0, quiet: bool = False) -> None:
         verbosity: How many ``-v`` flags were given; any value above zero
             switches the console to ``DEBUG``.
         quiet: When true only warnings and errors are shown.
+        log_file: Optional file to mirror every record into.  The parent
+            directory is created on demand.
     """
     if quiet:
         level = logging.WARNING
@@ -298,11 +317,41 @@ def _configure_logging(*, verbosity: int = 0, quiet: bool = False) -> None:
         level = logging.DEBUG
     else:
         level = logging.INFO
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
+        handlers=handlers,
     )
+
+
+def _resolve_log_file(
+    config: dict[str, Any],
+    day: str,
+    calendar: TradingCalendar,
+    *,
+    night: bool,
+    moment: datetime | None,
+) -> Path | None:
+    """Return the per-trading-day log file under ``<data_root>/logs``.
+
+    A night run belongs to the next trading day, matching the directory its
+    ticks are written to.  The local calendar is only a startup pre-check;
+    CTP's ``GetTradingDay()`` stays authoritative for the data paths.
+    """
+    logging_config = config.get("logging") or {}
+    if logging_config.get("file", True) is False:
+        return None
+    data_root = config.get("data_root")
+    if not data_root:
+        return None
+    log_dir = Path(data_root) / str(logging_config.get("dir", "logs"))
+    if night or group_index(moment or datetime.now()) == 1:
+        day = calendar.next_trading_day(day)
+    return log_dir / f"collector-{day}.log"
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -374,7 +423,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    _configure_logging(verbosity=args.verbosity, quiet=args.quiet)
 
     try:
         config = load_config(args.config)
@@ -415,6 +463,14 @@ def main(argv: list[str] | None = None) -> int:
     elif not calendar.is_trading_day(day):
         print(f"not a trading day: {day}", file=sys.stderr)
         return EXIT_NOT_TRADING_DAY
+
+    # Configured here, not at entry: the log file name needs data_root, the
+    # startup day and the session group to resolve.
+    _configure_logging(
+        verbosity=args.verbosity,
+        quiet=args.quiet,
+        log_file=_resolve_log_file(config, day, calendar, night=args.night, moment=override_now),
+    )
 
     try:
         duration = resolve_duration(

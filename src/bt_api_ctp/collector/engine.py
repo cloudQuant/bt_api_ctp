@@ -9,7 +9,6 @@ implementation can be plugged in.
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +47,11 @@ class CollectionConfig:
     gap_threshold_sec: float = 60.0
     #: 0 disables the heartbeat.  Unattended runs should keep it on.
     heartbeat_interval_sec: float = 60.0
+    #: Per-instrument tick count at which a progress milestone is logged.
+    tick_log_interval: int = 1000
+    #: ``first`` reports only the first threshold, ``every`` reports each
+    #: multiple, ``off`` disables milestones (same as interval <= 0).
+    tick_log_mode: str = "first"
 
 
 class _BufferHandler:
@@ -75,6 +79,8 @@ class TickCollectionEngine:
         self._provider = provider
         self._subscriber = subscriber
         self._config = config
+        self._cumulative: dict[str, int] = {}
+        self._reported: dict[str, int] = {}
 
     @property
     def config(self) -> CollectionConfig:
@@ -91,6 +97,8 @@ class TickCollectionEngine:
         self, *, duration_sec: float | None = None, stop_event: Any = None
     ) -> SinkReport:
         """Collect for one window, then flush and report."""
+        self._cumulative = {}
+        self._reported = {}
         try:
             instruments = self._provider.fetch_instruments()
         finally:
@@ -204,7 +212,38 @@ class TickCollectionEngine:
                     buffer.append(tick)
             return trading_day
         _logger.info("flushed %d instruments / %d ticks", len(drained), rows)
+        self._report_tick_milestones(drained)
         return report.trading_day or trading_day
+
+    def _report_tick_milestones(self, drained: dict[str, list[TickRecord]]) -> None:
+        """Log per-instrument progress once ticks accumulate past a threshold.
+
+        Runs on the flush path, never inside the market-data callback, so the
+        counters add no work to the hot path.  Counters only advance after a
+        successful write, so ticks handed back to the buffer on a sink error
+        are not counted twice.
+        """
+        interval = self._config.tick_log_interval
+        mode = self._config.tick_log_mode
+        if interval <= 0 or mode == "off":
+            return
+        for instrument_id, ticks in drained.items():
+            total = self._cumulative.get(instrument_id, 0) + len(ticks)
+            self._cumulative[instrument_id] = total
+            reached = total // interval
+            reported = self._reported.get(instrument_id, 0)
+            if reached <= reported:
+                continue
+            if mode == "first":
+                _logger.info("tick milestone: %s reached %d ticks", instrument_id, interval)
+            else:
+                for multiple in range(reported + 1, reached + 1):
+                    _logger.info(
+                        "tick milestone: %s reached %d ticks",
+                        instrument_id,
+                        multiple * interval,
+                    )
+            self._reported[instrument_id] = reached
 
 
 __all__ = ["CollectionConfig", "TickCollectionEngine"]

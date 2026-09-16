@@ -8,6 +8,7 @@ the whole collection run.  Reconnects are observable through
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from bt_api_ctp.collector.protocols import TickHandler
 from bt_api_ctp.collector_ctp.normalizer import CtpTickNormalizer
 
 _RUN_POLL_SECONDS = 0.1
+
+_logger = logging.getLogger(__name__)
 
 
 class CtpMdSubscriber:
@@ -77,6 +80,7 @@ class CtpMdSubscriber:
         self._md_client.on_subscribe = self._on_subscribe_response
         self._md_client.start(block=False)
         self._wait_ready()
+        _logger.info("CTP market-data session login OK")
 
     def _wait_ready(self) -> None:
         wait_ready = getattr(self._md_client, "wait_ready", None)
@@ -103,6 +107,7 @@ class CtpMdSubscriber:
         """Stop the native client and release any blocking ``run``."""
         self._stop_event.set()
         self._md_client.stop()
+        _logger.info("CTP market-data session closed")
 
     # -- diagnostics ----------------------------------------------------------
 

@@ -84,6 +84,35 @@ class _BrokenNormalizer:
         raise ValueError("normalizer boom")
 
 
+class TestSessionLogging:
+    """登录/登出必须留痕，便于判断行情会话是否真的建立。"""
+
+    def test_connect_logs_market_data_login(self, caplog):
+        import logging
+
+        subscriber = CtpMdSubscriber(_FakeMdClient())
+
+        with caplog.at_level(logging.INFO):
+            subscriber.connect()
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "market-data" in messages
+        assert "login" in messages
+
+    def test_close_logs_market_data_logout(self, caplog):
+        import logging
+
+        subscriber = CtpMdSubscriber(_FakeMdClient())
+        subscriber.connect()
+
+        with caplog.at_level(logging.INFO):
+            subscriber.close()
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "market-data" in messages
+        assert "closed" in messages
+
+
 class TestCtpMdSubscriber:
     def test_connect_binds_callback_and_starts_in_background(self):
         md = _FakeMdClient()

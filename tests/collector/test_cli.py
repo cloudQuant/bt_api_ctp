@@ -78,6 +78,23 @@ class TestBuildCollectionConfig:
         assert collection_config.merge_existing is True
         assert collection_config.asset_types == ("future", "option", "spot_option")
 
+    def test_logging_milestones_are_mapped(self, tmp_path):
+        collection_config = build_collection_config(
+            {
+                "data_root": str(tmp_path),
+                "logging": {"tick_interval": 500, "tick_mode": "every"},
+            }
+        )
+
+        assert collection_config.tick_log_interval == 500
+        assert collection_config.tick_log_mode == "every"
+
+    def test_logging_milestone_defaults(self, tmp_path):
+        collection_config = build_collection_config({"data_root": str(tmp_path)})
+
+        assert collection_config.tick_log_interval == 1000
+        assert collection_config.tick_log_mode == "first"
+
 
 class TestMainConfigErrors:
     def test_help_exits_zero(self):
@@ -347,6 +364,28 @@ class TestLoggingSetup:
 
         assert cli._parse_args(["--config", "c.yaml", "--quiet"]).quiet is True
 
+    def test_log_file_handler_is_added(self, tmp_path, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        captured = {}
+        monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+        log_file = tmp_path / "logs" / "collector-20260917.log"
+        cli._configure_logging(verbosity=0, quiet=False, log_file=log_file)
+
+        assert log_file.parent.is_dir(), "日志目录应自动创建"
+        assert len(captured["handlers"]) == 2, "应同时输出终端与文件"
+
+    def test_no_file_handler_without_log_file(self, monkeypatch):
+        from bt_api_ctp.collector import cli
+
+        captured = {}
+        monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+        cli._configure_logging(verbosity=0, quiet=False)
+
+        assert len(captured["handlers"]) == 1
+
     def test_main_configures_logging(self, tmp_path, monkeypatch):
         from bt_api_ctp.collector import cli
 
@@ -354,6 +393,186 @@ class TestLoggingSetup:
         calls = []
         monkeypatch.setattr(cli, "_configure_logging", lambda **kwargs: calls.append(kwargs))
 
-        cli.main(["--config", str(path), "--check-calendar"])
+        # 12:00 是午休：能走到日志配置，然后以"非交易时段"退出
+        cli.main(["--config", str(path), "--until-close", "--now", "20260916T12:00:00"])
 
         assert calls, "main() 必须先配置 logging，否则采集进度不可见"
+
+
+class TestBuildEngineLogging:
+    """建立柜台会话必须留痕：能看到用了哪个前置、哪个账号。"""
+
+    def test_trader_login_is_logged(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from bt_api_ctp.collector import cli
+
+        class _FakeTrader:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self, block: bool = True):
+                return None
+
+            def wait_ready(self, timeout: float = 30):
+                return True
+
+            def stop(self):
+                return None
+
+        class _FakeMd:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        class _FakeSubscriber:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        class _FakeProvider:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        monkeypatch.setattr("bt_api_ctp.ctp.client.TraderClient", _FakeTrader)
+        monkeypatch.setattr("bt_api_ctp.ctp.client.MdClient", _FakeMd)
+        monkeypatch.setattr("bt_api_ctp.collector_ctp.subscriber.CtpMdSubscriber", _FakeSubscriber)
+        monkeypatch.setattr(
+            "bt_api_ctp.collector_ctp.instrument_provider.CtpInstrumentProvider", _FakeProvider
+        )
+
+        config = {
+            "data_root": str(tmp_path),
+            "ctp": {
+                "md_front": "tcp://md.example:1",
+                "td_front": "tcp://td.example:1",
+                "broker_id": "9999",
+                "user_id": "u1",
+                "password": "p1",
+            },
+        }
+
+        with caplog.at_level(logging.INFO):
+            cli.build_engine(config)
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "trader" in messages
+        assert "login" in messages
+        assert "tcp://td.example:1" in messages
+
+    def test_trader_login_timeout_is_logged(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from bt_api_ctp.collector import cli
+
+        class _FakeTrader:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self, block: bool = True):
+                return None
+
+            def wait_ready(self, timeout: float = 30):
+                return False
+
+            def stop(self):
+                return None
+
+        monkeypatch.setattr("bt_api_ctp.ctp.client.TraderClient", _FakeTrader)
+
+        config = {
+            "data_root": str(tmp_path),
+            "ctp": {"md_front": "tcp://md:1", "td_front": "tcp://td:1"},
+        }
+
+        with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
+            cli.build_engine(config)
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "timeout" in messages
+
+
+class TestResolveLogFile:
+    """日志文件按交易日命名：夜盘归属下一个交易日。"""
+
+    def test_night_session_uses_next_trading_day(self, tmp_path):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        path = _resolve_log_file(
+            {"data_root": str(tmp_path)},
+            "20260916",
+            TradingCalendar(),
+            night=False,
+            moment=datetime(2026, 9, 16, 21, 30),
+        )
+
+        assert path == tmp_path / "logs" / "collector-20260917.log"
+
+    def test_day_session_uses_the_same_day(self, tmp_path):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        path = _resolve_log_file(
+            {"data_root": str(tmp_path)},
+            "20260916",
+            TradingCalendar(),
+            night=False,
+            moment=datetime(2026, 9, 16, 10, 0),
+        )
+
+        assert path == tmp_path / "logs" / "collector-20260916.log"
+
+    def test_explicit_night_flag_wins(self, tmp_path):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        path = _resolve_log_file(
+            {"data_root": str(tmp_path)},
+            "20260916",
+            TradingCalendar(),
+            night=True,
+            moment=datetime(2026, 9, 16, 10, 0),
+        )
+
+        assert path.name == "collector-20260917.log"
+
+    def test_custom_log_dir(self, tmp_path):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        path = _resolve_log_file(
+            {"data_root": str(tmp_path), "logging": {"dir": "mylogs"}},
+            "20260916",
+            TradingCalendar(),
+            night=False,
+            moment=datetime(2026, 9, 16, 10, 0),
+        )
+
+        assert path == tmp_path / "mylogs" / "collector-20260916.log"
+
+    def test_file_output_can_be_disabled(self, tmp_path):
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        path = _resolve_log_file(
+            {"data_root": str(tmp_path), "logging": {"file": False}},
+            "20260916",
+            TradingCalendar(),
+            night=False,
+            moment=None,
+        )
+
+        assert path is None
+
+    def test_missing_data_root_returns_none(self):
+        from bt_api_ctp.collector.cli import _resolve_log_file
+        from bt_api_ctp.collector.schedule import TradingCalendar
+
+        assert _resolve_log_file({}, "20260916", TradingCalendar(), night=False, moment=None) is None

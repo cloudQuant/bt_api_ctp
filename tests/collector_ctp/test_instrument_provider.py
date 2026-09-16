@@ -55,6 +55,22 @@ def _trader(records, *, complete=True, per_exchange=None, incomplete_exchanges=(
     return SimpleNamespace(query_instruments_result=query_instruments_result, calls=calls)
 
 
+class TestSessionLogging:
+    """交易会话关闭必须留痕，否则无法确认柜台连接已释放。"""
+
+    def test_close_logs_trader_logout(self, caplog):
+        import logging
+
+        provider = CtpInstrumentProvider(_trader([FUTURE]))
+
+        with caplog.at_level(logging.INFO):
+            provider.close()
+
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "trader" in messages
+        assert "closed" in messages
+
+
 class TestCtpInstrumentProvider:
     def test_keeps_futures_and_options_only(self):
         provider = CtpInstrumentProvider(_trader([FUTURE, OPTION, COMBINATION]))
