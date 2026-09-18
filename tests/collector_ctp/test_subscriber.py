@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -49,9 +50,10 @@ class _FakeMdClient:
         self.wait_ready_calls.append(timeout)
         return self._ready
 
-    def subscribe_batched(self, instruments, *, batch_size, interval_sec) -> None:
+    def subscribe_batched(self, instruments, *, batch_size, interval_sec, should_stop=None) -> int:
         self.subscribed = list(instruments)
         self.batch_kwargs = (batch_size, interval_sec)
+        return 0 if not instruments else -(-len(instruments) // batch_size)
 
 
 class _MdClientWithoutWaitReady:
@@ -66,6 +68,46 @@ class _MdClientWithoutWaitReady:
 
     def stop(self) -> None:
         return None
+
+
+class _DeferrableFakeMdClient(_FakeMdClient):
+    """模拟真实 MdClient：支持把重订阅交给调用方异步完成，并真实切批。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_login = None
+        self.on_disconnect = None
+        self.auto_resubscribe_on_login = True
+        self.batch_calls: list[tuple[list[str], str]] = []
+        self.batches: list[list[str]] = []
+        self.should_stop_provided: list[bool] = []
+
+    def subscribe_batched(
+        self, instruments, *, batch_size, interval_sec, should_stop=None
+    ) -> int:
+        self.subscribed = list(instruments)
+        self.batch_kwargs = (batch_size, interval_sec)
+        self.batch_calls.append((list(instruments), threading.current_thread().name))
+        self.should_stop_provided.append(should_stop is not None)
+        submitted = 0
+        for start in range(0, len(instruments), batch_size):
+            if should_stop is not None and should_stop():
+                return submitted
+            self.batches.append(list(instruments[start : start + batch_size]))
+            submitted += 1
+            if interval_sec > 0 and start + batch_size < len(instruments):
+                time.sleep(interval_sec)
+        return submitted
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> bool:
+    """有界等待，避免用固定 sleep 制造不稳定测试。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
 
 
 class _Handler:
@@ -332,3 +374,287 @@ class TestConnectFailFast:
 
         subscriber.connect()
         assert md.start_calls == [False]
+
+
+class TestDeferredResubscribeAfterReconnect:
+    """重连后的重订阅必须在独立线程分批进行（整改方案 P1-3）。
+
+    在 CTP 原生回调线程里提交全量（或分批 + 等待）会阻塞心跳与行情回调，
+    本身就是 ``OnFrontDisconnected(0x2001)`` 的成因。
+    """
+
+    def _connected(self, **kwargs):
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md, batch_interval_sec=0.0, **kwargs)
+        subscriber.set_handler(_Handler())
+        subscriber.connect()
+        return subscriber, md
+
+    def test_takes_over_resubscribe_from_the_host(self):
+        _, md = self._connected()
+
+        assert md.auto_resubscribe_on_login is False
+        assert callable(md.on_login)
+
+    def test_login_callback_returns_immediately(self):
+        subscriber, md = self._connected()
+        subscriber.subscribe([f"i{index}" for index in range(250)])
+
+        started = time.monotonic()
+        md.on_login(SimpleNamespace())
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.5, "登录回调不得在原生回调线程內做重订阅"
+
+    def test_reconnect_resubscribes_the_full_set_off_the_caller_thread(self):
+        subscriber, md = self._connected(batch_size=100)
+        instruments = [f"i{index}" for index in range(250)]
+        subscriber.subscribe(instruments)
+        assert len(md.batch_calls) == 1  # 初次订阅
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+
+        assert _wait_until(lambda: len(md.batch_calls) == 2)
+        resent, thread_name = md.batch_calls[-1]
+        assert resent == instruments
+        assert md.batch_kwargs == (100, 0.0)
+        assert thread_name != threading.current_thread().name
+
+    def test_resubscribe_is_split_into_configured_batches(self):
+        """契约 C-1：重连重订阅必须按 batch_size 真实切批。"""
+        subscriber, md = self._connected(batch_size=100)
+        subscriber.subscribe([f"i{index}" for index in range(250)])
+        md.batches.clear()
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+
+        assert _wait_until(lambda: len(md.batches) == 3)
+        assert [len(batch) for batch in md.batches] == [100, 100, 50]
+
+    def test_both_subscribe_paths_are_cancellable(self):
+        """初次订阅与重连重订阅都必须可被关闭中断。"""
+        subscriber, md = self._connected(batch_size=100)
+        subscriber.subscribe([f"i{index}" for index in range(250)])
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+        assert _wait_until(lambda: len(md.batch_calls) == 2)
+
+        assert md.should_stop_provided == [True, True]
+
+    def test_first_login_after_subscribe_does_not_resubscribe(self):
+        """契约 C-2：首次登录不是重连，不得重复提交全量。"""
+        subscriber, md = self._connected(batch_size=100)
+        subscriber.subscribe([f"i{index}" for index in range(250)])
+
+        md.on_login(SimpleNamespace())  # 首次登录：没有断线窗口
+
+        assert not _wait_until(lambda: len(md.batch_calls) > 1, timeout=0.3)
+        assert len(md.batch_calls) == 1
+
+    def test_close_stops_submitting_at_a_batch_boundary(self):
+        """契约 C-3：关闭时必须能在批边界停下，不能一边 close 一边还在发原生调用。
+
+        分批总量刻意超过 close 的 join 上限：若不支持取消，close 会在工作线程
+        仍在调用原生接口时就返回并去 stop 客户端。
+        """
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md, batch_size=100, batch_interval_sec=0.05)
+        subscriber.set_handler(_Handler())
+        subscriber.connect()
+        subscriber._subscribed = [f"i{index}" for index in range(5000)]  # 跳过初次订阅耗时
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+        assert _wait_until(lambda: len(md.batches) >= 2), "重订阅分批进行中"
+
+        subscriber.close()
+        submitted = len(md.batches)
+        time.sleep(0.2)
+
+        assert not subscriber._resubscribe_thread.is_alive(), "关闭后工作线程必须已退出"
+        assert len(md.batches) == submitted, "关闭后不得再提交新的批次"
+
+    def test_login_before_any_subscription_is_a_noop(self):
+        _, md = self._connected()
+
+        md.on_login(SimpleNamespace())
+
+        assert not _wait_until(lambda: bool(md.batch_calls), timeout=0.3)
+
+    def test_close_stops_the_resubscribe_thread(self):
+        subscriber, md = self._connected()
+        subscriber.subscribe(["rb2510"])
+        worker = subscriber._resubscribe_thread
+        assert worker is not None and worker.is_alive()
+
+        subscriber.close()
+
+        assert not worker.is_alive()
+        assert md.stop_calls == 1
+
+    def test_host_without_deferral_support_is_left_untouched(self):
+        md = _FakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+
+        subscriber.connect()
+
+        assert not hasattr(md, "auto_resubscribe_on_login")
+        assert not hasattr(md, "on_login")
+        assert subscriber._resubscribe_thread is None
+
+
+class TestDisconnectWindows:
+    """断线时间窗必须可上报，否则缺口无法解释（整改方案 P1-2）。"""
+
+    def test_pairs_disconnect_with_the_following_login(self):
+        md = _DeferrableFakeMdClient(generation=3)
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_disconnect(8193)
+        md.set_generation(4)
+        md.on_login(SimpleNamespace())
+
+        windows = subscriber.disconnect_windows()
+        assert len(windows) == 1
+        assert windows[0]["reason"] == 8193
+        assert windows[0]["generation_before"] == 3
+        assert windows[0]["generation_after"] == 4
+        assert windows[0]["start"] and windows[0]["end"]
+
+    def test_unrecovered_disconnect_keeps_an_open_window(self):
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_disconnect(4097)
+
+        windows = subscriber.disconnect_windows()
+        assert len(windows) == 1
+        assert windows[0]["end"] is None
+        assert windows[0]["generation_after"] is None
+
+    def test_second_disconnect_opens_a_new_window(self):
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+        md.on_disconnect(4097)
+
+        windows = subscriber.disconnect_windows()
+        assert [window["reason"] for window in windows] == [8193, 4097]
+        assert windows[1]["end"] is None
+
+    def test_host_without_disconnect_support_is_tolerated(self):
+        md = _FakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+
+        subscriber.connect()
+
+        assert subscriber.disconnect_windows() == []
+
+    def test_second_disconnect_without_login_archives_the_first_window(self):
+        """两次断线之间没有登录时，前一窗口不得被覆盖丢失。"""
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_disconnect(8193)
+        md.on_disconnect(4097)
+
+        windows = subscriber.disconnect_windows()
+        assert [window["reason"] for window in windows] == [8193, 4097]
+        assert windows[0]["end"] is None
+        assert windows[1]["end"] is None
+
+
+class TestSubscriptionDiagnostics:
+    """订阅失败与重订阅周期必须可上报（整改方案 P1-3 契约第 4、5 条）。"""
+
+    def test_records_failed_instruments_with_error_codes(self):
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_subscribe(SimpleNamespace(InstrumentID="rb2510"), SimpleNamespace(ErrorID=0))
+        md.on_subscribe(
+            SimpleNamespace(InstrumentID="nope"), SimpleNamespace(ErrorID=42, ErrorMsg="unknown")
+        )
+
+        assert subscriber.failed_instruments() == {"nope": 42}
+
+    def test_records_resubscribe_cycles(self):
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md, batch_size=100, batch_interval_sec=0.0)
+        subscriber.set_handler(_Handler())
+        subscriber.connect()
+        subscriber.subscribe([f"i{index}" for index in range(250)])
+
+        md.on_disconnect(8193)
+        md.set_generation(4)
+        md.on_login(SimpleNamespace())
+
+        assert _wait_until(lambda: bool(subscriber.resubscribe_events()))
+        event = subscriber.resubscribe_events()[0]
+        assert event["requested"] == 250
+        assert event["batches"] == 3
+        assert event["generation"] == 4
+        assert event["at"]
+
+    def test_zero_batch_submission_is_not_recorded_as_a_resubscribe(self):
+        """一个批次都没提交时不得记成一次重订阅，否则报告会虚报重订阅轮次。"""
+
+        class _RefusingMdClient(_DeferrableFakeMdClient):
+            def subscribe_batched(
+                self, instruments, *, batch_size, interval_sec, should_stop=None
+            ) -> int:
+                return 0  # 提交前会话又断了
+
+        md = _RefusingMdClient()
+        subscriber = CtpMdSubscriber(md, batch_interval_sec=0.0)
+        subscriber.set_handler(_Handler())
+        subscriber.connect()
+        subscriber.subscribe(["rb2510"])
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+
+        assert not _wait_until(lambda: bool(subscriber.resubscribe_events()), timeout=0.3)
+
+    def test_later_success_clears_an_earlier_failure(self):
+        """重订阅成功后，失败清单必须同步清理，否则报告永远报假缺口。"""
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md)
+        subscriber.connect()
+
+        md.on_subscribe(SimpleNamespace(InstrumentID="rb2510"), SimpleNamespace(ErrorID=42))
+        md.on_subscribe(SimpleNamespace(InstrumentID="rb2510"), SimpleNamespace(ErrorID=0))
+
+        assert subscriber.failed_instruments() == {}
+
+    def test_worker_survives_a_failing_resubscribe(self):
+        """重订阅出错不能让工作线程静默退出，否则后续重连永久失去重订阅能力。"""
+
+        def _boom():
+            raise RuntimeError("stats boom")
+
+        md = _DeferrableFakeMdClient()
+        subscriber = CtpMdSubscriber(md, batch_interval_sec=0.0)
+        subscriber.set_handler(_Handler())
+        subscriber.connect()
+        subscriber.subscribe(["rb2510"])
+        subscriber.subscription_stats = _boom  # 提交后的统计调用抛错
+
+        md.on_disconnect(8193)
+        md.on_login(SimpleNamespace())
+        assert _wait_until(lambda: len(md.batch_calls) == 2), "第一次重订阅已提交（随后统计抛错）"
+
+        md.on_disconnect(4097)
+        md.on_login(SimpleNamespace())
+
+        assert _wait_until(lambda: len(md.batch_calls) == 3), "工作线程必须存活并继续重订阅"

@@ -468,8 +468,87 @@ class TestSubscriptionLogging:
 
         acks = [r.getMessage() for r in caplog.records if "acknowledged" in r.getMessage()]
         assert acks, "订阅完成后应记录确认结果"
-        assert "ok=2" in acks[0]
+        assert "requested=2" in acks[0]
+        assert "acked=2" in acks[0]
         assert "failed=0" in acks[0]
+        assert "timed_out=0" in acks[0]
+
+    def test_warns_when_acknowledgement_is_incomplete(self, tmp_path, caplog):
+        """acked != requested 时不得视为就绪（整改方案 P1-4）。"""
+        import logging
+
+        class _FailedAckSubscriber(_FakeSubscriber):
+            def subscription_stats(self):
+                return {"ok": 0, "failed": 2, "last_error_id": 42}
+
+        subscriber = _FailedAckSubscriber()
+        engine, _ = _engine(
+            tmp_path, [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")], subscriber
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        messages = [r.getMessage() for r in caplog.records]
+        acks = [message for message in messages if "acknowledged" in message]
+        assert "requested=2" in acks[0]
+        assert "acked=0" in acks[0]
+        assert "failed=2" in acks[0]
+        assert "timed_out=0" in acks[0]
+        warnings = [message for message in messages if "not ready" in message]
+        assert warnings, "未就绪必须给出告警"
+        assert "42" in warnings[0]
+
+    def test_counts_unacknowledged_instruments_as_timed_out(self, tmp_path):
+        subscriber = _FakeSubscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        ack = engine._await_subscription_ack(5, timeout_sec=0.0)
+
+        assert ack["requested"] == 5
+        assert ack["acked"] == 0
+        assert ack["failed"] == 0
+        assert ack["timed_out"] == 5
+
+    def test_extra_acknowledgements_do_not_raise_a_readiness_warning(self, tmp_path, caplog):
+        """acked > requested 说明有重复提交，不是"未就绪"，不得误报。"""
+        import logging
+
+        class _OverAckSubscriber(_FakeSubscriber):
+            def subscription_stats(self):
+                return {"ok": 5, "failed": 0, "last_error_id": None}
+
+        subscriber = _OverAckSubscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "requested=1" in messages
+        assert "acked=5" in messages
+        assert "not ready" not in messages
+
+    def test_failed_subscriptions_are_never_reported_as_ready(self, tmp_path, caplog):
+        """柜台报错的合约即使 ACK 计数被重复提交补平，也必须告警。"""
+        import logging
+
+        class _FailedButAckedSubscriber(_FakeSubscriber):
+            def subscription_stats(self):
+                return {"ok": 1, "failed": 1, "last_error_id": 42}
+
+            def failed_instruments(self):
+                return {"nope": 42}
+
+        subscriber = _FailedButAckedSubscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.02)
+
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "not ready" in messages
+        assert "failed=1" in messages
 
     def test_subscriber_without_stats_still_logs_the_request(self, tmp_path, caplog):
         import logging
@@ -513,7 +592,160 @@ class TestSubscriptionLogging:
 
         acks = [r.getMessage() for r in caplog.records if "acknowledged" in r.getMessage()]
         assert acks
-        assert "ok=1" in acks[0]
+        assert "acked=1" in acks[0]
+
+
+class TestSessionDiagnosticsReporting:
+    """断线时间窗与回调异常必须进入完整性报告（整改方案 P1-2）。"""
+
+    def test_report_includes_disconnect_windows_and_callback_errors(self, tmp_path):
+        import json
+
+        class _DiagnosticSubscriber(_FakeSubscriber):
+            def disconnect_windows(self):
+                return [{"start": "t0", "reason": 8193, "end": "t1"}]
+
+            def error_count(self):
+                return 4
+
+            def generation_changes(self):
+                return [{"at": "t1", "generation": 2}]
+
+        subscriber = _DiagnosticSubscriber(ticks_on_connect=[_tick()])
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        report = engine.run_once(duration_sec=0.02)
+
+        payload = json.loads(
+            (tmp_path / report.trading_day / "report.json").read_text(encoding="utf-8")
+        )
+        assert payload["disconnects"] == [{"start": "t0", "reason": 8193, "end": "t1"}]
+        assert payload["callback_errors"] == 4
+        assert payload["connection_generations"] == [{"at": "t1", "generation": 2}]
+
+    def test_subscriber_without_diagnostics_is_tolerated(self, tmp_path):
+        import json
+
+        subscriber = _FakeSubscriber(ticks_on_connect=[_tick()])
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        report = engine.run_once(duration_sec=0.02)
+
+        payload = json.loads(
+            (tmp_path / report.trading_day / "report.json").read_text(encoding="utf-8")
+        )
+        assert payload["disconnects"] == []
+        assert payload["callback_errors"] == 0
+        assert payload["connection_generations"] == []
+
+    def test_broken_diagnostics_hook_does_not_lose_the_report(self, tmp_path):
+        """可选诊断钩子坏了不能连累整份报告（整改方案 P1-2）。"""
+        import json
+
+        class _BrokenDiagnosticsSubscriber(_FakeSubscriber):
+            def disconnect_windows(self):
+                raise RuntimeError("diagnostics boom")
+
+        subscriber = _BrokenDiagnosticsSubscriber(ticks_on_connect=[_tick()])
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        report = engine.run_once(duration_sec=0.02)
+
+        payload = json.loads(
+            (tmp_path / report.trading_day / "report.json").read_text(encoding="utf-8")
+        )
+        assert payload["disconnects"] == []
+        assert payload["instruments"]
+
+    def test_report_includes_subscription_diagnostics(self, tmp_path):
+        import json
+
+        class _SubscriptionDiagnosticSubscriber(_FakeSubscriber):
+            def failed_instruments(self):
+                return {"nope": 42}
+
+            def resubscribe_events(self):
+                return [{"at": "t", "generation": 4, "requested": 250, "batches": 3}]
+
+        subscriber = _SubscriptionDiagnosticSubscriber(ticks_on_connect=[_tick()])
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        report = engine.run_once(duration_sec=0.02)
+
+        payload = json.loads(
+            (tmp_path / report.trading_day / "report.json").read_text(encoding="utf-8")
+        )
+        assert payload["failed_instruments"] == {"nope": 42}
+        assert payload["resubscribes"] == [
+            {"at": "t", "generation": 4, "requested": 250, "batches": 3}
+        ]
+
+
+class TestHealthGuardWiring:
+    """数据健康守卫必须在停摆时输出 ERROR（整改方案 P0-5）。"""
+
+    def test_stalled_feed_is_reported_as_an_error(self, tmp_path, caplog, monkeypatch):
+        import logging
+
+        from bt_api_ctp.collector.health import HealthThresholds
+
+        subscriber = _FakeSubscriber()
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            subscriber,
+            heartbeat_interval_sec=0.01,
+            health=HealthThresholds(stall_intervals=1, min_ticks_per_interval=1),
+        )
+        monkeypatch.setattr(engine, "_current_session", lambda: 0)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        messages = [record.getMessage() for record in caplog.records]
+        health = [message for message in messages if message.startswith("health:")]
+        alarms = [message for message in messages if "collection health alarm" in message]
+        assert health, "每个心跳周期都应输出一行健康采样"
+        assert alarms, "交易时段内没有任何数据必须告警"
+        assert any("stalled" in message for message in alarms)
+
+    def test_outside_session_is_never_an_alarm(self, tmp_path, caplog, monkeypatch):
+        import logging
+
+        from bt_api_ctp.collector.health import HealthThresholds
+
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            _FakeSubscriber(),
+            heartbeat_interval_sec=0.01,
+            health=HealthThresholds(stall_intervals=1),
+        )
+        monkeypatch.setattr(engine, "_current_session", lambda: None)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "health:" in messages
+        assert "alarm" not in messages
+
+    def test_health_guard_can_be_disabled(self, tmp_path, caplog):
+        import logging
+
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE")],
+            _FakeSubscriber(),
+            heartbeat_interval_sec=0.01,
+            health_check_enabled=False,
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "health:" not in messages
 
 
 class TestFlushFailureSafety:

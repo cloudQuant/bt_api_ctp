@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from bt_api_ctp.collector.engine import CollectionConfig, TickCollectionEngine
+from bt_api_ctp.collector.health import HealthThresholds
 from bt_api_ctp.collector.protocols import DEFAULT_ASSET_TYPES, EXCHANGES
 from bt_api_ctp.collector.schedule import (
     TradingCalendar,
@@ -31,7 +32,7 @@ from bt_api_ctp.collector.schedule import (
     seconds_until_next_open,
 )
 from bt_api_ctp.collector.shard import ShardConfig, ShardValidationReport
-from bt_api_ctp.collector.sink import SinkReport
+from bt_api_ctp.collector.sink import DEFAULT_COMPACT_SEGMENTS, SinkReport
 
 EXIT_OK = 0
 EXIT_SHARD_MISMATCH = 1
@@ -110,9 +111,50 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     if overflow not in ("drop", "flush"):
         errors.append(f"unknown buffer.overflow_policy: {overflow!r}")
 
+    # 重连重订阅依赖分批 + 批间限速，参数必须有效（见整改方案 P1-3 契约）。
+    subscription = config.get("subscription") or {}
+    try:
+        batch_size = int(subscription.get("batch_size", 100))
+        batch_interval = float(subscription.get("batch_interval_sec", 0.1))
+    except (TypeError, ValueError):
+        errors.append("subscription.batch_size / batch_interval_sec must be numeric")
+    else:
+        if batch_size < 1:
+            errors.append("subscription.batch_size must be >= 1")
+        if batch_interval <= 0:
+            errors.append("subscription.batch_interval_sec must be > 0")
+
     holidays_file = (config.get("calendar") or {}).get("holidays_file")
     if holidays_file and not Path(holidays_file).exists():
         errors.append(f"calendar.holidays_file not found: {holidays_file}")
+
+    health = config.get("health") or {}
+    unknown_health = set(health) - {
+        "enabled",
+        "min_ticks_per_interval",
+        "stall_intervals",
+        "silent_after_sec",
+        "silent_share_alarm",
+    }
+    if unknown_health:
+        errors.append(f"unknown health settings: {sorted(unknown_health)}")
+    try:
+        if int(health.get("min_ticks_per_interval", 1)) < 0:
+            errors.append("health.min_ticks_per_interval must be >= 0")
+        if int(health.get("stall_intervals", 2)) < 1:
+            errors.append("health.stall_intervals must be >= 1")
+        if float(health.get("silent_after_sec", 300.0)) <= 0:
+            errors.append("health.silent_after_sec must be > 0")
+        share = float(health.get("silent_share_alarm", 0.8))
+        if not 0 < share <= 1:
+            errors.append("health.silent_share_alarm must be in (0, 1]")
+    except (TypeError, ValueError):
+        errors.append("health thresholds must be numeric")
+
+    # 健康守卫挂在高频心跳上；心跳关掉守卫就永远不会评估。
+    heartbeat = float((config.get("buffer") or {}).get("heartbeat_interval_sec", 60.0))
+    if health.get("enabled", True) and heartbeat <= 0:
+        errors.append("health.enabled requires a positive buffer.heartbeat_interval_sec")
 
     return errors
 
@@ -144,6 +186,8 @@ def build_collection_config(config: dict[str, Any]) -> CollectionConfig:
     sink_payload = config.get("sink") or {}
     logging_payload = config.get("logging") or {}
     asset_types = tuple(config.get("asset_types") or DEFAULT_ASSET_TYPES)
+    health_payload = dict(config.get("health") or {})
+    health_enabled = bool(health_payload.pop("enabled", True))
 
     return CollectionConfig(
         data_root=config["data_root"],
@@ -154,9 +198,15 @@ def build_collection_config(config: dict[str, Any]) -> CollectionConfig:
         flush_interval_sec=float(buffer_payload.get("flush_interval_sec", 5.0)),
         merge_existing=bool(sink_payload.get("merge_existing", True)),
         gap_threshold_sec=float(sink_payload.get("gap_threshold_sec", 60.0)),
+        compact_segment_count=int(sink_payload.get("compact_segments", DEFAULT_COMPACT_SEGMENTS)),
+        gap_threshold_factor=float(sink_payload.get("gap_threshold_factor", 10.0)),
+        drop_outside_session=bool(sink_payload.get("drop_outside_session", True)),
         heartbeat_interval_sec=float(buffer_payload.get("heartbeat_interval_sec", 60.0)),
         tick_log_interval=int(logging_payload.get("tick_interval", 1000)),
         tick_log_mode=str(logging_payload.get("tick_mode", "first")),
+        health_check_enabled=health_enabled,
+        health=HealthThresholds(**health_payload),
+        calendar=_calendar_from_config(config),
     )
 
 

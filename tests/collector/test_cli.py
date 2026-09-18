@@ -34,6 +34,26 @@ class TestValidateConfig:
         errors = validate_config({"data_root": "/tmp/x", "shard": {"strategy": "bogus"}})
         assert any("strategy" in error for error in errors)
 
+    def test_non_positive_batch_size_is_flagged(self):
+        """契约要求重连重订阅分批，批大小必须 >= 1（整改方案 P1-3）。"""
+        errors = validate_config({"data_root": "/tmp/x", "subscription": {"batch_size": 0}})
+        assert any("batch_size" in error for error in errors)
+
+    def test_zero_batch_interval_is_flagged(self):
+        """契约要求批间限速不得为 0（整改方案 P1-3）。"""
+        errors = validate_config(
+            {"data_root": "/tmp/x", "subscription": {"batch_interval_sec": 0}}
+        )
+        assert any("batch_interval_sec" in error for error in errors)
+
+    def test_default_subscription_settings_are_valid(self):
+        assert validate_config({"data_root": "/tmp/x", "subscription": {}}) == []
+
+    def test_non_numeric_subscription_settings_are_flagged(self):
+        """非法类型必须走配置错误分支，不得直接把异常抛给调用方。"""
+        errors = validate_config({"data_root": "/tmp/x", "subscription": {"batch_size": "abc"}})
+        assert any("batch_size" in error for error in errors)
+
     def test_bad_hash_shard_is_flagged(self):
         errors = validate_config(
             {
@@ -94,6 +114,73 @@ class TestBuildCollectionConfig:
 
         assert collection_config.tick_log_interval == 1000
         assert collection_config.tick_log_mode == "first"
+
+
+class TestDataQualityConfig:
+    """健康守卫与数据质量参数必须能从 YAML 配置贯通（整改方案 P0-5 / P2）。"""
+
+    def test_reads_health_thresholds(self):
+        config = build_collection_config(
+            {
+                "data_root": "/tmp/x",
+                "health": {"stall_intervals": 5, "silent_after_sec": 120},
+            }
+        )
+
+        assert config.health.stall_intervals == 5
+        assert config.health.silent_after_sec == 120
+        assert config.health.silent_share_alarm == 0.8  # 未提供的沿用默认
+        assert config.health_check_enabled is True
+
+    def test_health_can_be_disabled(self):
+        config = build_collection_config({"data_root": "/tmp/x", "health": {"enabled": False}})
+
+        assert config.health_check_enabled is False
+
+    def test_reads_sink_quality_settings(self):
+        config = build_collection_config(
+            {
+                "data_root": "/tmp/x",
+                "sink": {"gap_threshold_factor": 0, "drop_outside_session": False},
+            }
+        )
+
+        assert config.gap_threshold_factor == 0.0
+        assert config.drop_outside_session is False
+
+    def test_unknown_health_setting_is_flagged(self):
+        errors = validate_config({"data_root": "/tmp/x", "health": {"bogus": 1}})
+
+        assert any("health" in error for error in errors)
+
+    def test_non_numeric_health_threshold_is_flagged(self):
+        errors = validate_config({"data_root": "/tmp/x", "health": {"stall_intervals": "abc"}})
+
+        assert any("numeric" in error for error in errors)
+
+    def test_out_of_range_health_share_is_flagged(self):
+        errors = validate_config({"data_root": "/tmp/x", "health": {"silent_share_alarm": 1.5}})
+
+        assert any("silent_share_alarm" in error for error in errors)
+
+    def test_health_requires_a_heartbeat(self):
+        """心跳关掉时守卫永远不会评估，必须当成配置错误而不是静默失效。"""
+        errors = validate_config(
+            {
+                "data_root": "/tmp/x",
+                "health": {"enabled": True},
+                "buffer": {"heartbeat_interval_sec": 0},
+            }
+        )
+
+        assert any("heartbeat" in error for error in errors)
+
+    def test_calendar_is_passed_to_the_collection_config(self):
+        config = build_collection_config(
+            {"data_root": "/tmp/x", "calendar": {"holidays_file": ""}}
+        )
+
+        assert config.calendar is not None
 
 
 class TestMainConfigErrors:

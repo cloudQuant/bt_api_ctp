@@ -6,10 +6,90 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 
-from bt_api_ctp.collector.schedule import NIGHT_CLOSE_TIERS, TradingCalendar
+from bt_api_ctp.collector.schedule import (
+    NIGHT_CLOSE_TIERS,
+    TradingCalendar,
+    covered_session_seconds,
+    is_quote_window,
+)
+
+
+class TestCoveredSessionSeconds:
+    """覆盖率评分需要一个"窗口内本应有多少个交易秒"的口径（整改方案 P2-5）。"""
+
+    def test_within_one_session(self):
+        start = datetime(2026, 9, 16, 9, 0, 0)
+        end = datetime(2026, 9, 16, 9, 10, 0)
+        assert covered_session_seconds(start, end) == pytest.approx(600.0)
+
+    def test_scheduled_break_is_excluded(self):
+        start = datetime(2026, 9, 16, 10, 0, 0)
+        end = datetime(2026, 9, 16, 10, 40, 0)
+        # 10:00-10:15 与 10:30-10:40；10:15-10:30 小节休息不计
+        assert covered_session_seconds(start, end) == pytest.approx(1500.0)
+
+    def test_night_session_crossing_midnight(self):
+        start = datetime(2026, 9, 16, 23, 0, 0)
+        end = datetime(2026, 9, 17, 1, 0, 0)
+        assert covered_session_seconds(start, end) == pytest.approx(7200.0)
+
+    def test_close_to_open_jump_is_excluded(self):
+        start = datetime(2026, 9, 16, 15, 0, 0)
+        end = datetime(2026, 9, 16, 21, 30, 0)
+        # 15:00-15:15 + 21:00-21:30
+        assert covered_session_seconds(start, end) == pytest.approx(2700.0)
+
+    def test_outside_sessions_is_zero(self):
+        start = datetime(2026, 9, 16, 3, 0, 0)
+        end = datetime(2026, 9, 16, 5, 0, 0)
+        assert covered_session_seconds(start, end) == 0.0
+
+    def test_empty_window_is_zero(self):
+        moment = datetime(2026, 9, 16, 9, 30, 0)
+        assert covered_session_seconds(moment, moment) == 0.0
+
+    def test_weekend_between_two_trading_days_is_not_counted(self):
+        """周五夜盘 + 周一日盘同属一个交易日，中间两天休市不得计入分母。"""
+        start = datetime(2026, 9, 18, 21, 0, 0)  # 周五晚（归属下周一交易日）
+        end = datetime(2026, 9, 21, 15, 0, 0)  # 周一日盘 15:00
+
+        covered = covered_session_seconds(start, end)
+
+        # 周五夜盘 5.5h + 周一 09:00-10:15 / 10:30-11:30 / 13:00-15:00 共 4.25h
+        assert covered == pytest.approx((5.5 + 4.25) * 3600)
+
+    def test_holiday_is_not_counted(self):
+        calendar = TradingCalendar(holidays=frozenset({"20260921"}))
+        start = datetime(2026, 9, 18, 21, 0, 0)
+        end = datetime(2026, 9, 22, 15, 0, 0)  # 周二
+
+        covered = covered_session_seconds(start, end, calendar)
+
+        # 周一休市（周五晚因此也没有夜盘），只剩周二日盘 4.25h
+        assert covered == pytest.approx(4.25 * 3600)
+
+
+class TestQuoteWindow:
+    """开盘集合竞价（08:55 / 20:55）是真实行情，不能当非时段数据丢掉。"""
+
+    def test_pre_open_auction_is_a_quote_window(self):
+        assert is_quote_window(datetime(2026, 9, 16, 8, 55, 0)) is True
+        assert is_quote_window(datetime(2026, 9, 16, 20, 55, 0)) is True
+
+    def test_subscribe_time_snapshot_is_not_a_quote_window(self):
+        assert is_quote_window(datetime(2026, 9, 16, 20, 18, 42)) is False
+
+    def test_regular_session_is_a_quote_window(self):
+        assert is_quote_window(datetime(2026, 9, 16, 9, 30, 0)) is True
+        assert is_quote_window(datetime(2026, 9, 16, 23, 59, 0)) is True
+
+    def test_after_close_is_not_a_quote_window(self):
+        assert is_quote_window(datetime(2026, 9, 16, 15, 16, 0)) is False
+        assert is_quote_window(datetime(2026, 9, 16, 20, 50, 0)) is False
 
 
 class TestTradingCalendarBasics:

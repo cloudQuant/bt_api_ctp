@@ -64,6 +64,68 @@ def _session_start(day: date, session: Session) -> datetime:
     return datetime(day.year, day.month, day.day, int(hour), int(minute))
 
 
+def _session_length_seconds(session: Session) -> float:
+    start = _hhmm_seconds(session.start_hhmm)
+    end = _hhmm_seconds(session.end_hhmm)
+    if session.crosses_midnight:
+        return float((end - start) % _SECONDS_PER_DAY)
+    return float(end - start)
+
+
+def covered_session_seconds(
+    start: datetime, end: datetime, calendar: TradingCalendar | None = None
+) -> float:
+    """Total in-session seconds between two moments, breaks excluded.
+
+    This is the denominator for a coverage score: how many seconds the
+    instrument was actually expected to print snapshots.  Scheduled breaks, the
+    close-to-open jump and non-trading days must not inflate it -- a Friday
+    night session plus the following Monday spans a weekend whose "sessions"
+    never happen.
+    """
+    if end <= start:
+        return 0.0
+    calendar = calendar or TradingCalendar()
+    total = 0.0
+    # 夜盘窗口可能从前一个自然日开始，因此多回看一天。
+    day = start.date() - timedelta(days=1)
+    last_day = end.date()
+    while day <= last_day:
+        day_key = _format_day(day)
+        for session in TRADING_SESSIONS:
+            if session.crosses_midnight:
+                if not calendar.has_night_session(day_key):
+                    continue
+            elif not calendar.is_trading_day(day_key):
+                continue
+            window_start = _session_start(day, session)
+            window_end = window_start + timedelta(seconds=_session_length_seconds(session))
+            overlap_start = max(start, window_start)
+            overlap_end = min(end, window_end)
+            if overlap_end > overlap_start:
+                total += (overlap_end - overlap_start).total_seconds()
+        day += timedelta(days=1)
+    return total
+
+
+#: Exchanges run a call auction in the five minutes before a session opens
+#: (08:55 and 20:55) and CTP pushes those snapshots.  They are real market data.
+_OPEN_AUCTION_LEAD = timedelta(minutes=5)
+
+
+def is_quote_window(moment: datetime) -> bool:
+    """Whether ``moment`` can carry a real quote.
+
+    Wider than :func:`session_index` by the pre-open call auction, so that
+    filtering "snapshots outside any session" does not throw away auction
+    quotes.  A snapshot pushed at subscribe time (observed 20:18) still fails.
+    """
+    return (
+        session_index(moment) is not None
+        or session_index(moment + _OPEN_AUCTION_LEAD) is not None
+    )
+
+
 #: The two windows a scheduler starts: a day group and a night group.
 DAY_SESSIONS: tuple[Session, ...] = TRADING_SESSIONS[:3]
 NIGHT_SESSIONS: tuple[Session, ...] = TRADING_SESSIONS[3:]

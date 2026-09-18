@@ -12,10 +12,12 @@ import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from bt_api_ctp.collector.buffer import TickBuffer
+from bt_api_ctp.collector.health import CollectionHealthGuard, HealthThresholds
 from bt_api_ctp.collector.protocols import (
     DEFAULT_ASSET_TYPES,
     EXCHANGES,
@@ -24,8 +26,9 @@ from bt_api_ctp.collector.protocols import (
     MarketDataSubscriber,
     TickRecord,
 )
+from bt_api_ctp.collector.schedule import TradingCalendar, session_index
 from bt_api_ctp.collector.shard import ShardConfig, select_instruments
-from bt_api_ctp.collector.sink import ParquetSink, SinkReport
+from bt_api_ctp.collector.sink import DEFAULT_COMPACT_SEGMENTS, ParquetSink, SinkReport
 
 _MAX_POLL_SECONDS = 0.2
 
@@ -47,6 +50,16 @@ class CollectionConfig:
     flush_interval_sec: float = 5.0
     merge_existing: bool = True
     gap_threshold_sec: float = 60.0
+    #: Pending staging segments per compaction; the memory/rewrite trade-off.
+    compact_segment_count: int = DEFAULT_COMPACT_SEGMENTS
+    #: Snapshot whose exchange timestamp is outside every session is not market
+    #: data (CTP pushes one per instrument on subscribe).
+    drop_outside_session: bool = True
+    #: Adapt the gap threshold to each instrument's own cadence.
+    gap_threshold_factor: float = 10.0
+    #: Trading calendar used to score coverage; a window spanning a weekend must
+    #: not count sessions that never happen.
+    calendar: TradingCalendar | None = None
     #: 0 disables the heartbeat.  Unattended runs should keep it on.
     heartbeat_interval_sec: float = 60.0
     #: Per-instrument tick count at which a progress milestone is logged.
@@ -54,6 +67,9 @@ class CollectionConfig:
     #: ``first`` reports only the first threshold, ``every`` reports each
     #: multiple, ``off`` disables milestones (same as interval <= 0).
     tick_log_mode: str = "first"
+    #: Watch the data *rate* and raise an error when the feed stalls.
+    health_check_enabled: bool = True
+    health: HealthThresholds = field(default_factory=HealthThresholds)
 
 
 class _BufferHandler:
@@ -122,8 +138,17 @@ class TickCollectionEngine:
             self._config.data_root,
             merge_existing=self._config.merge_existing,
             gap_threshold_sec=self._config.gap_threshold_sec,
+            compact_segment_count=self._config.compact_segment_count,
+            gap_threshold_factor=self._config.gap_threshold_factor,
+            drop_outside_session=self._config.drop_outside_session,
+            calendar=self._config.calendar,
         )
         handler = _BufferHandler(buffer)
+        guard = (
+            CollectionHealthGuard(self._config.health)
+            if self._config.health_check_enabled
+            else None
+        )
         self._subscriber.set_handler(handler)
         self._subscriber.connect()
         # CTP depth callbacks carry no ExchangeID; hand the venue the
@@ -152,7 +177,7 @@ class TickCollectionEngine:
                 time.sleep(poll_seconds)
                 now = time.monotonic()
                 if buffer.should_flush() or (now - last_flush) >= self._config.flush_interval_sec:
-                    trading_day = self._flush(sink, buffer, trading_day)
+                    trading_day = self._flush(sink, buffer, trading_day, guard)
                     last_flush = now
                 if (
                     self._config.heartbeat_interval_sec > 0
@@ -170,8 +195,9 @@ class TickCollectionEngine:
                         now - started,
                     )
                     last_heartbeat = now
+                    self._report_health(guard, now=now, subscribed=len(selected))
         finally:
-            trading_day = self._flush(sink, buffer, trading_day)
+            trading_day = self._flush(sink, buffer, trading_day, guard)
             self._subscriber.close()
 
         if not trading_day:
@@ -179,7 +205,11 @@ class TickCollectionEngine:
                 "collection finished: no data persisted (received=%d)", handler.accepted
             )
             return SinkReport(trading_day="", dropped_ticks=buffer.dropped_count())
-        report = sink.finalize(trading_day, dropped_ticks=buffer.dropped_count())
+        report = sink.finalize(
+            trading_day,
+            dropped_ticks=buffer.dropped_count(),
+            **self._session_diagnostics(),
+        )
         _logger.info(
             "collection finished: trading_day=%s instruments=%d received=%d dropped=%d",
             report.trading_day,
@@ -188,6 +218,53 @@ class TickCollectionEngine:
             buffer.dropped_count(),
         )
         return report
+
+    def _current_session(self) -> int | None:
+        """Session index the wall clock currently falls in, else ``None``."""
+        return session_index(datetime.now())
+
+    def _report_health(
+        self, guard: CollectionHealthGuard | None, *, now: float, subscribed: int
+    ) -> None:
+        """Log one health sample and raise an error when collection is unhealthy.
+
+        The heartbeat only reported cumulative counters, which keep creeping up
+        even while the feed is dead; this reports the rate instead.
+        """
+        if guard is None:
+            return
+        verdict = guard.evaluate(
+            now=now, subscribed=subscribed, session=self._current_session()
+        )
+        _logger.info("health: %s", verdict.describe())
+        for reason in verdict.alarm_reasons:
+            _logger.error("collection health alarm: %s", reason)
+
+    def _session_diagnostics(self) -> dict[str, Any]:
+        """Collect whatever session diagnostics the subscriber can report.
+
+        Every hook is optional and belongs to pluggable venue code, so a broken
+        one degrades to "no diagnostics" -- it must never take the completeness
+        report down with it.
+        """
+
+        def read(name: str, default: Any) -> Any:
+            hook = getattr(self._subscriber, name, None)
+            if not callable(hook):
+                return default
+            try:
+                return hook()
+            except Exception:
+                _logger.exception("subscriber diagnostics hook %s failed", name)
+                return default
+
+        return {
+            "disconnects": read("disconnect_windows", []),
+            "callback_errors": read("error_count", 0),
+            "connection_generations": read("generation_changes", []),
+            "failed_instruments": read("failed_instruments", {}),
+            "resubscribes": read("resubscribe_events", []),
+        }
 
     def _report_subscription(self, selected: list[InstrumentSpec]) -> None:
         """Log the requested universe per asset type, then the acknowledgement."""
@@ -200,12 +277,28 @@ class TickCollectionEngine:
             self._config.flush_interval_sec,
             breakdown,
         )
-        stats = self._await_subscription_ack(len(selected))
-        if stats:
-            _logger.info(
-                "subscribe acknowledged: ok=%s failed=%s",
-                stats.get("ok", "n/a"),
-                stats.get("failed", "n/a"),
+        ack = self._await_subscription_ack(len(selected))
+        if not ack:
+            return
+        # "ok" 只代表柜台 ACK 无错误码；只有 acked == requested 才算就绪。
+        _logger.info(
+            "subscribe acknowledged: requested=%d acked=%d failed=%d timed_out=%d",
+            ack["requested"],
+            ack["acked"],
+            ack["failed"],
+            ack["timed_out"],
+        )
+        if ack["acked"] < ack["requested"] or ack["failed"]:
+            # acked > requested 只说明有过重复提交（柜台 ACK 幂等），不算未就绪；
+            # 但柜台明确报错的合约即使计数被"补平"也必须告警。
+            _logger.warning(
+                "subscribe not ready: %d of %d instruments unacknowledged "
+                "(failed=%d timed_out=%d last_error_id=%s)",
+                max(ack["requested"] - ack["acked"], 0),
+                ack["requested"],
+                ack["failed"],
+                ack["timed_out"],
+                ack["last_error_id"],
             )
 
     def _await_subscription_ack(self, expected: int, timeout_sec: float = 15.0) -> dict[str, Any]:
@@ -214,6 +307,9 @@ class TickCollectionEngine:
         Responses arrive on the native callback thread *after* ``subscribe``
         returns, so reading the counters immediately reports a partial result.
         The wait is bounded: a slow counter must never delay collection.
+
+        Returns ``{}`` when the subscriber cannot report statistics, otherwise
+        the requested/acked/failed/timed_out breakdown.
         """
         stats_fn = getattr(self._subscriber, "subscription_stats", None)
         if not callable(stats_fn):
@@ -226,13 +322,30 @@ class TickCollectionEngine:
         ):
             time.sleep(0.1)
             stats = stats_fn()
-        return stats
+        acked = int(stats.get("ok", 0) or 0)
+        failed = int(stats.get("failed", 0) or 0)
+        return {
+            "requested": int(expected),
+            "acked": acked,
+            "failed": failed,
+            "timed_out": max(int(expected) - acked - failed, 0),
+            "last_error_id": stats.get("last_error_id"),
+        }
 
-    def _flush(self, sink: ParquetSink, buffer: TickBuffer, trading_day: str) -> str:
+    def _flush(
+        self,
+        sink: ParquetSink,
+        buffer: TickBuffer,
+        trading_day: str,
+        guard: CollectionHealthGuard | None = None,
+    ) -> str:
         drained = buffer.drain()
         if not drained:
             return trading_day
         rows = sum(len(ticks) for ticks in drained.values())
+        # 行情确实到了就先记账：落盘失败是另一回事，不能被误报成"行情停摆"。
+        if guard is not None:
+            guard.observe(drained, now=time.monotonic())
         try:
             report = sink.write(drained)
         except Exception:

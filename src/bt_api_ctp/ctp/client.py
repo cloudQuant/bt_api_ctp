@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import importlib.machinery
 import json
+import logging
 import math
 import os
 import queue
@@ -89,6 +90,8 @@ from .ctp_structs_query import (
     CThostFtdcQryTradingAccountField,
 )
 from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
+
+_logger = logging.getLogger(__name__)
 
 CTP_REQUEST_COUNT_KEYS = (
     "authenticate",
@@ -946,11 +949,17 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connection_generation += 1
             self._c._connected = True
+            generation = self._c._connection_generation
+            front = self._c.front
             field = CThostFtdcReqUserLoginField()
             field.BrokerID = self._c.broker_id
             field.UserID = self._c.user_id
             field.Password = self._c.password
             api = self._c._api
+        # 连接代次是断线/重连的唯一权威标识，必须留痕，否则无人值守时断线不可见。
+        _logger.info(
+            "CTP market-data front connected (generation=%s, front=%s)", generation, front
+        )
         if api is not None:
             api.ReqUserLogin(field, 1)
 
@@ -960,23 +969,53 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connected = False
             self._c._loggedin = False
+            generation = self._c._connection_generation
+            callback = self._c.on_disconnect
+        # 常见原因码：0x1001 网络读失败、0x2001 接收心跳超时、0x2003 收到错误报文。
+        _logger.warning(
+            "CTP market-data front disconnected (reason=%s, generation=%s)", nReason, generation
+        )
+        if callback is not None:
+            callback(nReason)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
         subscribe = None
         callback = None
         error_callback = None
         error_info = None
+        login_ok = False
+        trading_day = ""
+        pending = 0
+        generation = None
         with self._c._state_lock:
             if not self._is_current_locked():
                 return
+            generation = self._c._connection_generation
             if pRspInfo and pRspInfo.ErrorID == 0:
                 self._c._loggedin = True
-                if self._c._pending_instruments:
+                login_ok = True
+                trading_day = str(getattr(pRspUserLogin, "TradingDay", "") or "")
+                pending = len(self._c._pending_instruments)
+                if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
                     subscribe = (self._c._api, list(self._c._pending_instruments))
                 callback = self._c.on_login
             else:
                 error_callback = self._c.on_error
                 error_info = pRspInfo
+        if login_ok:
+            _logger.info(
+                "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d)",
+                generation,
+                trading_day,
+                pending,
+            )
+        else:
+            _logger.warning(
+                "CTP market-data login failed (generation=%s, error_id=%s, error_msg=%s)",
+                generation,
+                getattr(pRspInfo, "ErrorID", None),
+                getattr(pRspInfo, "ErrorMsg", ""),
+            )
         if subscribe is not None and subscribe[0] is not None:
             subscribe[0].SubscribeMarketData(subscribe[1])
         if callback is not None:
@@ -1030,10 +1069,15 @@ class MdClient:
         self.on_error = None  # callback(CThostFtdcRspInfoField)
         # callback(CThostFtdcSpecificInstrumentField, CThostFtdcRspInfoField)
         self.on_subscribe = None
+        # callback(nReason) - 前置断开通知，用于把断线时间窗写进完整性报告
+        self.on_disconnect = None
 
         self._connected = False
         self._loggedin = False
         self._pending_instruments = []
+        # True = 登录回调内直接全量重订阅（历史行为，向后兼容）；
+        # False = 调用方自行异步分批重订阅，避免阻塞 CTP 原生回调线程。
+        self.auto_resubscribe_on_login = True
         self._connection_generation = 0
         self._api = None
         self._spi = None
@@ -1184,7 +1228,9 @@ class MdClient:
         if api is not None:
             api.SubscribeMarketData(pending_instruments)
 
-    def subscribe_batched(self, instruments, *, batch_size=100, interval_sec=0.1):
+    def subscribe_batched(
+        self, instruments, *, batch_size=100, interval_sec=0.1, should_stop=None
+    ):
         """分批订阅合约列表（可在 start 前或后调用）
 
         与 :meth:`subscribe` 的差异：
@@ -1198,6 +1244,12 @@ class MdClient:
             instruments: 合约代码列表
             batch_size: 每批订阅数量，必须 >= 1
             interval_sec: 批次之间的间隔秒数，0 表示不等待
+            should_stop: 可选谓词，每批提交前调用；返回 True 时立即停止。
+                供调用方在退出/关闭时中断一次长时间分批（例如重连后的全量
+                重订阅），避免客户端已经 ``stop()`` 而本循环仍在调用原生接口。
+
+        Returns:
+            实际提交的批次数；未登录/无待订阅/被 ``should_stop`` 提前终止时为 0。
         """
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -1206,11 +1258,16 @@ class MdClient:
             self._pending_instruments = pending
             api = self._api if self._loggedin else None
         if api is None or not pending:
-            return
+            return 0
+        submitted = 0
         for start in range(0, len(pending), batch_size):
+            if should_stop is not None and should_stop():
+                return submitted
             api.SubscribeMarketData(pending[start : start + batch_size])
+            submitted += 1
             if interval_sec > 0 and start + batch_size < len(pending):
                 time.sleep(interval_sec)
+        return submitted
 
     def start(self, block=True):
         """启动连接
