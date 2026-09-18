@@ -27,6 +27,28 @@ _SET2_DEFAULT = ("tcp://180.168.146.187:10130", "tcp://180.168.146.187:10131")
 # process's public IP address.
 _SET1_GROUP1_VPN = ("tcp://182.254.243.31:30001", "tcp://182.254.243.31:30011")
 _SET2_7X24_4000X = ("tcp://182.254.243.31:40001", "tcp://182.254.243.31:40011")
+
+# Registered third-party broker simulation environments.
+#
+# These are exchange-member simulation fronts (a broker's SimNow-equivalent),
+# registered for the typed direct-path admission entry
+# ``TraderClient.arm_execution_for_registered_sim``.  Admission is granted by
+# EXACT frozen endpoint-pair match only, mirroring the official SimNow
+# whitelist: a production front can never match, and a renamed or re-pointed
+# front invalidates the registration until this frozen table is updated in
+# review.  Adding an entry here is an explicit, auditable decision that the
+# environment is a non-production simulation.
+_REGISTERED_BROKER_SIM_FRONTS = {
+    # Hongyuan Futures simulation (BrokerID 3070, v6.7.10_20250422 API).
+    "hongyuan_sim_telecom": (
+        "tcp://101.230.79.235:32205",
+        "tcp://101.230.79.235:32213",
+    ),
+    "hongyuan_sim_unicom": (
+        "tcp://112.65.19.116:32205",
+        "tcp://112.65.19.116:32213",
+    ),
+}
 _SIMNOW_PROFILE_FRONTS = {
     "set1_group1": _SET1_DEFAULTS["1"],
     "set1_group1_vpn": _SET1_GROUP1_VPN,
@@ -391,6 +413,34 @@ def official_simnow_fronts(profile: str) -> tuple[str, str]:
     return expected
 
 
+def registered_broker_sim_fronts(profile: str) -> tuple[str, str]:
+    """Return the immutable endpoint pair of a registered broker simulation."""
+    name = str(profile or "").strip().lower()
+    expected = _REGISTERED_BROKER_SIM_FRONTS.get(name)
+    if expected is None:
+        raise ValueError(f"unsupported registered broker simulation {profile!r}")
+    return expected
+
+
+def verify_registered_broker_sim_profile(td_front: str, md_front: str, profile: str) -> bool:
+    """Verify a claimed registered-sim profile uses its frozen endpoint pair."""
+    name = str(profile or "").strip().lower()
+    expected = _REGISTERED_BROKER_SIM_FRONTS.get(name)
+    return expected is not None and (
+        str(td_front or "").strip(),
+        str(md_front or "").strip(),
+    ) == expected
+
+
+def registered_broker_sim_profile_for_td_front(td_front: str) -> str:
+    """Return the registered-sim profile whose TD front matches exactly."""
+    front = str(td_front or "").strip()
+    for name, (td_expected, _md_expected) in _REGISTERED_BROKER_SIM_FRONTS.items():
+        if front == td_expected:
+            return name
+    return ""
+
+
 def get_ctp_fronts(
     env: str = "",
     now: datetime | None = None,
@@ -450,7 +500,10 @@ __all__ = [
     "get_ctp_fronts",
     "official_simnow_fronts",
     "probe_ctp_environment_pair",
+    "registered_broker_sim_fronts",
+    "registered_broker_sim_profile_for_td_front",
     "select_ctp_environment",
     "select_reachable_ctp_environment",
     "verify_official_simnow_profile",
+    "verify_registered_broker_sim_profile",
 ]

@@ -2440,6 +2440,207 @@ class TraderClient:
                     self._execution_gate_revocation_reason = bounded_reason
             return self._execution_gate_state_locked()
 
+    def arm_execution_for_registered_sim(
+        self,
+        *,
+        instrument_id: str,
+        exchange_id: str = "",
+        md_front: str = "",
+        strategy_identity_sha256: str,
+        execution_cycle_id: str,
+        preflight_sha256: str,
+        settlement_timeout: float = 15.0,
+    ) -> tuple[object, dict[str, Any]]:
+        """Arm native order writes for a registered broker simulation front.
+
+        This is the typed admission entry for direct (non-SDK-managed) CTP
+        callers that run against a broker-provided *simulation* front whose
+        endpoint pair is frozen in ``ctp_env_selector``'s registered broker
+        simulation registry.  It grants the same invariants the SimNow demo
+        path grants — bound identity, settlement-confirm disabled, a
+        trading-ready session, a one-shot arm, and per-write revalidation —
+        and can never arm a production front because the session's TD front
+        must match a frozen registry entry exactly.
+
+        Sequence (each step fail-closed):
+          1. prove bound identity + registered front pair (disarmed);
+          2. install the core capability;
+          3. if the session is not trading-ready yet, submit the explicitly
+             authorized settlement confirmation and verify the server
+             readback (settlement grants require a disarmed gate);
+          4. issue the one-shot execution authorization and arm.
+
+        Returns ``(capability, gate_state)``; the opaque capability must be
+        passed to ``submit_order_insert``/``submit_order_action``.  Arming is
+        idempotent while the current arm already authorizes the instrument.
+        """
+        from bt_api_ctp.ctp_env_selector import (
+            registered_broker_sim_profile_for_td_front,
+            verify_registered_broker_sim_profile,
+        )
+
+        def _require_hash(value: Any, code: str) -> str:
+            text = str(value or "").strip().lower()
+            if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+                raise CtpExecutionGateError(code)
+            return text
+
+        # ---- Phase 1: identity/environment proof, capability, idempotency ----
+        with self._query_state_lock:
+            self._require_bound_identity_locked(require_active_front=True)
+            profile = registered_broker_sim_profile_for_td_front(self._bound_front)
+            if not profile:
+                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if md_front and not verify_registered_broker_sim_profile(
+                self._bound_front, md_front, profile
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if self.auto_settlement_confirm is not False:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_auto_settlement_confirm_enabled"
+                )
+
+            instrument = canonical_ctp_instrument(instrument_id, exchange_id)
+            if not instrument:
+                raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+
+            capability = self._execution_gate_capability
+            if capability is None:
+                capability = _issue_ctp_execution_authority_for_core()
+                self.configure_execution_gate(capability)
+            if (
+                self._execution_gate_proof is not None
+                and self._execution_gate_revocation_reason is None
+                and self._execution_gate_environment_profile == profile
+                and instrument in _execution_gate_instruments(self._execution_gate_proof)
+            ):
+                return capability, dict(self._execution_gate_state_locked())
+
+        # ---- Phase 2: settlement confirmation (needs a disarmed gate) ----
+        # Both calls wait on server callbacks, so they must not run under the
+        # query lock.
+        if not self.is_trading_ready:
+            with self._query_state_lock:
+                settlement_authorization = self._issue_settlement_authorization_for_core(
+                    capability,
+                    environment_profile=profile,
+                    environment_verified=True,
+                )
+            confirmed = self.confirm_settlement(
+                max(float(settlement_timeout), 0.0),
+                _execution_capability=capability,
+                _settlement_authorization=settlement_authorization,
+                _settlement_environment_profile=profile,
+                _settlement_environment_verified=True,
+            )
+            if confirmed:
+                self.verify_settlement_confirmation(
+                    timeout=max(float(settlement_timeout), 0.0)
+                )
+            if not self.is_trading_ready:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_settlement_not_confirmed"
+                )
+
+        # ---- Phase 3: one-shot execution authorization + arm ----
+        with self._query_state_lock:
+            self._require_bound_identity_locked(require_active_front=True)
+            if registered_broker_sim_profile_for_td_front(self._bound_front) != profile:
+                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if not self.is_trading_ready:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_session_not_trading_ready"
+                )
+
+            preflight = _require_hash(preflight_sha256, "ctp_execution_gate_invalid_proof")
+            strategy_identity = _require_hash(
+                strategy_identity_sha256,
+                "ctp_execution_gate_authorization_identity_invalid",
+            )
+            cycle_id = str(execution_cycle_id or "").strip()
+            if not cycle_id or cycle_id != execution_cycle_id or len(cycle_id) > 128:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_authorization_identity_invalid"
+                )
+
+            native_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp._ctp", "ctp_execution_gate_sim_measurement_unavailable"
+            )
+            package_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp.client", "ctp_execution_gate_sim_measurement_unavailable"
+            )
+            source_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp_env_selector",
+                "ctp_execution_gate_sim_measurement_unavailable",
+            )
+            receipt = hashlib.sha256(
+                "|".join(
+                    (
+                        "registered-sim",
+                        strategy_identity,
+                        cycle_id,
+                        profile,
+                        instrument,
+                        str(self._trading_day),
+                        str(self._connection_generation),
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            dependency_digest = hashlib.sha256(
+                (native_digest + package_digest + source_digest).encode("ascii")
+            ).hexdigest()
+            proof = {
+                "account_fingerprint": f"acct_{self._account_fingerprint}",
+                "trading_day": self._trading_day,
+                "instrument": instrument,
+                "connection_generation": self._connection_generation,
+                "environment_profile": profile,
+                "preflight_sha256": preflight,
+                "receipt_sha256": receipt,
+                "native_sha256": native_digest,
+                "ctp_package_sha256": package_digest,
+                "source_hashes_sha256": source_digest,
+                "dependency_hashes_sha256": dependency_digest,
+            }
+            authorization = self._issue_execution_authorization_for_core(
+                capability,
+                proof,
+                environment_profile=profile,
+                environment_verified=True,
+                strategy_identity_sha256=strategy_identity,
+                execution_cycle_id=cycle_id,
+            )
+            state = self.arm_execution_gate(
+                capability,
+                authorization,
+                _environment_profile=profile,
+                _environment_verified=True,
+            )
+            return capability, dict(state)
+
+    @staticmethod
+    def _registered_sim_file_digest(module_name: str, error_code: str) -> str:
+        """Measure one shipped module file for the registered-sim proof."""
+        module = sys.modules.get(module_name)
+        if module is None:
+            import importlib
+
+            try:
+                module = importlib.import_module(module_name)
+            except Exception as exc:  # pragma: no cover - measurement is optional at import time
+                raise CtpExecutionGateError(error_code) from exc
+        path = getattr(module, "__file__", "")
+        if not path or not os.path.isfile(path):
+            raise CtpExecutionGateError(error_code)
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise CtpExecutionGateError(error_code) from exc
+        return digest.hexdigest()
+
     def submit_order_insert(
         self,
         field: Any,
