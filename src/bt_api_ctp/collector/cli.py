@@ -540,6 +540,8 @@ def main(argv: list[str] | None = None) -> int:
         engine = build_engine(config)
         report = engine.run_once(duration_sec=duration, stop_event=stop_event)
     except Exception as exc:  # 采集链路任一环节失败
+        # 同时写日志：无人值守时只有日志文件留存，print 不会进日志。
+        _logger.error("collection failed: %s", exc)
         print(f"collection failed: {exc}", file=sys.stderr)
         return EXIT_COLLECTION_FAILED
 

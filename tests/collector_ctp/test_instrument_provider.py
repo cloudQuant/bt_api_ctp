@@ -231,3 +231,121 @@ class TestQueryRetry:
         provider.fetch_instruments()
 
         assert calls == ["SHFE", "DCE"]
+
+
+class TestQueryProgressLogging:
+    """查询阶段实测可持续十几分钟，必须能看出"在等什么、等到哪一步"。
+
+    没有这些日志时，运行中的进程与"卡死"完全无法区分（2026-09-18 盘中实测：
+    盘前查询 37 秒完成，盘中同一查询耗时 11 分钟以上）。
+    """
+
+    def test_logs_the_query_scope_before_querying(self, caplog):
+        import logging
+
+        provider = CtpInstrumentProvider(
+            _trader([FUTURE]),
+            exchanges=("SHFE", "DCE"),
+            query_timeout_sec=60.0,
+            query_retries=3,
+        )
+
+        with caplog.at_level(logging.INFO):
+            provider.fetch_instruments()
+
+        first = caplog.records[0].getMessage()
+        assert "exchanges=SHFE,DCE" in first
+        assert "timeout=60.0s" in first
+        assert "retries=3" in first
+
+    def test_logs_each_exchange_result(self, caplog):
+        import logging
+
+        trader = _trader([], per_exchange={"SHFE": [FUTURE], "CFFEX": [CFFEX_INDEX_OPTION]})
+        provider = CtpInstrumentProvider(trader, exchanges=("SHFE", "CFFEX"))
+
+        with caplog.at_level(logging.INFO):
+            provider.fetch_instruments()
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("instrument query SHFE ok: records=1" in message for message in messages)
+        assert any("instrument query CFFEX ok: records=1" in message for message in messages)
+
+    def test_logs_an_incomplete_attempt_with_its_error_code(self, caplog):
+        import logging
+
+        calls = []
+
+        def query(**_kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    complete=False,
+                    records=(),
+                    error_code=-2,
+                    error_message="query_timeout",
+                )
+            return SimpleNamespace(complete=True, records=(FUTURE,))
+
+        provider = CtpInstrumentProvider(
+            SimpleNamespace(query_instruments_result=query),
+            exchanges=("SHFE",),
+            query_retries=3,
+            retry_backoff_sec=2.0,
+        )
+
+        with caplog.at_level(logging.INFO):
+            provider.fetch_instruments()
+
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any(
+            "attempt 1/4" in message
+            and "error_code=-2" in message
+            and "query_timeout" in message
+            for message in warnings
+        )
+
+    def test_logs_an_exhausted_exchange(self, caplog):
+        import logging
+
+        def query(**_kwargs):
+            return SimpleNamespace(
+                complete=False, records=(), error_code=-2, error_message="query_timeout"
+            )
+
+        provider = CtpInstrumentProvider(
+            SimpleNamespace(query_instruments_result=query),
+            exchanges=("SHFE",),
+            query_retries=2,
+            retry_backoff_sec=0.0,
+        )
+
+        with caplog.at_level(logging.INFO), pytest.raises(RuntimeError):
+            provider.fetch_instruments()
+
+        warnings = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
+        ]
+        assert any("instrument query SHFE exhausted: attempts=3" in message for message in warnings)
+
+    def test_close_announces_the_release_before_stop_blocks(self, caplog):
+        """stop() 可能被原生 Join 卡住数分钟，释放动作必须先留痕。"""
+        import logging
+
+        observed = {}
+
+        class _Trader:
+            def stop(self):
+                observed["records_at_stop"] = len(caplog.records)
+
+        provider = CtpInstrumentProvider(_Trader())
+
+        with caplog.at_level(logging.INFO):
+            provider.close()
+
+        assert observed["records_at_stop"] >= 1
+        first = caplog.records[0].getMessage()
+        assert "closing" in first
+        assert "trader session" in first

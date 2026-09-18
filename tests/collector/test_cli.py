@@ -663,3 +663,32 @@ class TestResolveLogFile:
         from bt_api_ctp.collector.schedule import TradingCalendar
 
         assert _resolve_log_file({}, "20260916", TradingCalendar(), night=False, moment=None) is None
+
+
+class TestCollectionFailureLogging:
+    """采集链路失败必须进日志文件：无人值守时日志只会"突然停住"。"""
+
+    def test_build_failure_is_logged_and_still_printed(
+        self, tmp_path, monkeypatch, capsys, caplog
+    ):
+        import logging
+
+        from bt_api_ctp.collector import cli
+        from bt_api_ctp.collector.cli import EXIT_COLLECTION_FAILED
+
+        path = _write_config(tmp_path, {"data_root": str(tmp_path / "data")})
+
+        def _boom(_config):
+            raise RuntimeError("ctp_instrument_query_incomplete:CFFEX")
+
+        monkeypatch.setattr(cli, "build_engine", _boom)
+
+        with caplog.at_level(logging.INFO):
+            code = cli.main(["--config", str(path), "--duration", "1", "--date", "20260918"])
+
+        assert code == EXIT_COLLECTION_FAILED
+        assert "collection failed" in capsys.readouterr().err
+        errors = [
+            record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR
+        ]
+        assert any("ctp_instrument_query_incomplete" in message for message in errors)

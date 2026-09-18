@@ -48,13 +48,38 @@ class CtpInstrumentProvider:
         specs: list[InstrumentSpec] = []
         seen: set[tuple[str, str]] = set()
         incomplete: list[str] = []
+        # 查询阶段可能持续十几分钟（实测盘前 37 秒、盘中 11 分钟以上），先说明等待
+        # 范围，否则运行中的进程与"卡死"无法区分。
+        _logger.info(
+            "instrument query start: exchanges=%s timeout=%.1fs retries=%d",
+            ",".join(self._exchanges),
+            self._query_timeout_sec,
+            self._query_retries,
+        )
 
         for exchange in self._exchanges:
+            started = time.monotonic()
             result = self._query_exchange(exchange)
+            elapsed = time.monotonic() - started
             if getattr(result, "complete", None) is not True:
                 incomplete.append(exchange)
+                _logger.warning(
+                    "instrument query %s exhausted: attempts=%d in %.1fs error_code=%s error=%s",
+                    exchange,
+                    self._query_retries + 1,
+                    elapsed,
+                    getattr(result, "error_code", None),
+                    getattr(result, "error_message", "") or "-",
+                )
                 continue
-            self._collect(getattr(result, "records", ()), specs, seen)
+            records = getattr(result, "records", ())
+            _logger.info(
+                "instrument query %s ok: records=%d elapsed=%.1fs",
+                exchange,
+                len(records),
+                elapsed,
+            )
+            self._collect(records, specs, seen)
 
         if incomplete:
             raise RuntimeError(
@@ -76,7 +101,18 @@ class CtpInstrumentProvider:
             if getattr(result, "complete", None) is True:
                 return result
             if attempt < self._query_retries:
-                time.sleep(self._retry_backoff_sec * (2**attempt))
+                delay = self._retry_backoff_sec * (2**attempt)
+                _logger.warning(
+                    "instrument query %s attempt %d/%d incomplete: error_code=%s error=%s; "
+                    "retrying in %.1fs",
+                    exchange,
+                    attempt + 1,
+                    self._query_retries + 1,
+                    getattr(result, "error_code", None),
+                    getattr(result, "error_message", "") or "-",
+                    delay,
+                )
+                time.sleep(delay)
         return result
 
     def close(self) -> None:
@@ -88,6 +124,10 @@ class CtpInstrumentProvider:
         """
         stop = getattr(self._trader, "stop", None)
         if callable(stop):
+            # stop() 会等原生 Join 返回，实测可卡住数分钟；先留痕再阻塞。
+            _logger.info(
+                "closing CTP trader session (stop() waits for the native Join to return)"
+            )
             stop()
         _logger.info("CTP trader session closed")
 
