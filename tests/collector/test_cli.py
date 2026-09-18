@@ -113,7 +113,18 @@ class TestBuildCollectionConfig:
         collection_config = build_collection_config({"data_root": str(tmp_path)})
 
         assert collection_config.tick_log_interval == 1000
-        assert collection_config.tick_log_mode == "first"
+        assert collection_config.tick_log_mode == "every"
+
+    def test_removed_first_tick_mode_is_flagged(self):
+        """first 模式已删除：旧配置必须 fail-closed，而不是静默按 every 跑。"""
+        errors = validate_config({"data_root": "/tmp/x", "logging": {"tick_mode": "first"}})
+
+        assert any("tick_mode" in error for error in errors)
+
+    def test_unknown_tick_mode_is_flagged(self):
+        errors = validate_config({"data_root": "/tmp/x", "logging": {"tick_mode": "verbose"}})
+
+        assert any("tick_mode" in error for error in errors)
 
 
 class TestDataQualityConfig:

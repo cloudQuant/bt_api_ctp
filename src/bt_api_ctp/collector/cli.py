@@ -111,6 +111,12 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     if overflow not in ("drop", "flush"):
         errors.append(f"unknown buffer.overflow_policy: {overflow!r}")
 
+    # `first` 模式已删除（整改方案 D16）：未知模式必须 fail-closed，
+    # 否则写着 `tick_mode: first` 的旧配置会静默按 every 运行。
+    tick_mode = str((config.get("logging") or {}).get("tick_mode", "every"))
+    if tick_mode not in ("every", "off"):
+        errors.append(f"unknown logging.tick_mode: {tick_mode!r} (only 'every' or 'off')")
+
     # 重连重订阅依赖分批 + 批间限速，参数必须有效（见整改方案 P1-3 契约）。
     subscription = config.get("subscription") or {}
     try:
@@ -203,7 +209,7 @@ def build_collection_config(config: dict[str, Any]) -> CollectionConfig:
         drop_outside_session=bool(sink_payload.get("drop_outside_session", True)),
         heartbeat_interval_sec=float(buffer_payload.get("heartbeat_interval_sec", 60.0)),
         tick_log_interval=int(logging_payload.get("tick_interval", 1000)),
-        tick_log_mode=str(logging_payload.get("tick_mode", "first")),
+        tick_log_mode=str(logging_payload.get("tick_mode", "every")),
         health_check_enabled=health_enabled,
         health=HealthThresholds(**health_payload),
         calendar=_calendar_from_config(config),

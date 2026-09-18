@@ -64,9 +64,9 @@ class CollectionConfig:
     heartbeat_interval_sec: float = 60.0
     #: Per-instrument tick count at which a progress milestone is logged.
     tick_log_interval: int = 1000
-    #: ``first`` reports only the first threshold, ``every`` reports each
-    #: multiple, ``off`` disables milestones (same as interval <= 0).
-    tick_log_mode: str = "first"
+    #: ``every`` reports each multiple of the interval with the cumulative
+    #: count, ``off`` disables milestones (same as interval <= 0).
+    tick_log_mode: str = "every"
     #: Watch the data *rate* and raise an error when the feed stalls.
     health_check_enabled: bool = True
     health: HealthThresholds = field(default_factory=HealthThresholds)
@@ -383,15 +383,12 @@ class TickCollectionEngine:
             reported = self._reported.get(instrument_id, 0)
             if reached <= reported:
                 continue
-            if mode == "first":
-                _logger.info("tick milestone: %s reached %d ticks", instrument_id, interval)
-            else:
-                for multiple in range(reported + 1, reached + 1):
-                    _logger.info(
-                        "tick milestone: %s reached %d ticks",
-                        instrument_id,
-                        multiple * interval,
-                    )
+            for multiple in range(reported + 1, reached + 1):
+                _logger.info(
+                    "tick milestone: %s reached %d ticks",
+                    instrument_id,
+                    multiple * interval,
+                )
             self._reported[instrument_id] = reached
 
 

@@ -318,27 +318,6 @@ class TestTickMilestoneLogging:
     def _milestones(self, caplog):
         return [r.getMessage() for r in caplog.records if "tick milestone" in r.getMessage()]
 
-    def test_first_mode_reports_only_the_first_threshold(self, tmp_path, caplog):
-        import logging
-
-        ticks = [_tick(update_millisec=index) for index in range(250)]
-        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
-        engine, _ = _engine(
-            tmp_path,
-            [_spec("rb2510", "SHFE")],
-            subscriber,
-            tick_log_interval=100,
-            tick_log_mode="first",
-        )
-
-        with caplog.at_level(logging.INFO):
-            engine.run_once(duration_sec=0.05)
-
-        milestones = self._milestones(caplog)
-        assert len(milestones) == 1
-        assert "rb2510" in milestones[0]
-        assert "reached 100 ticks" in milestones[0]
-
     def test_every_mode_reports_each_multiple(self, tmp_path, caplog):
         import logging
 
@@ -369,7 +348,7 @@ class TestTickMilestoneLogging:
             [_spec("rb2510", "SHFE")],
             subscriber,
             tick_log_interval=100,
-            tick_log_mode="first",
+            tick_log_mode="every",
         )
 
         with caplog.at_level(logging.INFO):
@@ -424,7 +403,7 @@ class TestTickMilestoneLogging:
             [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")],
             subscriber,
             tick_log_interval=100,
-            tick_log_mode="first",
+            tick_log_mode="every",
         )
 
         with caplog.at_level(logging.INFO):
