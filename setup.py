@@ -221,6 +221,23 @@ def _package_data() -> dict[str, list[str]]:
     return {"bt_api_ctp": ["configs/*.yaml"]}
 
 
+def _reuse_configured_msvc_environment() -> None:
+    """Trust the MSVC environment of a Visual Studio developer prompt.
+
+    distutils discovers the compiler by running
+    ``cmd /u /c "vcvarsall.bat" <plat_spec> && set`` and aborts with
+    ``Error executing cmd /u /c ...vcvarsall.bat...`` when that nested cmd exits
+    non-zero -- which is what happens on machines where cmd.exe starts with a
+    hook such as conda's auto-activation.  A developer prompt already exports the
+    same variables, so tell distutils to use them instead of re-running vcvarsall.
+    """
+    if sys.platform != "win32" or os.environ.get("DISTUTILS_USE_SDK"):
+        return
+    if os.environ.get("VCINSTALLDIR") and os.environ.get("VSCMD_VER"):
+        os.environ["DISTUTILS_USE_SDK"] = "1"
+        os.environ["MSSdk"] = "1"
+
+
 def _extensions() -> Iterable[Extension]:
     platform_dir = _platform_api_dir()
     return [
@@ -232,6 +249,8 @@ def _extensions() -> Iterable[Extension]:
         )
     ]
 
+
+_reuse_configured_msvc_environment()
 
 setup(
     cmdclass={"build_ext": BuildExt},
