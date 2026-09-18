@@ -360,7 +360,19 @@ class TickCollectionEngine:
                 for tick in ticks:
                     buffer.append(tick)
             return trading_day
-        _logger.info("flushed %d instruments / %d ticks", len(drained), rows)
+        # 写盘成功后才记账：批内先全量累加，同一批报出的全局总数才一致。
+        for instrument_id, ticks in drained.items():
+            self._cumulative[instrument_id] = self._cumulative.get(instrument_id, 0) + len(ticks)
+        # 本批条数可能是"全市场正常"，累计合约数却极小（数据只来自极少数合约）：
+        # 两者必须一起报，否则这种塌缩在日志里看不出来。
+        _logger.info(
+            "flushed %d instruments / %d ticks (cumulative: instruments=%d ticks=%d dropped=%d)",
+            len(drained),
+            rows,
+            len(self._cumulative),
+            sum(self._cumulative.values()),
+            buffer.dropped_count(),
+        )
         self._report_tick_milestones(drained)
         return report.trading_day or trading_day
 
@@ -368,26 +380,30 @@ class TickCollectionEngine:
         """Log per-instrument progress once ticks accumulate past a threshold.
 
         Runs on the flush path, never inside the market-data callback, so the
-        counters add no work to the hot path.  Counters only advance after a
-        successful write, so ticks handed back to the buffer on a sink error
-        are not counted twice.
+        counters add no work to the hot path.  :meth:`_flush` advances the
+        cumulative counters only after a successful write, so ticks handed back
+        to the buffer on a sink error are not counted twice.
+
+        Every line carries the instrument's own value *and* the running total: a
+        single number cannot tell "this instrument" from "the whole run".
         """
         interval = self._config.tick_log_interval
         mode = self._config.tick_log_mode
         if interval <= 0 or mode == "off":
             return
-        for instrument_id, ticks in drained.items():
-            total = self._cumulative.get(instrument_id, 0) + len(ticks)
-            self._cumulative[instrument_id] = total
+        total_written = sum(self._cumulative.values())
+        for instrument_id in drained:
+            total = self._cumulative.get(instrument_id, 0)
             reached = total // interval
             reported = self._reported.get(instrument_id, 0)
             if reached <= reported:
                 continue
             for multiple in range(reported + 1, reached + 1):
                 _logger.info(
-                    "tick milestone: %s reached %d ticks",
+                    "tick milestone: %s reached %d ticks, total reached %d ticks",
                     instrument_id,
                     multiple * interval,
+                    total_written,
                 )
             self._reported[instrument_id] = reached
 

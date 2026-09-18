@@ -298,6 +298,26 @@ class TestHeartbeatLogging:
 
         assert [r for r in caplog.records if "flushed" in r.getMessage()]
 
+    def test_flushed_line_reports_cumulative_context(self, tmp_path, caplog):
+        """刷盘日志要能区分"本批几个合约"与"累计几个合约/多少条"。
+
+        只有这样才看得出"每批永远 3 个合约、每个合约却有几百万条"这种塌缩：
+        本批条数正常而累计合约数极小，说明数据只来自极少数合约。
+        """
+        import logging
+
+        ticks = [_tick(update_millisec=index) for index in range(5)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        flushed = [r.getMessage() for r in caplog.records if "flushed" in r.getMessage()]
+        assert flushed
+        assert "flushed 1 instruments / 5 ticks" in flushed[0]
+        assert "cumulative: instruments=1 ticks=5" in flushed[0]
+
     def test_run_start_and_finish_are_logged(self, tmp_path, caplog):
         import logging
 
@@ -412,6 +432,35 @@ class TestTickMilestoneLogging:
         milestones = self._milestones(caplog)
         assert len(milestones) == 1
         assert "rb2510" in milestones[0]
+
+    def test_milestone_reports_instrument_and_running_total(self, tmp_path, caplog):
+        """里程碑要同时给出该合约的累计值和全局累计值。
+
+        只报一个数字时无法判断它是"这个合约的"还是"所有合约的总和"：
+        实测全市场运行中每个合约都报到过 600 万+，而 CTP 单合约上限约 2 条/秒，
+        说明必须能把两者摆在一起看。
+        """
+        import logging
+
+        ticks = [_tick("rb2510", "SHFE", update_millisec=i) for i in range(100)]
+        ticks += [_tick("m2701", "DCE", update_millisec=i) for i in range(100)]
+        subscriber = _FakeSubscriber(ticks_on_connect=ticks)
+        engine, _ = _engine(
+            tmp_path,
+            [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")],
+            subscriber,
+            tick_log_interval=100,
+            tick_log_mode="every",
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine.run_once(duration_sec=0.05)
+
+        milestones = self._milestones(caplog)
+        assert len(milestones) == 2
+        # 同一批内两条里程碑报出的全局总数必须一致（本批 100+100）。
+        assert "rb2510 reached 100 ticks, total reached 200 ticks" in milestones[0]
+        assert "m2701 reached 100 ticks, total reached 200 ticks" in milestones[1]
 
 
 class TestSubscriptionLogging:
