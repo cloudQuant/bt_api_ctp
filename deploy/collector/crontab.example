@@ -1,0 +1,20 @@
+# CTP 全市场 tick 采集 —— 通用 cron 示例
+#
+# 安装：crontab -e 后粘贴下面两行，把 /opt/bt_api_py 换成你的实际路径。
+# 夜盘用 Mon..Fri（不是周日~周四）：周五晚的夜盘属于下一个交易日。
+#
+# cron 不加载 .env，所以显式 `. 一下`；也可以用仓库里的启动脚本，
+# 它自己会读 .env、挑解释器、把 PYTHONPATH 指向仓库源码：
+#   45 8 * * 1-5 cd /opt/bt_api_py && sh ctp_data/start_collector.sh
+#   45 20 * * 1-5 cd /opt/bt_api_py && COLLECTOR_ARGS='--night --until-close --wait-open' sh ctp_data/start_collector.sh
+#
+# 更省事的替代方案：用 ctp_data/service.sh 常驻调度器（只启动一次，长期运行），
+# 见 ctp_data/README.md §5.1。
+
+SHELL=/bin/bash
+
+# 白盘：08:45 启动，跑到 15:15 收盘后自行退出
+45 8 * * 1-5 . /opt/bt_api_py/.env; cd /opt/bt_api_py && /opt/bt_api_py/.venv/bin/python -m bt_api_ctp.collector --config /etc/bt-api-ctp/collector.yaml --until-close --wait-open >> /opt/bt_api_py/ctp_data/logs/cron-day.log 2>&1
+
+# 夜盘：20:45 启动，跑到 02:30 后自行退出；--night 要求"当晚有夜盘"，否则直接退出 3
+45 20 * * 1-5 . /opt/bt_api_py/.env; cd /opt/bt_api_py && /opt/bt_api_py/.venv/bin/python -m bt_api_ctp.collector --config /etc/bt-api-ctp/collector.yaml --night --until-close --wait-open >> /opt/bt_api_py/ctp_data/logs/cron-night.log 2>&1
