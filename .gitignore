@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+# Locally built CTP extension (Windows): python setup.py build_ext --inplace
+*.pyd
 
 # Distribution / packaging
 .Python
