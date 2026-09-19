@@ -1,0 +1,17 @@
+# CTP 数据清洗 —— 通用 cron 示例
+#
+# 安装：crontab -e 后粘贴下面一行，把 /opt/bt_api_py 换成你的实际路径。
+#
+# 每个交易日 16:00 运行：此时当日目录（T-1 夜盘 + T 白盘）已收盘清洗完成，
+# 且当晚夜盘写的是次日目录，删除当日远程数据是安全的。
+# 星期触发用 Mon..Fri；节假日由脚本内置交易日历判断（退出码 3 = 非交易日跳过）。
+#
+# 首次部署请先把 cleaner.yaml 里的 delete_remote_after_verify 设为 false 空跑
+# 若干交易日，或用 `run --dry-run` 预览删除清单，确认无误后再打开删除。
+#
+# 磁盘与日志：staging 与权威库并存期间占用约翻倍；日志随报告写在 <tick_root>/logs/。
+
+SHELL=/bin/bash
+
+# 收盘清洗：16:00 拉取 → 校验 → 合并 → 合成 K 线 → 回收远程已合并目录
+0 16 * * 1-5 cd /opt/bt_api_py && /opt/bt_api_py/.venv/bin/python -m bt_api_ctp.cleaner --config /etc/bt-api-ctp/cleaner.yaml run >> /opt/bt_api_py/ctp_data/logs/cron-cleaner.log 2>&1

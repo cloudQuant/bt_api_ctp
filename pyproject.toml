@@ -27,6 +27,11 @@ dependencies = [
     "bt_api_base>=0.15.4,<1.0",
 ]
 
+[project.optional-dependencies]
+# 迭代06 数据清洗：SFTP 拉取后端（Windows 分片机）需要 paramiko。
+# rsync / local 后端不需要额外依赖。
+cleaner = ["paramiko>=3.0"]
+
 [project.entry-points."bt_api.plugins"]
 ctp = "bt_api_ctp.plugin:register_plugin"
 

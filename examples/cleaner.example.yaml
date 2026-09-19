@@ -1,0 +1,63 @@
+# 迭代06 CTP 数据清洗配置模板
+#
+# 复制到 <仓库根>/ctp_data/cleaner.yaml 后按需修改：
+#   cp examples/cleaner.example.yaml ctp_data/cleaner.yaml
+#
+# 手工运行（须在仓库根目录执行，相对路径按仓库根解析）：
+#   python -m bt_api_ctp.cleaner --config ctp_data/cleaner.yaml run
+#   python -m bt_api_ctp.cleaner --config ctp_data/cleaner.yaml run --dry-run
+#   python -m bt_api_ctp.cleaner --config ctp_data/cleaner.yaml kline --backfill
+#   python -m bt_api_ctp.cleaner --config ctp_data/cleaner.yaml check-hosts
+#
+# 定时调度见 deploy/cleaner/（每个交易日 16:00）。
+
+# 本地 tick 权威库：迭代04 collector 的 data_root（含 <交易日>/<交易所>/<合约>.parquet）。
+tick_root: ctp_data
+
+# K 线输出根目录；默认 <tick_root>/kline。
+# 布局：<kline_root>/<交易所>/<品种>/<合约>_<周期>min.parquet
+kline_root: ctp_data/kline
+
+pull:
+  # 需求 3：拉取校验通过且合并完成后，才删除远程已拉取的数据。
+  # 首次部署建议先设为 false 空跑几个交易日，确认合并正确后再打开。
+  delete_remote_after_verify: true
+
+  # 拉取过渡区；默认 <tick_root>/cleaner/staging。
+  # staging_root: ctp_data/cleaner/staging
+
+  hosts:
+    # Linux 服务器：rsync over SSH（增量续传，适合海量小文件）。
+    - name: server-linux-a
+      backend: rsync
+      host: user@10.0.0.1
+      remote_data_root: /data/tick
+      # port: 22
+
+    # Windows 服务器：SFTP（OpenSSH Server 自带，无需额外安装）。
+    - name: server-win-b
+      backend: sftp
+      host: user@10.0.0.2
+      remote_data_root: D:/ctp_data
+      # port: 22
+
+    # 本机/移动介质：local 直接把 remote_data_root 当本地目录读取。
+    # - name: usb-import
+    #   backend: local
+    #   remote_data_root: /Volumes/backup/tick
+
+kline:
+  # 周期（分钟）：仅支持 1 / 5 / 15。
+  periods: [1, 5, 15]
+  # 是否合成期权 K 线（期货始终合成）。
+  include_options: true
+
+calendar:
+  # 节假日 JSON 数组文件（与迭代04 同格式），用于"今天是否交易日"的判断。
+  # 留空则周一~周五一律视为交易日（节假日运行无害：没有可拉目录时会空跑）。
+  holidays_file: ""
+
+logging:
+  # 日志目录（默认 <tick_root>/logs），文件按交易日命名。
+  dir: ctp_data/logs
+  file: true

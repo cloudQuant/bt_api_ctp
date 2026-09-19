@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.btapi.ctp.cleaner</string>
+
+    <!-- 每个交易日 16:00 运行一次：当日目录（T-1 夜盘 + T 白盘）已收盘清洗完成，
+         当晚夜盘写的是次日目录，此时拉取/删除当日远程数据是安全的。
+         非交易日由脚本内置交易日历判断并直接退出（退出码 3）。 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USER/bt_api_py/.venv312/bin/python</string>
+        <string>-m</string>
+        <string>bt_api_ctp.cleaner</string>
+        <string>--config</string>
+        <string>/Users/USER/bt_api_py/ctp_data/cleaner.yaml</string>
+        <string>run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USER/bt_api_py</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- 让 `python -m` 命中仓库源码而不是 site-packages 里的旧安装 -->
+        <key>PYTHONPATH</key>
+        <string>/Users/USER/bt_api_py/bt_api/bt_api_ctp/src</string>
+    </dict>
+
+    <!-- Weekday: 0=周日 … 5=周五。清洗脚本不需要 CTP 账号，因此不放 CTp_* 环境变量。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USER/bt-api-ctp/logs/cleaner.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USER/bt-api-ctp/logs/cleaner.log</string>
+</dict>
+</plist>
