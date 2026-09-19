@@ -129,9 +129,6 @@ class TestProtocolDuckTyping:
     def test_fake_provider_subscriber_and_handler_shapes(self):
         from bt_api_ctp.collector.protocols import (
             InstrumentProvider,
-            MarketDataSubscriber,
-            TickHandler,
-            TickNormalizer,
         )
 
         provider = _FakeProvider()
