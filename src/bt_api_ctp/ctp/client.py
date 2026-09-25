@@ -49,7 +49,7 @@ from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from bt_api_ctp.instrument import normalize_ctp_instrument
 from bt_api_ctp.query import (
@@ -171,6 +171,76 @@ CTP_REQUEST_COUNT_KEYS = (
 # removed once Join returns so reconnects cannot retain completed sessions.
 _RETIRED_CTP_NATIVE_SESSIONS_LOCK = threading.Lock()
 _RETIRED_CTP_NATIVE_SESSIONS: list[tuple[Any, Any, threading.Thread | None]] = []
+_RELEASING_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
+# IDs remain claimed while the API is alive so a repeated observer request can
+# never issue Join twice. A successful Release removes the claim.
+_CLAIMED_CTP_NATIVE_JOIN_API_IDS: set[int] = set()
+# A failed native Release has an unknown partial outcome. Keep the session
+# retained and permanently fence further Release calls for that API: a second
+# attempt could double-free resources that the first call already freed.
+_POISONED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
+_MAX_NATIVE_JOIN_WAIT_SECONDS = 60.0
+
+
+@dataclass(frozen=True)
+class CtpNativeJoinObservation:
+    """Typed observation of the vendor ``Join`` call only.
+
+    ``returned`` means Join returned its interface-thread exit code. It does
+    not by itself certify that ``Release`` succeeded or that the process has
+    no remaining native threads.
+    """
+
+    state: Literal["not_started", "pending", "returned", "failed"]
+    return_code: int | None = None
+    error_type: str | None = None
+
+
+@dataclass(frozen=True)
+class CtpNativeJoinWaitResult:
+    """Result of one bounded wait for a native ``Join`` call to finish."""
+
+    join_call_finished: bool
+    observation: CtpNativeJoinObservation
+
+
+class _CtpNativeJoinTracker:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._finished = threading.Event()
+        self._observation = CtpNativeJoinObservation("not_started")
+
+    def begin(self) -> None:
+        with self._lock:
+            self._observation = CtpNativeJoinObservation("pending")
+            self._finished.clear()
+
+    def returned(self, result: Any) -> None:
+        return_code = result if isinstance(result, int) and not isinstance(result, bool) else None
+        with self._lock:
+            self._observation = CtpNativeJoinObservation("returned", return_code=return_code)
+            self._finished.set()
+
+    def failed(self, error: BaseException) -> None:
+        with self._lock:
+            self._observation = CtpNativeJoinObservation(
+                "failed", error_type=type(error).__name__
+            )
+            self._finished.set()
+
+    def wait(self, timeout: float) -> CtpNativeJoinWaitResult:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout < 0
+            or timeout > _MAX_NATIVE_JOIN_WAIT_SECONDS
+        ):
+            raise ValueError("ctp_native_join_wait_timeout_out_of_range")
+        join_call_finished = self._finished.wait(timeout)
+        with self._lock:
+            observation = self._observation
+        return CtpNativeJoinWaitResult(join_call_finished, observation)
 
 
 def _retain_live_ctp_native_session(
@@ -187,29 +257,70 @@ def _retain_live_ctp_native_session(
 
 
 def _set_retired_ctp_native_session_join_thread(api: Any, join_thread: threading.Thread) -> bool:
-    """Associate a late-created Join observer with a retained native session."""
+    """Claim one Join observer for a retained native session."""
 
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
-        for index, (existing_api, spi, _existing_thread) in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
+        api_id = id(api)
+        if (
+            api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
+            or api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
+            or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+        ):
+            return False
+        for index, (existing_api, spi, existing_thread) in enumerate(
+            _RETIRED_CTP_NATIVE_SESSIONS
+        ):
             if existing_api is api:
+                if existing_thread is not None:
+                    return False
+                _CLAIMED_CTP_NATIVE_JOIN_API_IDS.add(api_id)
                 _RETIRED_CTP_NATIVE_SESSIONS[index] = (api, spi, join_thread)
                 return True
     return False
 
 
+def _claim_ctp_native_join(api: Any) -> bool:
+    """Atomically claim the sole Join call permitted for this native API."""
+
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        api_id = id(api)
+        if (
+            api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
+            or api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
+            or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+        ):
+            return False
+        _CLAIMED_CTP_NATIVE_JOIN_API_IDS.add(api_id)
+        return True
+
+
+def _forget_ctp_native_join_claim(api: Any) -> None:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        _CLAIMED_CTP_NATIVE_JOIN_API_IDS.discard(id(api))
+
+
 def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
     """Release one retained session only after its native ``Join`` returned.
 
-    The entry is removed while holding the registry lock so concurrent Join
-    observers cannot issue a second ``Release``.  Its local tuple keeps the
-    API and SPI strongly referenced until the release call has completed.
+    The entry stays retained unless ``Release`` returns successfully. The
+    in-progress set prevents concurrent Join observers from issuing a second
+    ``Release`` while keeping the registry lock free during the native call.
+    A failed call has an unknown partial outcome, so it poisons the API ID and
+    cannot be retried safely.
     """
 
     retained: tuple[Any, Any, threading.Thread | None] | None = None
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
-        for index, entry in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
+        api_id = id(api)
+        if (
+            api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
+            or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+        ):
+            return False
+        for entry in _RETIRED_CTP_NATIVE_SESSIONS:
             if entry[0] is api:
-                retained = _RETIRED_CTP_NATIVE_SESSIONS.pop(index)
+                retained = entry
+                _RELEASING_CTP_NATIVE_SESSION_API_IDS.add(api_id)
                 break
     if retained is None:
         return False
@@ -218,9 +329,26 @@ def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
     # Release is safe on the audited macOS framework.  Do not call
     # RegisterSpi(None) again: stop() already made the documented detach
     # attempt before the session entered this registry.
-    with suppress(Exception):
+    release_succeeded = False
+    try:
         api.Release()
-    return True
+        release_succeeded = True
+    except Exception as exc:
+        _logger.error(
+            "CTP native API Release failed after Join (error_type=%s)",
+            type(exc).__name__,
+        )
+    finally:
+        with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+            if not release_succeeded:
+                _POISONED_CTP_NATIVE_SESSION_API_IDS.add(api_id)
+            _RELEASING_CTP_NATIVE_SESSION_API_IDS.discard(api_id)
+            if release_succeeded:
+                _CLAIMED_CTP_NATIVE_JOIN_API_IDS.discard(api_id)
+                _RETIRED_CTP_NATIVE_SESSIONS[:] = [
+                    entry for entry in _RETIRED_CTP_NATIVE_SESSIONS if entry[0] is not api
+                ]
+    return release_succeeded
 
 
 _CTP_EXECUTION_GATE_PROOF_FIELDS = (
@@ -1152,6 +1280,7 @@ class MdClient:
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
@@ -1263,11 +1392,19 @@ class MdClient:
                 api.Release()
         return True
 
-    def _join_native_api(self, api: Any) -> None:
+    def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
+        if not _already_claimed and not _claim_ctp_native_join(api):
+            return
+        tracker = self._native_join_tracker
+        tracker.begin()
         join_returned = False
         try:
-            api.Join()
+            join_result = api.Join()
             join_returned = True
+            tracker.returned(join_result)
+        except BaseException as exc:
+            tracker.failed(exc)
+            raise
         finally:
             if join_returned:
                 with self._state_lock:
@@ -1276,16 +1413,34 @@ class MdClient:
                         self._native_init_started = False
                     if self._thread is threading.current_thread():
                         self._thread = None
-                _release_retired_ctp_native_session_after_join(api)
-                with self._state_lock:
-                    self._pending_native_join_api_ids.discard(id(api))
+                retired_session_released = _release_retired_ctp_native_session_after_join(api)
+                if retired_session_released:
+                    with self._state_lock:
+                        self._pending_native_join_api_ids.discard(id(api))
+
+    def wait_native_join(self, timeout: float) -> CtpNativeJoinWaitResult:
+        """Wait at most ``timeout`` seconds for the latest native Join call.
+
+        ``timeout`` must be finite and between zero and 60 seconds. The typed
+        result reports whether Join returned or raised; a returned Join does
+        not certify a successful ``Release`` or an empty process.
+        """
+
+        return self._native_join_tracker.wait(timeout)
 
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
 
-        thread = threading.Thread(target=self._join_native_api, args=(api,), daemon=True)
+        thread = threading.Thread(
+            target=self._join_native_api,
+            args=(api,),
+            kwargs={"_already_claimed": True},
+            daemon=True,
+        )
         with self._state_lock:
             if self._api is api:
+                if self._thread is not None or not _claim_ctp_native_join(api):
+                    return False
                 self._thread = thread
                 self._join_active = True
             elif not _set_retired_ctp_native_session_join_thread(api, thread):
@@ -1371,6 +1526,7 @@ class MdClient:
                 self._spi = spi
                 self._native_init_started = False
                 self._join_active = False
+                self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
             with suppress(Exception):
                 api.RegisterSpi(None)
@@ -1506,6 +1662,7 @@ class MdClient:
         with suppress(Exception):
             api.RegisterSpi(None)
             api.Release()
+            _forget_ctp_native_join_claim(api)
 
     @property
     def is_ready(self):
@@ -1979,6 +2136,7 @@ class TraderClient:
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
@@ -3287,11 +3445,19 @@ class TraderClient:
                 api.Release()
         return True
 
-    def _join_native_api(self, api: Any) -> None:
+    def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
+        if not _already_claimed and not _claim_ctp_native_join(api):
+            return
+        tracker = self._native_join_tracker
+        tracker.begin()
         join_returned = False
         try:
-            api.Join()
+            join_result = api.Join()
             join_returned = True
+            tracker.returned(join_result)
+        except BaseException as exc:
+            tracker.failed(exc)
+            raise
         finally:
             if join_returned:
                 with self._query_state_lock:
@@ -3300,16 +3466,34 @@ class TraderClient:
                         self._native_init_started = False
                     if self._thread is threading.current_thread():
                         self._thread = None
-                _release_retired_ctp_native_session_after_join(api)
-                with self._query_state_lock:
-                    self._pending_native_join_api_ids.discard(id(api))
+                retired_session_released = _release_retired_ctp_native_session_after_join(api)
+                if retired_session_released:
+                    with self._query_state_lock:
+                        self._pending_native_join_api_ids.discard(id(api))
+
+    def wait_native_join(self, timeout: float) -> CtpNativeJoinWaitResult:
+        """Wait at most ``timeout`` seconds for the latest native Join call.
+
+        ``timeout`` must be finite and between zero and 60 seconds. The typed
+        result reports whether Join returned or raised; a returned Join does
+        not certify a successful ``Release`` or an empty process.
+        """
+
+        return self._native_join_tracker.wait(timeout)
 
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
 
-        thread = threading.Thread(target=self._join_native_api, args=(api,), daemon=True)
+        thread = threading.Thread(
+            target=self._join_native_api,
+            args=(api,),
+            kwargs={"_already_claimed": True},
+            daemon=True,
+        )
         with self._query_state_lock:
             if self._api is api:
+                if self._thread is not None or not _claim_ctp_native_join(api):
+                    return False
                 self._thread = thread
                 self._join_active = True
             elif not _set_retired_ctp_native_session_join_thread(api, thread):
@@ -3343,6 +3527,7 @@ class TraderClient:
                 self._spi = spi
                 self._native_init_started = False
                 self._join_active = False
+                self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
             with suppress(Exception):
                 api.RegisterSpi(None)
@@ -4411,6 +4596,7 @@ class TraderClient:
         with suppress(Exception):
             api.RegisterSpi(None)
             api.Release()
+            _forget_ctp_native_join_claim(api)
 
     @property
     def is_ready(self):

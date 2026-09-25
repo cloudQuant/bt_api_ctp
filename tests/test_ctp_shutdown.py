@@ -51,9 +51,10 @@ class _BlockingNativeApi(_NativeApi):
     def Init(self) -> None:
         return None
 
-    def Join(self) -> None:
+    def Join(self) -> int:
         self.join_started.set()
         assert self.allow_join_return.wait(1.0)
+        return 0
 
 
 class _StopDuringInitApi(_BlockingNativeApi):
@@ -64,11 +65,12 @@ class _StopDuringInitApi(_BlockingNativeApi):
     def Init(self) -> None:
         self._stop_client()
 
-    def Join(self) -> None:
+    def Join(self) -> int:
         # stop() may run from Init() after the native side has created its
         # callback thread.  The client must observe this return so the
         # retained session can be released safely.
         self.join_started.set()
+        return 0
 
 
 class _InitRaisesAfterStopApi(_BlockingNativeApi):
@@ -111,8 +113,9 @@ class _RegisterSpiBarrierApi(_NativeApi):
     def Init(self) -> None:
         self.calls.append(("init", None))
 
-    def Join(self) -> None:
+    def Join(self) -> int:
         self.calls.append(("join", None))
+        return 0
 
 
 class _CreateBarrier:
@@ -160,21 +163,34 @@ class _ImmediateJoinApi(_NativeApi):
     def Init(self) -> None:
         self.calls.append(("init", None))
 
-    def Join(self) -> None:
+    def Join(self) -> int:
         self.join_returned.set()
+        return 0
 
 
 @pytest.fixture(autouse=True)
 def _isolate_retired_native_sessions():
     with client_module._RETIRED_CTP_NATIVE_SESSIONS_LOCK:
         original = list(client_module._RETIRED_CTP_NATIVE_SESSIONS)
+        original_releasing = set(client_module._RELEASING_CTP_NATIVE_SESSION_API_IDS)
+        original_claimed = set(client_module._CLAIMED_CTP_NATIVE_JOIN_API_IDS)
+        original_poisoned = set(client_module._POISONED_CTP_NATIVE_SESSION_API_IDS)
         client_module._RETIRED_CTP_NATIVE_SESSIONS.clear()
+        client_module._RELEASING_CTP_NATIVE_SESSION_API_IDS.clear()
+        client_module._CLAIMED_CTP_NATIVE_JOIN_API_IDS.clear()
+        client_module._POISONED_CTP_NATIVE_SESSION_API_IDS.clear()
     try:
         yield
     finally:
         with client_module._RETIRED_CTP_NATIVE_SESSIONS_LOCK:
             client_module._RETIRED_CTP_NATIVE_SESSIONS.clear()
             client_module._RETIRED_CTP_NATIVE_SESSIONS.extend(original)
+            client_module._RELEASING_CTP_NATIVE_SESSION_API_IDS.clear()
+            client_module._RELEASING_CTP_NATIVE_SESSION_API_IDS.update(original_releasing)
+            client_module._CLAIMED_CTP_NATIVE_JOIN_API_IDS.clear()
+            client_module._CLAIMED_CTP_NATIVE_JOIN_API_IDS.update(original_claimed)
+            client_module._POISONED_CTP_NATIVE_SESSION_API_IDS.clear()
+            client_module._POISONED_CTP_NATIVE_SESSION_API_IDS.update(original_poisoned)
 
 
 def _install_live_md_session() -> tuple[MdClient, _NativeApi, object, _LiveJoinThread]:
@@ -282,7 +298,7 @@ def test_pending_join_blocks_restarting_the_same_client_until_join_returns(
     create_method: str,
 ) -> None:
     client, api, _spi, _thread = install()
-    api.Join = lambda: None
+    api.Join = lambda: 0
 
     client.stop()
 
@@ -312,6 +328,200 @@ def test_pending_join_blocks_restarting_the_same_client_until_join_returns(
     # normally and no longer carries a false pending-session blocker.
     generation = client._reserve_start_generation()
     client._clear_start_reservation(generation)
+
+
+@pytest.mark.parametrize(
+    "install",
+    [_install_live_md_session, _install_live_trader_session],
+    ids=["md", "trader"],
+)
+def test_concurrent_join_observer_start_claims_api_once(install) -> None:
+    client, api, _spi, _thread = install()
+    # Model stop racing before an observer thread has been registered.
+    client._thread = None
+    join_entered = threading.Event()
+    allow_join_return = threading.Event()
+    join_calls: list[int] = []
+    join_calls_lock = threading.Lock()
+
+    def join() -> int:
+        with join_calls_lock:
+            join_calls.append(1)
+        join_entered.set()
+        assert allow_join_return.wait(1.0)
+        return 0
+
+    api.Join = join
+    client.stop()
+    assert id(api) in client._pending_native_join_api_ids
+
+    start_barrier = threading.Barrier(3)
+    results: list[bool] = []
+
+    def start_observer() -> None:
+        start_barrier.wait()
+        results.append(client._start_join_observer(api))
+
+    starters = [threading.Thread(target=start_observer) for _ in range(2)]
+    for starter in starters:
+        starter.start()
+    start_barrier.wait()
+    for starter in starters:
+        starter.join(1.0)
+        assert not starter.is_alive()
+
+    assert results.count(True) == 1
+    assert results.count(False) == 1
+    assert join_entered.wait(1.0)
+    assert len(join_calls) == 1
+    assert id(api) in client._pending_native_join_api_ids
+    assert client._start_join_observer(api) is False
+    assert len(join_calls) == 1
+
+    allow_join_return.set()
+    join_thread = next(
+        thread for entry_api, _, thread in client_module._RETIRED_CTP_NATIVE_SESSIONS
+        if entry_api is api
+    )
+    join_thread.join(1.0)
+    assert not join_thread.is_alive()
+    assert api.calls == [("register", None), ("release", None)]
+    assert id(api) not in client._pending_native_join_api_ids
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+
+
+@pytest.mark.parametrize(
+    "install",
+    [_install_live_md_session, _install_live_trader_session],
+    ids=["md", "trader"],
+)
+def test_bounded_native_join_observation_reports_timeout_then_exit_code(install) -> None:
+    client, api, _spi, _thread = install()
+    join_entered = threading.Event()
+    allow_join_return = threading.Event()
+
+    def join() -> int:
+        join_entered.set()
+        assert allow_join_return.wait(1.0)
+        return 23
+
+    api.Join = join
+    client.stop()
+    observer = threading.Thread(target=client._join_native_api, args=(api,))
+    observer.start()
+    assert join_entered.wait(1.0)
+
+    pending = client.wait_native_join(0.001)
+    assert pending.join_call_finished is False
+    assert pending.observation.state == "pending"
+
+    allow_join_return.set()
+    observer.join(1.0)
+    assert not observer.is_alive()
+    completed = client.wait_native_join(0.1)
+    assert completed.join_call_finished is True
+    assert completed.observation.state == "returned"
+    assert completed.observation.return_code == 23
+    assert completed.observation.error_type is None
+
+
+def test_failed_native_join_is_reported_and_remains_fenced() -> None:
+    client, api, _spi, _thread = _install_live_trader_session()
+
+    def fail_join() -> int:
+        raise RuntimeError("join_failed")
+
+    api.Join = fail_join
+    client.stop()
+    errors: list[BaseException] = []
+
+    def observe_join() -> None:
+        try:
+            client._join_native_api(api)
+        except BaseException as exc:
+            errors.append(exc)
+
+    observer = threading.Thread(target=observe_join)
+    observer.start()
+    observer.join(1.0)
+
+    assert not observer.is_alive()
+    assert len(errors) == 1
+    assert str(errors[0]) == "join_failed"
+    failed = client.wait_native_join(0.1)
+    assert failed.join_call_finished is True
+    assert failed.observation.state == "failed"
+    assert failed.observation.error_type == "RuntimeError"
+    assert api.calls == [("register", None)]
+    assert any(entry_api is api for entry_api, _, _ in client_module._RETIRED_CTP_NATIVE_SESSIONS)
+    with pytest.raises(RuntimeError, match="ctp_trader_client_native_join_pending"):
+        client._reserve_start_generation()
+
+
+@pytest.mark.parametrize(
+    ("install", "pending_code"),
+    [
+        (_install_live_md_session, "ctp_md_client_native_join_pending"),
+        (_install_live_trader_session, "ctp_trader_client_native_join_pending"),
+    ],
+    ids=["md", "trader"],
+)
+def test_release_failure_after_join_keeps_retired_session_and_restart_fenced(
+    install, pending_code: str
+) -> None:
+    client, api, spi, _thread = install()
+    join_calls: list[int] = []
+
+    def join() -> int:
+        join_calls.append(1)
+        return 0
+
+    api.Join = join
+
+    def fail_release() -> None:
+        api.calls.append(("release", None))
+        raise RuntimeError("release_failed")
+
+    api.Release = fail_release
+    client.stop()
+    client._join_native_api(api)
+
+    assert api.calls == [("register", None), ("release", None)]
+    assert any(
+        entry_api is api and entry_spi is spi
+        for entry_api, entry_spi, _ in client_module._RETIRED_CTP_NATIVE_SESSIONS
+    )
+    assert id(api) in client._pending_native_join_api_ids
+    assert id(api) not in client_module._RELEASING_CTP_NATIVE_SESSION_API_IDS
+    assert id(api) in client_module._POISONED_CTP_NATIVE_SESSION_API_IDS
+    assert client.wait_native_join(0.1).observation.state == "returned"
+    assert join_calls == [1]
+    assert client._start_join_observer(api) is False
+    assert join_calls == [1]
+    assert client.wait_native_join(0.1).observation.state == "returned"
+    with pytest.raises(RuntimeError, match=pending_code):
+        client._reserve_start_generation()
+
+    # Release may have partially freed native state before it raised. Repeated
+    # observer cleanup must not retry it, and repeated stop must remain inert.
+    assert client_module._release_retired_ctp_native_session_after_join(api) is False
+    client.stop()
+    assert api.calls == [("register", None), ("release", None)]
+    assert any(
+        entry_api is api and entry_spi is spi
+        for entry_api, entry_spi, _ in client_module._RETIRED_CTP_NATIVE_SESSIONS
+    )
+    assert id(api) in client._pending_native_join_api_ids
+    with pytest.raises(RuntimeError, match=pending_code):
+        client._reserve_start_generation()
+
+
+@pytest.mark.parametrize("timeout", [-0.1, float("inf"), float("nan"), 60.1, True])
+def test_native_join_wait_rejects_unbounded_or_invalid_timeouts(timeout) -> None:
+    client = TraderClient("tcp://test", "9999", "account", "secret")
+
+    with pytest.raises(ValueError, match="ctp_native_join_wait_timeout_out_of_range"):
+        client.wait_native_join(timeout)
 
 
 def test_stale_md_callback_is_fenced_after_live_join_stop() -> None:
