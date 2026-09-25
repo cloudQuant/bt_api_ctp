@@ -301,6 +301,7 @@ def test_managed_ctp_feed_writes_only_with_bound_proof_contract_and_token() -> N
         1200,
         "buy-limit",
         exchange_id="CZCE",
+        client_order_id="000000000101",
         _execution_capability=capability,
     )
     feed.cancel_order(
@@ -348,6 +349,7 @@ def test_public_state_hash_mapping_and_bare_capability_never_arm_direct_feed() -
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000102",
             _execution_capability=capability,
         )
     with pytest.raises(
@@ -503,6 +505,7 @@ def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_wri
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000107",
             _execution_capability=capability,
         )
     assert native_calls == []
@@ -576,13 +579,14 @@ def test_managed_ctp_feed_v2_bundle_allows_exact_czce_option_legs_only() -> None
 
     assert state["scope_version"] == _BUNDLE_SCOPE_VERSION
     assert state["authorized_instruments"] == instruments
-    for instrument in instruments:
+    for index, instrument in enumerate(instruments, 1):
         feed.make_order(
             instrument.split(".", 1)[1],
             1,
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id=f"{index:012d}",
             _execution_capability=capability,
         )
     feed.cancel_order(
@@ -625,6 +629,7 @@ def test_managed_ctp_feed_v2_bundle_rejects_unapproved_or_rewritten_option_leg(
         1200,
         "buy-limit",
         exchange_id="DCE",
+        client_order_id="000000000103",
         _execution_capability=capability,
     )
 
@@ -636,6 +641,7 @@ def test_managed_ctp_feed_v2_bundle_rejects_unapproved_or_rewritten_option_leg(
                 1200,
                 "buy-limit",
                 exchange_id="DCE",
+                client_order_id="000000000104",
                 _execution_capability=capability,
             )
         else:
@@ -765,6 +771,7 @@ def test_managed_ctp_feed_v2_bundle_rechecks_tampered_fields_at_native_boundary(
                 1200,
                 "buy-limit",
                 exchange_id="DCE",
+                client_order_id="000000000105",
                 _execution_capability=capability,
             )
         else:
@@ -897,6 +904,7 @@ def test_managed_ctp_feed_rechecks_generation_at_native_submit_boundary() -> Non
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000106",
             _execution_capability=capability,
         )
 

@@ -492,7 +492,7 @@ class TestCtpOrderThreadingRegression:
                 self._execution_capability = None
 
             def next_order_ref(self):
-                return "108"
+                raise AssertionError("managed orders must not use the legacy allocator")
 
             def _next_request_id(self):
                 self._req_id += 1
@@ -538,12 +538,13 @@ class TestCtpOrderThreadingRegression:
             order_type="buy-limit",
             offset="open",
             exchange_id="CFFEX",
+            client_order_id="000000000108",
             _execution_capability=capability,
         )
 
         sent_field = feed._trader.api.field
         assert sent_field is not None
-        assert sent_field.OrderRef == "108"
+        assert sent_field.OrderRef == "000000000108"
         assert sent_field.UserID == "demo"
         assert sent_field.MinVolume == 1
         assert sent_field.RequestID == 8
@@ -552,9 +553,122 @@ class TestCtpOrderThreadingRegression:
 
         order = result.get_data()[0]
         order.init_data()
-        assert order.get_client_order_id() == "108"
+        assert order.get_client_order_id() == "000000000108"
         assert order.front_id == 11
         assert order.session_id == 22
+
+    @pytest.mark.parametrize(
+        "client_order_id",
+        [
+            None,
+            "",
+            "12345678901",
+            "1234567890123",
+            "12345678901x",
+            "１２３４５６７８９０１２",
+            123456789012,
+            True,
+        ],
+    )
+    def test_make_order_requires_exact_ref_before_order_side_effects(self, client_order_id):
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        class TrackingQueue(queue.Queue):
+            def __init__(self):
+                super().__init__()
+                self.put_calls = 0
+
+            def put(self, *args, **kwargs):
+                self.put_calls += 1
+                return super().put(*args, **kwargs)
+
+        class FakeApi:
+            def __init__(self):
+                self.calls = 0
+                self.field = None
+                self.req_id = None
+
+            def ReqOrderInsert(self, field, req_id):
+                self.calls += 1
+                self.field = field
+                self.req_id = req_id
+                return 0
+
+        class FakeTrader:
+            def __init__(self):
+                self.api = FakeApi()
+                self.is_ready = True
+                self.is_read_only_ready = True
+                self.is_trading_ready = True
+                self.auto_settlement_confirm = False
+                self._req_id = 7
+                self._front_id = 11
+                self._session_id = 22
+                self._execution_capability = None
+                self.next_order_ref_calls = 0
+                self.request_id_calls = 0
+                self.submit_calls = 0
+
+            def next_order_ref(self):
+                self.next_order_ref_calls += 1
+                return "000000000108"
+
+            def _next_request_id(self):
+                self.request_id_calls += 1
+                self._req_id += 1
+                return self._req_id
+
+            def configure_execution_gate(self, capability):
+                self._execution_capability = capability
+                return self.get_execution_gate_state()
+
+            def get_execution_gate_state(self):
+                return {
+                    "managed": self._execution_capability is not None,
+                    "armed": self._execution_capability is not None,
+                }
+
+            def require_execution_write(self, capability, _instrument, _exchange_id=""):
+                if capability is not self._execution_capability:
+                    raise AssertionError("unexpected execution capability")
+
+            def submit_order_insert(self, field, request_id, *, execution_capability):
+                self.submit_calls += 1
+                self.require_execution_write(execution_capability, field.InstrumentID)
+                return self.api.ReqOrderInsert(field, request_id)
+
+        event_queue = TrackingQueue()
+        feed = CtpRequestDataFuture(
+            event_queue,
+            broker_id="9999",
+            user_id="demo",
+            password="secret",
+            td_front="tcp://test",
+        )
+        trader = FakeTrader()
+        feed._trader = trader
+        feed._connected = True
+        capability = ctp_client._issue_ctp_execution_authority_for_test()
+        feed.configure_execution_gate(capability)
+
+        with pytest.raises(ValueError, match="exact 12-digit ASCII client_order_id"):
+            feed.make_order(
+                symbol="IF2506",
+                volume=1,
+                price=3500.0,
+                order_type="buy-limit",
+                offset="open",
+                exchange_id="CFFEX",
+                client_order_id=client_order_id,
+                _execution_capability=capability,
+            )
+
+        assert trader.next_order_ref_calls == 0
+        assert trader.request_id_calls == 0
+        assert trader._req_id == 7
+        assert trader.submit_calls == 0
+        assert trader.api.calls == 0
+        assert event_queue.put_calls == 0
 
     def test_get_open_orders_queries_and_filters_remaining_orders(self):
         from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
@@ -711,6 +825,7 @@ class TestCtpOrderThreadingRegression:
             "order_type": "buy-limit",
             "offset": "open",
             "exchange_id": "CFFEX",
+            "client_order_id": "000000000108",
         }
         params.update(kwargs)
 

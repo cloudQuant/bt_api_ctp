@@ -50,6 +50,11 @@ from bt_api_ctp.instrument import (
 )
 from bt_api_ctp.query import QueryResult
 
+
+def _is_exact_ctp_order_ref(value: Any) -> bool:
+    return type(value) is str and len(value) == 12 and value.isascii() and value.isdecimal()
+
+
 _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL = object()
 
 
@@ -953,6 +958,10 @@ class CtpRequestData(Feed):
         execution_capability = kwargs.pop("_execution_capability", None)
         exchange_id = kwargs.get("exchange_id", "")
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
+        if not _is_exact_ctp_order_ref(client_order_id):
+            raise ValueError(
+                "managed CTP orders require an exact 12-digit ASCII client_order_id"
+            )
         self._ensure_trading_ready()
         trader = self._trader
         if trader is None:
@@ -1004,12 +1013,7 @@ class CtpRequestData(Feed):
                 f"CTP time_in_force {time_in_force!r} is unsupported; iteration 22 requires GFD."
             )
         field.LimitPrice = limit_price
-        if client_order_id is not None:
-            field.OrderRef = str(client_order_id)
-        elif hasattr(trader, "next_order_ref"):
-            field.OrderRef = trader.next_order_ref()
-        else:
-            field.OrderRef = str(trader._req_id + 1)
+        field.OrderRef = client_order_id
         next_req_id = trader._next_request_id()
         field.RequestID = next_req_id
         submit = getattr(trader, "submit_order_insert", None)
