@@ -270,6 +270,32 @@ class CtpExecutionGateError(RuntimeError):
         super().__init__(code)
 
 
+class CtpNativeCallbackConsumerError(RuntimeError):
+    """Fail-closed rejection from the source callback-event consumer lease."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class _NativeCallbackEventConsumerToken:
+    """Identity-only capability for one source callback queue consumer."""
+
+    __slots__ = ("__weakref__",)
+
+
+@dataclass
+class _NativeCallbackEventConsumerLease:
+    token: _NativeCallbackEventConsumerToken
+    source_instance_id: str
+    native_client_epoch: str
+    native_api_source_id: str
+    native_api_generation: int
+    queue_generation: int
+    waiting: bool = False
+    revoked: bool = False
+
+
 # These objects deliberately have no public construction or retrieval API.
 # A bare ``object()`` (or a mapping reconstructed from session-state fields)
 # must never become a CTP write credential.  The parent SDK receives an owner
@@ -2007,7 +2033,12 @@ class TraderClient:
         self._error_events = queue.Queue()
         self._callback_source_instance_id = uuid.uuid4().hex
         self._callback_source_sequence = 0
+        self._native_callback_queue_generation = 0
         self._native_callback_events = queue.Queue()
+        self._native_callback_event_condition = threading.Condition(self._query_state_lock)
+        self._native_callback_consumer_lease: _NativeCallbackEventConsumerLease | None = None
+        self._native_callback_legacy_waiters = 0
+        self._native_callback_released_consumer_tokens = weakref.WeakSet()
 
     @property
     def _api(self) -> Any:
@@ -2022,10 +2053,16 @@ class TraderClient:
         if lock is None:
             self.__native_api = value
             self._native_api_generation = getattr(self, "_native_api_generation", 0) + 1
+            self._native_callback_queue_generation = (
+                getattr(self, "_native_callback_queue_generation", 0) + 1
+            )
             self._native_client_epoch = uuid.uuid4().hex if value is not None else None
             self._native_api_source_id = uuid.uuid4().hex if value is not None else None
             return
         with lock:
+            self._revoke_native_callback_event_consumer_locked(
+                "ctp_native_callback_consumer_native_api_changed"
+            )
             if getattr(self, "_execution_gate_capability", None) is not None:
                 self._revoke_execution_gate_locked("ctp_execution_gate_native_api_changed")
             if hasattr(self, "_execution_preflight_epoch"):
@@ -2036,8 +2073,14 @@ class TraderClient:
             self._spi = None
             self.__native_api = value
             self._native_api_generation = getattr(self, "_native_api_generation", 0) + 1
+            self._native_callback_queue_generation = (
+                getattr(self, "_native_callback_queue_generation", 0) + 1
+            )
             self._native_client_epoch = uuid.uuid4().hex if value is not None else None
             self._native_api_source_id = uuid.uuid4().hex if value is not None else None
+            condition = getattr(self, "_native_callback_event_condition", None)
+            if condition is not None:
+                condition.notify_all()
 
     def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
         """Check that public compatibility attributes still name this session.
@@ -3977,17 +4020,205 @@ class TraderClient:
         except queue.Empty:
             return None
 
-    def wait_native_callback_event(self, timeout=5) -> CtpTraderCallbackSourceEvent | None:
-        """Wait for a source-only order/action callback record.
+    @staticmethod
+    def _native_callback_wait_deadline(timeout: float | None) -> float | None:
+        if timeout is None:
+            return None
+        if timeout < 0:
+            raise ValueError("'timeout' must be a non-negative number")
+        return time.monotonic() + timeout
 
-        The returned record retains source API/SPI identity and callback-time
-        state, but its account/scope and managed-session epoch remain unbound.
+    def _native_callback_consumer_is_live_locked(
+        self, lease: _NativeCallbackEventConsumerLease
+    ) -> bool:
+        return bool(
+            self._native_callback_consumer_lease is lease
+            and not lease.revoked
+            and self._api is not None
+            and self._callback_source_instance_id == lease.source_instance_id
+            and self._native_client_epoch == lease.native_client_epoch
+            and self._native_api_source_id == lease.native_api_source_id
+            and self._native_api_generation == lease.native_api_generation
+            and self._native_callback_queue_generation == lease.queue_generation
+        )
+
+    def _revoke_native_callback_event_consumer_locked(self, _reason: str) -> None:
+        lease = getattr(self, "_native_callback_consumer_lease", None)
+        if lease is None or lease.revoked:
+            return
+        lease.revoked = True
+        released_tokens = getattr(self, "_native_callback_released_consumer_tokens", None)
+        if released_tokens is not None:
+            released_tokens.add(lease.token)
+        condition = getattr(self, "_native_callback_event_condition", None)
+        if condition is not None:
+            condition.notify_all()
+        if not lease.waiting:
+            self._native_callback_consumer_lease = None
+
+    def _claim_native_callback_event_consumer(self) -> _NativeCallbackEventConsumerToken:
+        """Claim the callback queue for one token-aware source consumer.
+
+        The opaque token binds to this client, native API generation, and
+        callback queue generation. It carries no native API/SPI references.
         """
 
-        try:
-            return self._native_callback_events.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        with self._query_state_lock:
+            lease = self._native_callback_consumer_lease
+            if lease is not None:
+                if not self._native_callback_consumer_is_live_locked(lease):
+                    self._revoke_native_callback_event_consumer_locked(
+                        "ctp_native_callback_consumer_stale"
+                    )
+                lease = self._native_callback_consumer_lease
+                if lease is not None:
+                    code = (
+                        "ctp_native_callback_consumer_previous_wait_active"
+                        if lease.waiting
+                        else "ctp_native_callback_consumer_already_claimed"
+                    )
+                    raise CtpNativeCallbackConsumerError(code)
+
+            if self._native_callback_legacy_waiters:
+                raise CtpNativeCallbackConsumerError(
+                    "ctp_native_callback_consumer_legacy_wait_in_flight"
+                )
+            if (
+                self._api is None
+                or self._native_client_epoch is None
+                or self._native_api_source_id is None
+            ):
+                raise CtpNativeCallbackConsumerError(
+                    "ctp_native_callback_consumer_native_api_unavailable"
+                )
+
+            token = _NativeCallbackEventConsumerToken()
+            self._native_callback_consumer_lease = _NativeCallbackEventConsumerLease(
+                token=token,
+                source_instance_id=self._callback_source_instance_id,
+                native_client_epoch=self._native_client_epoch,
+                native_api_source_id=self._native_api_source_id,
+                native_api_generation=self._native_api_generation,
+                queue_generation=self._native_callback_queue_generation,
+            )
+            return token
+
+    def _wait_native_callback_event_for_consumer(
+        self,
+        token: object,
+        timeout: float | None = 5,
+    ) -> CtpTraderCallbackSourceEvent | None:
+        """Wait under the current exclusive callback queue consumer lease."""
+
+        deadline = self._native_callback_wait_deadline(timeout)
+        if type(token) is not _NativeCallbackEventConsumerToken:
+            raise CtpNativeCallbackConsumerError("ctp_native_callback_consumer_invalid_token")
+
+        with self._query_state_lock:
+            lease = self._native_callback_consumer_lease
+            if lease is None or lease.token is not token:
+                raise CtpNativeCallbackConsumerError("ctp_native_callback_consumer_stale_token")
+            if not self._native_callback_consumer_is_live_locked(lease):
+                self._revoke_native_callback_event_consumer_locked(
+                    "ctp_native_callback_consumer_stale"
+                )
+                raise CtpNativeCallbackConsumerError("ctp_native_callback_consumer_stale_token")
+            if lease.waiting:
+                raise CtpNativeCallbackConsumerError("ctp_native_callback_consumer_competing_wait")
+
+            lease.waiting = True
+            self._native_callback_event_condition.notify_all()
+            try:
+                while True:
+                    if not self._native_callback_consumer_is_live_locked(lease):
+                        self._revoke_native_callback_event_consumer_locked(
+                            "ctp_native_callback_consumer_stale"
+                        )
+                        raise CtpNativeCallbackConsumerError(
+                            "ctp_native_callback_consumer_stale_token"
+                        )
+
+                    try:
+                        # Dequeue and lease validation share the client lock.
+                        # Callback recording uses that lock too, so a release,
+                        # stop, or API replacement cannot race a stale dequeue.
+                        return self._native_callback_events.get_nowait()
+                    except queue.Empty:
+                        remaining = None if deadline is None else deadline - time.monotonic()
+                        if remaining is not None and remaining <= 0:
+                            return None
+                        self._native_callback_event_condition.wait(remaining)
+            finally:
+                lease.waiting = False
+                if (
+                    self._native_callback_consumer_lease is lease
+                    and not self._native_callback_consumer_is_live_locked(lease)
+                ):
+                    self._revoke_native_callback_event_consumer_locked(
+                        "ctp_native_callback_consumer_stale"
+                    )
+                if self._native_callback_consumer_lease is lease and lease.revoked:
+                    self._native_callback_consumer_lease = None
+                self._native_callback_event_condition.notify_all()
+
+    def _release_native_callback_event_consumer(self, token: object) -> None:
+        """Revoke a lease; repeated release of the same token is harmless."""
+
+        with self._query_state_lock:
+            lease = self._native_callback_consumer_lease
+            if lease is None or lease.token is not token:
+                try:
+                    if token in self._native_callback_released_consumer_tokens:
+                        return
+                except TypeError:
+                    pass
+                raise CtpNativeCallbackConsumerError("ctp_native_callback_consumer_stale_token")
+            self._revoke_native_callback_event_consumer_locked(
+                "ctp_native_callback_consumer_released"
+            )
+
+    def wait_native_callback_event(self, timeout=5) -> CtpTraderCallbackSourceEvent | None:
+        """Wait for a source-only callback record unless a lease owns the queue.
+
+        This legacy read path remains available to one-off callers. Once a
+        bridge claims the queue, bare waits reject so they cannot steal events.
+        """
+
+        deadline = self._native_callback_wait_deadline(timeout)
+        with self._query_state_lock:
+            lease = self._native_callback_consumer_lease
+            if lease is not None:
+                if not self._native_callback_consumer_is_live_locked(lease):
+                    self._revoke_native_callback_event_consumer_locked(
+                        "ctp_native_callback_consumer_stale"
+                    )
+                if self._native_callback_consumer_lease is not None:
+                    raise CtpNativeCallbackConsumerError(
+                        "ctp_native_callback_consumer_queue_leased"
+                    )
+
+            queue_generation = self._native_callback_queue_generation
+            try:
+                return self._native_callback_events.get_nowait()
+            except queue.Empty:
+                pass
+
+            self._native_callback_legacy_waiters += 1
+            self._native_callback_event_condition.notify_all()
+            try:
+                while True:
+                    if queue_generation != self._native_callback_queue_generation:
+                        return None
+                    try:
+                        return self._native_callback_events.get_nowait()
+                    except queue.Empty:
+                        remaining = None if deadline is None else deadline - time.monotonic()
+                        if remaining is not None and remaining <= 0:
+                            return None
+                        self._native_callback_event_condition.wait(remaining)
+            finally:
+                self._native_callback_legacy_waiters -= 1
+                self._native_callback_event_condition.notify_all()
 
     def _record_native_callback_event(
         self,
@@ -4086,6 +4317,7 @@ class TraderClient:
                 scope_binding="unbound",
             )
             self._native_callback_events.put(event)
+            self._native_callback_event_condition.notify_all()
             return event
 
     def _push_order_event(self, order_field) -> None:

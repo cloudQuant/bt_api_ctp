@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import gc
+import threading
 import weakref
 from dataclasses import FrozenInstanceError, fields, replace
 from types import SimpleNamespace
 
 import pytest
 
-from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
+from bt_api_ctp.ctp.client import (
+    CtpNativeCallbackConsumerError,
+    TraderClient,
+    _TraderSpi,
+)
 
 
 class _FakeTraderApi:
@@ -28,6 +33,12 @@ class _FakeTraderApi:
 
     def ReqOrderAction(self, *_args):
         raise AssertionError("callback records must not expose the native API")
+
+    def RegisterSpi(self, _spi):
+        return None
+
+    def Release(self):
+        return None
 
 
 def _connect_and_login(client: TraderClient, api: _FakeTraderApi) -> _TraderSpi:
@@ -71,6 +82,33 @@ def _contains_order_write_api(value) -> bool:
 
 def _event_contains_order_write_api(event) -> bool:
     return any(_contains_order_write_api(getattr(event, item.name)) for item in fields(event))
+
+
+def _wait_for_condition(client: TraderClient, predicate) -> None:
+    with client._query_state_lock:
+        assert client._native_callback_event_condition.wait_for(predicate, timeout=1)
+
+
+def _start_consumer_wait(client: TraderClient, token: object):
+    started = threading.Event()
+    result: dict[str, object] = {}
+
+    def wait() -> None:
+        started.set()
+        try:
+            result["event"] = client._wait_native_callback_event_for_consumer(token, timeout=None)
+        except BaseException as exc:  # the test records the worker failure for its caller
+            result["error"] = exc
+
+    thread = threading.Thread(target=wait, daemon=True)
+    thread.start()
+    assert started.wait(timeout=1)
+    _wait_for_condition(
+        client,
+        lambda: client._native_callback_consumer_lease is not None
+        and client._native_callback_consumer_lease.waiting,
+    )
+    return thread, result
 
 
 def test_order_callback_captures_immutable_raw_source_facts_and_keeps_queue_api() -> None:
@@ -284,3 +322,116 @@ def test_queued_callback_record_does_not_retain_native_api_or_spi() -> None:
     assert not _event_contains_order_write_api(event)
     assert isinstance(event.native_api_source_id, str)
     assert isinstance(event.native_spi_source_id, str)
+
+
+def test_legacy_native_callback_wait_is_safe_before_api_start() -> None:
+    client = _client()
+    assert client.wait_native_callback_event(timeout=0) is None
+    with pytest.raises(CtpNativeCallbackConsumerError) as error:
+        client._claim_native_callback_event_consumer()
+    assert error.value.code == "ctp_native_callback_consumer_native_api_unavailable"
+
+
+def test_native_callback_event_consumer_lease_is_exclusive_and_releases_safely() -> None:
+    client = _client()
+    api = _FakeTraderApi()
+    spi = _connect_and_login(client, api)
+    token = client._claim_native_callback_event_consumer()
+
+    with pytest.raises(CtpNativeCallbackConsumerError) as competing_claim:
+        client._claim_native_callback_event_consumer()
+    assert competing_claim.value.code == "ctp_native_callback_consumer_already_claimed"
+    with pytest.raises(CtpNativeCallbackConsumerError) as legacy_wait:
+        client.wait_native_callback_event(timeout=0)
+    assert legacy_wait.value.code == "ctp_native_callback_consumer_queue_leased"
+
+    spi.OnRtnOrder(SimpleNamespace(OrderRef="22", RequestID=14))
+    event = client._wait_native_callback_event_for_consumer(token, timeout=0)
+    assert event is not None
+    assert event.raw_value("OrderRef") == "22"
+
+    thread, result = _start_consumer_wait(client, token)
+    with client._query_state_lock:
+        with pytest.raises(CtpNativeCallbackConsumerError) as competing_wait:
+            client._wait_native_callback_event_for_consumer(token, timeout=0)
+        assert competing_wait.value.code == "ctp_native_callback_consumer_competing_wait"
+        client._release_native_callback_event_consumer(token)
+        with pytest.raises(CtpNativeCallbackConsumerError) as premature_claim:
+            client._claim_native_callback_event_consumer()
+    assert premature_claim.value.code == "ctp_native_callback_consumer_previous_wait_active"
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert isinstance(result.get("error"), CtpNativeCallbackConsumerError)
+    assert result["error"].code == "ctp_native_callback_consumer_stale_token"
+
+    # Release is idempotent, and the old token cannot affect the next lease.
+    client._release_native_callback_event_consumer(token)
+    client._release_native_callback_event_consumer(token)
+    replacement = client._claim_native_callback_event_consumer()
+    assert replacement is not token
+    client._release_native_callback_event_consumer(token)
+    with pytest.raises(CtpNativeCallbackConsumerError) as still_owned:
+        client.wait_native_callback_event(timeout=0)
+    assert still_owned.value.code == "ctp_native_callback_consumer_queue_leased"
+    client._release_native_callback_event_consumer(replacement)
+
+
+def test_native_callback_consumer_claim_rejects_an_in_flight_legacy_wait() -> None:
+    client = _client()
+    client._api = _FakeTraderApi()
+    result: dict[str, object] = {}
+    started = threading.Event()
+
+    def wait_legacy() -> None:
+        started.set()
+        result["event"] = client.wait_native_callback_event(timeout=1)
+
+    thread = threading.Thread(target=wait_legacy, daemon=True)
+    thread.start()
+    assert started.wait(timeout=1)
+    _wait_for_condition(client, lambda: client._native_callback_legacy_waiters == 1)
+
+    with pytest.raises(CtpNativeCallbackConsumerError) as error:
+        client._claim_native_callback_event_consumer()
+    assert error.value.code == "ctp_native_callback_consumer_legacy_wait_in_flight"
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert result["event"] is None
+    token = client._claim_native_callback_event_consumer()
+    client._release_native_callback_event_consumer(token)
+
+
+def test_native_callback_consumer_token_goes_stale_on_api_generation_change() -> None:
+    client = _client()
+    client._api = _FakeTraderApi()
+    old_token = client._claim_native_callback_event_consumer()
+    thread, result = _start_consumer_wait(client, old_token)
+
+    client._api = _FakeTraderApi()
+
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert isinstance(result.get("error"), CtpNativeCallbackConsumerError)
+    assert result["error"].code == "ctp_native_callback_consumer_stale_token"
+    client._release_native_callback_event_consumer(old_token)
+    new_token = client._claim_native_callback_event_consumer()
+    assert new_token is not old_token
+    client._release_native_callback_event_consumer(new_token)
+
+
+def test_native_callback_consumer_wait_is_woken_and_revoked_by_stop() -> None:
+    client = _client()
+    client._api = _FakeTraderApi()
+    token = client._claim_native_callback_event_consumer()
+    thread, result = _start_consumer_wait(client, token)
+
+    client.stop()
+
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert isinstance(result.get("error"), CtpNativeCallbackConsumerError)
+    assert result["error"].code == "ctp_native_callback_consumer_stale_token"
+    client._release_native_callback_event_consumer(token)
+    with pytest.raises(CtpNativeCallbackConsumerError) as error:
+        client._claim_native_callback_event_consumer()
+    assert error.value.code == "ctp_native_callback_consumer_native_api_unavailable"
