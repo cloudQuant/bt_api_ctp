@@ -40,6 +40,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Mapping
 from contextlib import suppress
@@ -70,6 +71,7 @@ from ._ctp_base import (
 from ._ctp_base import (
     is_ctp_native_loaded as _is_vendored_ctp_native_loaded,
 )
+from .callback_events import CtpTraderCallbackSourceEvent, snapshot_exact_fields
 from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
 from .ctp_structs_common import (
     CThostFtdcReqAuthenticateField,
@@ -92,6 +94,46 @@ from .ctp_structs_query import (
 from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
 _logger = logging.getLogger(__name__)
+
+_TRADER_ORDER_CALLBACK_FIELDS = (
+    "BrokerID",
+    "InvestorID",
+    "UserID",
+    "InstrumentID",
+    "ExchangeID",
+    "OrderRef",
+    "OrderSysID",
+    "FrontID",
+    "SessionID",
+    "RequestID",
+    "SequenceNo",
+    "NotifySequence",
+    "OrderStatus",
+    "OrderSubmitStatus",
+    "TradingDay",
+)
+_TRADER_ORDER_ACTION_CALLBACK_FIELDS = (
+    "BrokerID",
+    "InvestorID",
+    "UserID",
+    "InstrumentID",
+    "ExchangeID",
+    "OrderRef",
+    "OrderSysID",
+    "FrontID",
+    "SessionID",
+    "OrderActionRef",
+    "RequestID",
+    "ActionFlag",
+    "ActionLocalID",
+    "OrderActionStatus",
+    "StatusMsg",
+    "ActionDate",
+    "ActionTime",
+    "SessionReqSeq",
+    "InvestUnitID",
+)
+_TRADER_CALLBACK_RSP_INFO_FIELDS = ("ErrorID", "ErrorMsg")
 
 CTP_REQUEST_COUNT_KEYS = (
     "authenticate",
@@ -1467,6 +1509,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         super().__init__()
         self._c = client
         self._native_api = native_api
+        self._native_spi_source_id = uuid.uuid4().hex
 
     def _is_current_locked(self) -> bool:
         if self._native_api is None:
@@ -1767,7 +1810,34 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnRtnOrder(self, pOrder):
         if not self._is_current():
             return
+        self._c._record_native_callback_event(
+            self,
+            event_type="OnRtnOrder",
+            native_field=pOrder,
+            field_names=_TRADER_ORDER_CALLBACK_FIELDS,
+        )
         self._c._push_order_event(pOrder)
+
+    @_fence_trader_spi_callback
+    def OnRspOrderAction(self, pInputOrderAction, pRspInfo, nRequestID, bIsLast):
+        self._c._record_native_callback_event(
+            self,
+            event_type="OnRspOrderAction",
+            native_field=pInputOrderAction,
+            field_names=_TRADER_ORDER_ACTION_CALLBACK_FIELDS,
+            rsp_info=pRspInfo,
+            callback_fields=(("nRequestID", nRequestID), ("bIsLast", bIsLast)),
+        )
+
+    @_fence_trader_spi_callback
+    def OnErrRtnOrderAction(self, pOrderAction, pRspInfo):
+        self._c._record_native_callback_event(
+            self,
+            event_type="OnErrRtnOrderAction",
+            native_field=pOrderAction,
+            field_names=_TRADER_ORDER_ACTION_CALLBACK_FIELDS,
+            rsp_info=pRspInfo,
+        )
 
     @_fence_trader_spi_callback
     def OnRtnTrade(self, pTrade):
@@ -1866,6 +1936,9 @@ class TraderClient:
         self._front_id = 0
         self._session_id = 0
         self._api_view = _ManagedTraderApiView(self)
+        self._native_api_generation = 0
+        self._native_client_epoch: str | None = None
+        self._native_api_source_id: str | None = None
         self._api = None
         self._session_native_api = None
         self._session_native_front: str | None = None
@@ -1932,6 +2005,9 @@ class TraderClient:
         self._order_events = queue.Queue()
         self._trade_events = queue.Queue()
         self._error_events = queue.Queue()
+        self._callback_source_instance_id = uuid.uuid4().hex
+        self._callback_source_sequence = 0
+        self._native_callback_events = queue.Queue()
 
     @property
     def _api(self) -> Any:
@@ -1945,6 +2021,9 @@ class TraderClient:
         lock = getattr(self, "_query_state_lock", None)
         if lock is None:
             self.__native_api = value
+            self._native_api_generation = getattr(self, "_native_api_generation", 0) + 1
+            self._native_client_epoch = uuid.uuid4().hex if value is not None else None
+            self._native_api_source_id = uuid.uuid4().hex if value is not None else None
             return
         with lock:
             if getattr(self, "_execution_gate_capability", None) is not None:
@@ -1956,6 +2035,9 @@ class TraderClient:
             # Any callbacks from the previous SPI become stale immediately.
             self._spi = None
             self.__native_api = value
+            self._native_api_generation = getattr(self, "_native_api_generation", 0) + 1
+            self._native_client_epoch = uuid.uuid4().hex if value is not None else None
+            self._native_api_source_id = uuid.uuid4().hex if value is not None else None
 
     def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
         """Check that public compatibility attributes still name this session.
@@ -3894,6 +3976,117 @@ class TraderClient:
             return self._error_events.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def wait_native_callback_event(self, timeout=5) -> CtpTraderCallbackSourceEvent | None:
+        """Wait for a source-only order/action callback record.
+
+        The returned record retains source API/SPI identity and callback-time
+        state, but its account/scope and managed-session epoch remain unbound.
+        """
+
+        try:
+            return self._native_callback_events.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _record_native_callback_event(
+        self,
+        origin_spi: _TraderSpi,
+        *,
+        event_type: str,
+        native_field: Any,
+        field_names: tuple[str, ...],
+        rsp_info: Any = None,
+        callback_fields: tuple[tuple[str, Any], ...] = (),
+    ) -> CtpTraderCallbackSourceEvent | None:
+        """Atomically retain source facts for one current native callback."""
+
+        with self._query_state_lock:
+            origin_api = origin_spi._native_api
+            native_client_epoch = self._native_client_epoch
+            native_api_source_id = self._native_api_source_id
+            if (
+                origin_api is None
+                or native_client_epoch is None
+                or native_api_source_id is None
+                or self._api is not origin_api
+                or self._spi is not origin_spi
+            ):
+                return None
+
+            raw_fields: list[tuple[str, Any]] = []
+            for name, value in callback_fields:
+                if type(value) in (str, bytes, int, float, bool, type(None)):
+                    raw_fields.append((name, value))
+            raw_fields.extend(snapshot_exact_fields(native_field, field_names))
+            raw_fields.extend(snapshot_exact_fields(rsp_info, _TRADER_CALLBACK_RSP_INFO_FIELDS))
+            raw_correlation_fields = tuple(raw_fields)
+
+            login_verified = bool(
+                self._connected is True
+                and self._login_state == "logged_in"
+                and self._session_native_api is origin_api
+                and self._connection_generation > 0
+                and self._session_native_front == self._bound_front
+                and self._bound_front
+                and self._bound_broker_id
+                and self._bound_user_id
+                and self._trading_day
+            )
+            login_broker_id = self._bound_broker_id if login_verified else None
+            login_investor_id = self._bound_user_id if login_verified else None
+            login_front = self._session_native_front if login_verified else None
+            login_trading_day = self._trading_day if login_verified else None
+            login_front_id = (
+                self._front_id if login_verified and type(self._front_id) is int else None
+            )
+            login_session_id = (
+                self._session_id if login_verified and type(self._session_id) is int else None
+            )
+            callback_session_matches_login = None
+            if login_verified:
+                raw_values = dict(raw_correlation_fields)
+                checks: list[bool] = []
+                for field_name, expected in (
+                    ("BrokerID", login_broker_id),
+                    ("InvestorID", login_investor_id),
+                    ("FrontID", login_front_id),
+                    ("SessionID", login_session_id),
+                    ("TradingDay", login_trading_day),
+                ):
+                    observed = raw_values.get(field_name)
+                    if observed in (None, "", b"", 0):
+                        continue
+                    checks.append(type(observed) is type(expected) and observed == expected)
+                if checks:
+                    callback_session_matches_login = all(checks)
+
+            self._callback_source_sequence += 1
+            event = CtpTraderCallbackSourceEvent(
+                event_type=event_type,  # type: ignore[arg-type]
+                source_instance_id=self._callback_source_instance_id,
+                native_client_epoch=native_client_epoch,
+                native_api_source_id=native_api_source_id,
+                native_spi_source_id=origin_spi._native_spi_source_id,
+                source_sequence=self._callback_source_sequence,
+                callback_monotonic_ns=time.monotonic_ns(),
+                native_api_generation=self._native_api_generation,
+                connection_generation=self._connection_generation,
+                login_verified=login_verified,
+                login_broker_id=login_broker_id,
+                login_investor_id=login_investor_id,
+                login_front=login_front,
+                login_trading_day=login_trading_day,
+                login_front_id=login_front_id,
+                login_session_id=login_session_id,
+                callback_session_matches_login=callback_session_matches_login,
+                raw_correlation_fields=raw_correlation_fields,
+                managed_session_epoch=None,
+                managed_session_epoch_bound=False,
+                scope_binding="unbound",
+            )
+            self._native_callback_events.put(event)
+            return event
 
     def _push_order_event(self, order_field) -> None:
         snapshot = _snapshot_ctp_field(order_field)
