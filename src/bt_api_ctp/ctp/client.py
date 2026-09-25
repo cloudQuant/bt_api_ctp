@@ -1152,6 +1152,7 @@ class MdClient:
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        self._pending_native_join_api_ids: set[int] = set()
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
@@ -1161,6 +1162,8 @@ class MdClient:
         """Reserve one startup generation before creating the native API."""
 
         with self._state_lock:
+            if self._pending_native_join_api_ids:
+                raise RuntimeError("ctp_md_client_native_join_pending")
             if self._api is not None or self._starting_generation is not None:
                 raise RuntimeError("ctp_md_client_already_started")
             self._lifecycle_generation += 1
@@ -1236,6 +1239,7 @@ class MdClient:
                 return False
             native_live = native_init_may_be_live or self._native_init_started
             if native_live:
+                self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, self._thread)
                 observe_join = True
             else:
@@ -1273,6 +1277,8 @@ class MdClient:
                     if self._thread is threading.current_thread():
                         self._thread = None
                 _release_retired_ctp_native_session_after_join(api)
+                with self._state_lock:
+                    self._pending_native_join_api_ids.discard(id(api))
 
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
@@ -1481,6 +1487,7 @@ class MdClient:
             if api is None:
                 return
             if join_active:
+                self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, join_thread)
             self._api = None
             self._spi = None
@@ -1972,6 +1979,7 @@ class TraderClient:
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        self._pending_native_join_api_ids: set[int] = set()
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
@@ -3185,6 +3193,8 @@ class TraderClient:
             # Preserve the managed-gate revocation contract even when this is
             # a rejected re-entrant start attempt.
             self._revoke_execution_gate_locked("ctp_execution_gate_client_start")
+            if self._pending_native_join_api_ids:
+                raise RuntimeError("ctp_trader_client_native_join_pending")
             if self._api is not None or self._starting_generation is not None:
                 raise RuntimeError("ctp_trader_client_already_started")
             self._lifecycle_generation += 1
@@ -3254,6 +3264,7 @@ class TraderClient:
                 return False
             native_live = native_init_may_be_live or self._native_init_started
             if native_live:
+                self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, self._thread)
                 observe_join = True
             else:
@@ -3290,6 +3301,8 @@ class TraderClient:
                     if self._thread is threading.current_thread():
                         self._thread = None
                 _release_retired_ctp_native_session_after_join(api)
+                with self._query_state_lock:
+                    self._pending_native_join_api_ids.discard(id(api))
 
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
@@ -4380,6 +4393,7 @@ class TraderClient:
             if api is None:
                 return
             if join_active:
+                self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, join_thread)
             self._api = None
             self._thread = None

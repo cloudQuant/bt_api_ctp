@@ -256,6 +256,64 @@ def test_join_returned_stop_releases_native_api_immediately(client) -> None:
     assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
 
 
+@pytest.mark.parametrize(
+    ("install", "pending_code", "api_factory_name", "create_method"),
+    [
+        (
+            _install_live_md_session,
+            "ctp_md_client_native_join_pending",
+            "CThostFtdcMdApi",
+            "CreateFtdcMdApi",
+        ),
+        (
+            _install_live_trader_session,
+            "ctp_trader_client_native_join_pending",
+            "CThostFtdcTraderApi",
+            "CreateFtdcTraderApi",
+        ),
+    ],
+    ids=["md", "trader"],
+)
+def test_pending_join_blocks_restarting_the_same_client_until_join_returns(
+    monkeypatch: pytest.MonkeyPatch,
+    install,
+    pending_code: str,
+    api_factory_name: str,
+    create_method: str,
+) -> None:
+    client, api, _spi, _thread = install()
+    api.Join = lambda: None
+
+    client.stop()
+
+    native_creation_attempts: list[str] = []
+
+    def fail_create(_flow: str) -> None:
+        native_creation_attempts.append("called")
+        raise AssertionError("a pending Join must fence native API creation")
+
+    monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
+    monkeypatch.setattr(
+        client_module,
+        api_factory_name,
+        SimpleNamespace(**{create_method: fail_create}),
+    )
+    with pytest.raises(RuntimeError, match=pending_code):
+        client.start(block=False)
+    assert native_creation_attempts == []
+    assert api.calls == [("register", None)]
+
+    # The native API is released only after the retained session observes Join.
+    client._join_native_api(api)
+    assert api.calls == [("register", None), ("release", None)]
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+
+    # Once the Join observer has completed its release attempt, retry reserves
+    # normally and no longer carries a false pending-session blocker.
+    generation = client._reserve_start_generation()
+    client._clear_start_reservation(generation)
+
+
 def test_stale_md_callback_is_fenced_after_live_join_stop() -> None:
     client = MdClient("tcp://test", "9999", "account", "secret")
     api = _NativeApi()
