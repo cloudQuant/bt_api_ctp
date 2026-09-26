@@ -286,8 +286,18 @@ def _binding(
         ensure_ascii=True,
         allow_nan=False,
     )
+    native_payload = dict(payload)
+    if operation == "CANCEL":
+        native_payload["OrderActionRef"] = action_ref
+    native_payload_text = json.dumps(
+        native_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
     envelope = {
-        "binding_type": "ctp_managed_native_call_binding.v1",
+        "binding_type": "ctp_managed_native_call_binding.v2",
         "owner_intent_id": owner.owner_intent_id,
         "account_key": session.account_key,
         "scope_key": session.scope_key,
@@ -297,6 +307,10 @@ def _binding(
         "request_payload_json": payload_text,
         "request_payload_sha256": hashlib.sha256(
             payload_text.encode("utf-8")
+        ).hexdigest(),
+        "native_request_payload_json": native_payload_text,
+        "native_request_payload_sha256": hashlib.sha256(
+            native_payload_text.encode("utf-8")
         ).hexdigest(),
         "reservation_managed_intent_id": "intent.order-1",
         "managed_action_id": "managed-action-1",
@@ -328,14 +342,14 @@ def _binding(
         "expires_at_ns": time.time_ns() + 30_000_000_000,
     }
 
-    class CtpManagedNativeCallBindingV1:
+    class CtpManagedNativeCallBindingV2:
         def __init__(self):
             self.envelope = dict(envelope)
 
         def to_payload(self):
             return dict(self.envelope)
 
-    return CtpManagedNativeCallBindingV1()
+    return CtpManagedNativeCallBindingV2()
 
 
 def _field(field_type, payload, **extras):
@@ -409,20 +423,389 @@ def test_cancel_action_ref_is_independent_and_filled_from_store_binding(monkeypa
             client._callback_ingress.active_session,
             payload,
             operation="CANCEL",
-            action_ref="cancel-action-8",
+            action_ref=91,
             request_id=53,
         )
         lease = client.acquire_managed_native_call_lease(owner, binding)
-        field = _field(CThostFtdcInputOrderActionField, payload)
+        field = _field(
+            CThostFtdcInputOrderActionField,
+            payload,
+            RequestID=53,
+            OrderActionRef=91,
+        )
 
         assert client.submit_order_action_with_lease(lease, field, 53) == 0
         calls = [call for call in api.calls if call[0] == "ReqOrderAction"]
         assert len(calls) == 1
         _name, detached, request_id = calls[0]
         assert request_id == detached.RequestID == 53
-        assert detached.OrderActionRef == "cancel-action-8"
-        assert detached.OrderActionRef != str(detached.RequestID)
+        assert type(detached.OrderActionRef) is int
+        assert detached.OrderActionRef == 91
+        assert detached.OrderActionRef != detached.RequestID
         assert detached is not field
+    finally:
+        client.stop()
+
+
+@pytest.mark.parametrize("action_ref", [True, "91", 0, 2_147_483_648])
+def test_managed_cancel_rejects_non_int32_store_action_ref_before_native_call(
+    monkeypatch, action_ref
+):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=action_ref,
+            request_id=53,
+        )
+        with pytest.raises(CtpExecutionGateError, match="binding_action_ref_invalid"):
+            client.acquire_managed_native_call_lease(owner, binding)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+@pytest.mark.parametrize("source_action_ref", [0, 444, "91", True])
+def test_managed_cancel_requires_caller_field_to_match_store_action_ref(
+    monkeypatch, source_action_ref
+):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(
+            CThostFtdcInputOrderActionField,
+            payload,
+            RequestID=53,
+            OrderActionRef=source_action_ref,
+        )
+
+        with pytest.raises(CtpExecutionGateError):
+            client.submit_order_action_with_lease(lease, field, 53)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_requires_caller_field_request_id_match(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(
+            CThostFtdcInputOrderActionField,
+            payload,
+            RequestID=54,
+            OrderActionRef=91,
+        )
+
+        with pytest.raises(CtpExecutionGateError):
+            client.submit_order_action_with_lease(lease, field, 53)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_rejects_caller_field_without_action_ref_getter(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = SimpleNamespace(**payload, RequestID=53)
+
+        with pytest.raises(CtpExecutionGateError):
+            client.submit_order_action_with_lease(lease, field, 53)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_requires_native_payload_exactly_adds_store_action_ref(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+        binding.envelope["native_request_payload_json"] = json.dumps(
+            {**payload, "OrderActionRef": 92},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        binding.envelope["native_request_payload_sha256"] = hashlib.sha256(
+            binding.envelope["native_request_payload_json"].encode("utf-8")
+        ).hexdigest()
+
+        with pytest.raises(CtpExecutionGateError, match="payload_action_ref_mismatch"):
+            client.acquire_managed_native_call_lease(owner, binding)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_rejects_caller_action_ref_in_logical_payload(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+            "OrderActionRef": 92,
+        }
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+
+        with pytest.raises(CtpExecutionGateError, match="logical_action_ref_forbidden"):
+            client.acquire_managed_native_call_lease(owner, binding)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_submit_requires_native_payload_bytes_equal_logical(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="SUBMIT",
+            request_id=41,
+        )
+        native_payload = dict(payload)
+        native_payload["OrderRef"] = "000000000018"
+        binding.envelope["native_request_payload_json"] = json.dumps(
+            native_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        binding.envelope["native_request_payload_sha256"] = hashlib.sha256(
+            binding.envelope["native_request_payload_json"].encode("utf-8")
+        ).hexdigest()
+
+        with pytest.raises(CtpExecutionGateError, match="submit_payload_mismatch"):
+            client.acquire_managed_native_call_lease(owner, binding)
+        assert not [call for call in api.calls if call[0] == "ReqOrderInsert"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_rejects_native_action_ref_setter_normalization(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+
+        class NormalizingActionField:
+            instances = 0
+
+            def __init__(self):
+                type(self).instances += 1
+                self.normalize_action_ref = type(self).instances > 1
+                self.values = {}
+
+            def __setattr__(self, name, value):
+                if name in {"values", "normalize_action_ref"}:
+                    object.__setattr__(self, name, value)
+                elif name == "OrderActionRef" and self.normalize_action_ref:
+                    self.values[name] = value + 1
+                else:
+                    self.values[name] = value
+
+            def __getattr__(self, name):
+                try:
+                    return self.values[name]
+                except KeyError as exc:
+                    raise AttributeError(name) from exc
+
+        binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(
+            NormalizingActionField,
+            payload,
+            RequestID=53,
+            OrderActionRef=91,
+        )
+
+        with pytest.raises(CtpExecutionGateError, match="field_snapshot_mismatch"):
+            client.submit_order_action_with_lease(lease, field, 53)
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
+    finally:
+        client.stop()
+
+
+def test_managed_cancel_rejects_legacy_v1_string_binding(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = {
+            "BrokerID": "9999",
+            "InvestorID": "investor-1",
+            "UserID": "investor-1",
+            "InstrumentID": "rb2610",
+            "OrderRef": "000000000017",
+            "ExchangeID": "SHFE",
+            "OrderSysID": "SYS-17",
+            "FrontID": 7,
+            "SessionID": 19,
+            "ActionFlag": "0",
+            "LimitPrice": 0,
+            "VolumeChange": 0,
+        }
+        v2 = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            payload,
+            operation="CANCEL",
+            action_ref=91,
+            request_id=53,
+        )
+
+        class CtpManagedNativeCallBindingV1:
+            def to_payload(self):
+                envelope = dict(v2.envelope)
+                envelope["binding_type"] = "ctp_managed_native_call_binding.v1"
+                return envelope
+
+        with pytest.raises(CtpExecutionGateError, match="binding_untyped"):
+            client.acquire_managed_native_call_lease(owner, CtpManagedNativeCallBindingV1())
+        assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
     finally:
         client.stop()
 
@@ -749,13 +1132,19 @@ def test_managed_native_req_accepts_only_exact_integer_zero(
                 client._callback_ingress.active_session,
                 payload,
                 operation="CANCEL",
-                action_ref="managed-action-ref-1",
+                action_ref=73,
+                request_id=41,
             )
             field_type = CThostFtdcInputOrderActionField
             submit = client.submit_order_action_with_lease
             method_name = "ReqOrderAction"
         lease = client.acquire_managed_native_call_lease(owner, binding)
-        field = _field(field_type, payload)
+        field_extras = (
+            {"RequestID": 41, "OrderActionRef": 73}
+            if operation == "CANCEL"
+            else {}
+        )
+        field = _field(field_type, payload, **field_extras)
 
         with pytest.raises(CtpExecutionGateError, match="native_call_result_ambiguous"):
             submit(lease, field, 41)

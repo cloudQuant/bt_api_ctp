@@ -2687,8 +2687,8 @@ class _TraderCallbackIngressState:
 
 
 @dataclass(frozen=True)
-class CtpManagedNativeCallLeaseV1:
-    """Opaque one-shot pin for a Store-claimed managed native request."""
+class CtpManagedNativeCallLeaseV2:
+    """Opaque one-shot pin for a V2 Store-claimed managed native request."""
 
     _seal: object
     _owner_handle: Any
@@ -2700,7 +2700,8 @@ class CtpManagedNativeCallLeaseV1:
     _method_name: str
     _nonce: str
     _binding_payload_json: str
-    _request_payload_json: str
+    _logical_request_payload_json: str
+    _native_request_payload_json: str
 
 
 _CTP_MANAGED_NATIVE_CALL_LEASE_SEAL = object()
@@ -2715,6 +2716,8 @@ _CTP_MANAGED_BINDING_PAYLOAD_KEYS = frozenset(
         "trading_day",
         "request_payload_json",
         "request_payload_sha256",
+        "native_request_payload_json",
+        "native_request_payload_sha256",
         "reservation_managed_intent_id",
         "managed_action_id",
         "runtime_order_id",
@@ -2799,6 +2802,7 @@ _CTP_MANAGED_INTEGER_FIELDS = frozenset(
         "FrontID",
         "SessionID",
         "RequestID",
+        "OrderActionRef",
         "VolumeTotalOriginal",
         "MinVolume",
         "IsAutoSuspend",
@@ -2827,10 +2831,12 @@ _CTP_INGRESS_SAFE_REQUEST_METHODS = frozenset(
 )
 
 
-def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate a Store-issued native binding and its canonical field payload."""
+def _managed_native_binding_payload(
+    binding: Any, owner_intent_id: str
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Validate the logical and Store-generated native payload of a V2 binding."""
 
-    if type(binding).__name__ != "CtpManagedNativeCallBindingV1":
+    if type(binding).__name__ != "CtpManagedNativeCallBindingV2":
         raise CtpExecutionGateError("ctp_managed_native_binding_untyped")
     to_payload = getattr(binding, "to_payload", None)
     if not callable(to_payload):
@@ -2842,7 +2848,7 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
     if type(envelope) is not dict or set(envelope) != _CTP_MANAGED_BINDING_PAYLOAD_KEYS:
         raise CtpExecutionGateError("ctp_managed_native_binding_schema_invalid")
     if (
-        envelope.get("binding_type") != "ctp_managed_native_call_binding.v1"
+        envelope.get("binding_type") != "ctp_managed_native_call_binding.v2"
         or envelope.get("owner_intent_id") != owner_intent_id
         or envelope.get("operation") not in {"SUBMIT", "CANCEL"}
     ):
@@ -2859,6 +2865,8 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
         "trading_day",
         "request_payload_json",
         "request_payload_sha256",
+        "native_request_payload_json",
+        "native_request_payload_sha256",
         "reservation_managed_intent_id",
         "managed_action_id",
         "runtime_order_id",
@@ -2879,25 +2887,38 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
     ):
         if type(envelope.get(name)) is not int or envelope[name] <= 0:
             raise CtpExecutionGateError("ctp_managed_native_binding_integer_invalid")
-    digest = envelope["request_payload_sha256"]
-    if re.fullmatch(r"[0-9a-f]{64}", digest, re.ASCII) is None:
-        raise CtpExecutionGateError("ctp_managed_native_binding_digest_invalid")
-    payload_text = envelope["request_payload_json"]
-    try:
-        payload = json.loads(payload_text)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid") from exc
-    if type(payload) is not dict or any(type(key) is not str for key in payload):
-        raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid")
-    canonical_payload = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
+    if envelope["native_request_id"] > 2_147_483_647:
+        raise CtpExecutionGateError("ctp_managed_native_binding_integer_invalid")
+
+    def read_canonical_payload(text_key: str, digest_key: str) -> dict[str, Any]:
+        digest = envelope[digest_key]
+        if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest, re.ASCII) is None:
+            raise CtpExecutionGateError("ctp_managed_native_binding_digest_invalid")
+        payload_text = envelope[text_key]
+        try:
+            payload = json.loads(payload_text)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid") from exc
+        if type(payload) is not dict or any(type(key) is not str for key in payload):
+            raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid")
+        canonical_payload = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        if (
+            canonical_payload != payload_text
+            or hashlib.sha256(payload_text.encode("utf-8")).hexdigest() != digest
+        ):
+            raise CtpExecutionGateError("ctp_managed_native_request_payload_digest_mismatch")
+        return payload
+
+    payload = read_canonical_payload("request_payload_json", "request_payload_sha256")
+    native_payload = read_canonical_payload(
+        "native_request_payload_json", "native_request_payload_sha256"
     )
-    if canonical_payload != payload_text or hashlib.sha256(payload_text.encode("utf-8")).hexdigest() != digest:
-        raise CtpExecutionGateError("ctp_managed_native_request_payload_digest_mismatch")
 
     if envelope["operation"] == "SUBMIT":
         allowed = _CTP_MANAGED_SUBMIT_REQUIRED_FIELDS | _CTP_MANAGED_SUBMIT_OPTIONAL_FIELDS
@@ -2907,7 +2928,23 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
         required = _CTP_MANAGED_CANCEL_REQUIRED_FIELDS
     if not required.issubset(payload) or set(payload) - allowed:
         raise CtpExecutionGateError("ctp_managed_native_request_payload_fields_invalid")
+    if "OrderActionRef" in payload:
+        raise CtpExecutionGateError("ctp_managed_native_logical_action_ref_forbidden")
     if envelope["operation"] == "CANCEL":
+        action_ref = envelope.get("native_action_ref")
+        if type(action_ref) is not int or not (1 <= action_ref <= 2_147_483_647):
+            raise CtpExecutionGateError("ctp_managed_native_binding_action_ref_invalid")
+        expected_native_payload = dict(payload)
+        expected_native_payload["OrderActionRef"] = action_ref
+        expected_native_text = json.dumps(
+            expected_native_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        if envelope["native_request_payload_json"] != expected_native_text:
+            raise CtpExecutionGateError("ctp_managed_native_payload_action_ref_mismatch")
         target_fields = {
             "OrderRef": envelope.get("cancel_target_order_ref"),
             "ExchangeID": envelope.get("cancel_target_exchange_id"),
@@ -2917,11 +2954,7 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
             "ActionFlag": "0",
         }
         if (
-            type(envelope.get("native_action_ref")) is not str
-            or not envelope["native_action_ref"]
-            or envelope["native_action_ref"] != envelope["native_action_ref"].strip()
-            or not envelope["native_action_ref"].isascii()
-            or type(envelope.get("cancel_target_front_id")) is not int
+            type(envelope.get("cancel_target_front_id")) is not int
             or envelope["cancel_target_front_id"] <= 0
             or type(envelope.get("cancel_target_session_id")) is not int
             or envelope["cancel_target_session_id"] <= 0
@@ -2949,25 +2982,21 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
                     or payload["RequestID"] != envelope["native_request_id"]
                 )
             )
-            or (
-                "OrderActionRef" in payload
-                and (
-                    type(payload["OrderActionRef"]) is not str
-                    or payload["OrderActionRef"] != envelope["native_action_ref"]
-                )
-            )
             or payload.get("LimitPrice") not in (0, 0.0)
             or payload.get("VolumeChange") != 0
             or type(payload.get("VolumeChange")) is not int
         ):
             raise CtpExecutionGateError("ctp_managed_native_cancel_binding_mismatch")
     else:
+        if envelope.get("native_action_ref") is not None:
+            raise CtpExecutionGateError("ctp_managed_native_submit_binding_mismatch")
+        if envelope["native_request_payload_json"] != envelope["request_payload_json"]:
+            raise CtpExecutionGateError("ctp_managed_native_submit_payload_mismatch")
         if (
             envelope.get("order_ref") != payload.get("OrderRef")
             or any(
                 envelope.get(name) is not None
                 for name in (
-                    "native_action_ref",
                     "cancel_target_order_ref",
                     "cancel_target_exchange_id",
                     "cancel_target_order_sys_id",
@@ -2984,7 +3013,7 @@ def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple
             )
         ):
             raise CtpExecutionGateError("ctp_managed_native_submit_binding_mismatch")
-    return envelope, payload
+    return envelope, payload, native_payload
 
 
 def _managed_native_field_scalar(name: str, value: Any) -> Any:
@@ -3045,16 +3074,13 @@ def _copy_managed_native_field(
             if name in values and values[name] != value:
                 raise CtpExecutionGateError("ctp_managed_native_field_extra_mismatch")
             values[name] = value
-    normalized_payload = {
-        name: _managed_payload_scalar(name, value) for name, value in payload.items()
-    }
     normalized = {name: _managed_payload_scalar(name, value) for name, value in values.items()}
     try:
         source_snapshot = {
             name: _managed_native_field_scalar(name, getattr(field, name))
-            for name in payload
+            for name in normalized
         }
-        if source_snapshot != normalized_payload:
+        if source_snapshot != normalized:
             raise CtpExecutionGateError("ctp_managed_native_field_binding_mismatch")
         detached = type(field)()
         if detached is field:
@@ -3733,7 +3759,7 @@ class TraderClient:
         self._native_callback_legacy_waiters = 0
         self._native_callback_released_consumer_tokens = weakref.WeakSet()
         self._callback_ingress: _TraderCallbackIngressState | None = None
-        self._managed_native_call_leases: dict[str, CtpManagedNativeCallLeaseV1] = {}
+        self._managed_native_call_leases: dict[str, CtpManagedNativeCallLeaseV2] = {}
         self._managed_callback_thread_state = threading.local()
         self._callback_ingress_deferred_cleanup: tuple[Any, Any, bool, bool] | None = None
         self._callback_ingress_cleanup_scheduled = False
@@ -4085,7 +4111,7 @@ class TraderClient:
 
         This internal lease is limited to authentication, login, and read-only
         queries. Managed order/action sends use their Store-issued one-shot
-        `CtpManagedNativeCallLeaseV1` instead.
+        `CtpManagedNativeCallLeaseV2` instead.
         """
 
         if not method_name.startswith("Req"):
@@ -4194,7 +4220,7 @@ class TraderClient:
         self,
         owner_handle: Any,
         binding: Any,
-    ) -> CtpManagedNativeCallLeaseV1:
+    ) -> CtpManagedNativeCallLeaseV2:
         """Pin the exact active API/SPI for one Store-claimed command call."""
 
         with self._query_state_lock:
@@ -4233,7 +4259,7 @@ class TraderClient:
                 self._poison_callback_ingress_locked("native_call_lease_failure")
                 raise CtpExecutionGateError("ctp_managed_native_call_binding_rejected")
             try:
-                envelope, payload = _managed_native_binding_payload(
+                envelope, _payload, _native_payload = _managed_native_binding_payload(
                     binding,
                     state.owner_intent_id,
                 )
@@ -4305,7 +4331,7 @@ class TraderClient:
                 raise CtpExecutionGateError("ctp_managed_native_call_binding_reused")
             operation = envelope["operation"]
             method_name = "ReqOrderInsert" if operation == "SUBMIT" else "ReqOrderAction"
-            lease = CtpManagedNativeCallLeaseV1(
+            lease = CtpManagedNativeCallLeaseV2(
                 _seal=_CTP_MANAGED_NATIVE_CALL_LEASE_SEAL,
                 _owner_handle=owner_handle,
                 _binding=binding,
@@ -4322,7 +4348,8 @@ class TraderClient:
                     ensure_ascii=True,
                     allow_nan=False,
                 ),
-                _request_payload_json=envelope["request_payload_json"],
+                _logical_request_payload_json=envelope["request_payload_json"],
+                _native_request_payload_json=envelope["native_request_payload_json"],
             )
             used_commands.add(command_id)
             state.command_lease = lease
@@ -4330,7 +4357,7 @@ class TraderClient:
             self._managed_native_call_leases[lease._nonce] = lease
             return lease
 
-    def release_managed_native_call_lease(self, lease: CtpManagedNativeCallLeaseV1) -> None:
+    def release_managed_native_call_lease(self, lease: CtpManagedNativeCallLeaseV2) -> None:
         """Poison and retire an acquired lease that was not sent."""
 
         with self._query_state_lock:
@@ -4352,7 +4379,7 @@ class TraderClient:
 
     def _submit_with_managed_native_call_lease(
         self,
-        lease: CtpManagedNativeCallLeaseV1,
+        lease: CtpManagedNativeCallLeaseV2,
         field: Any,
         request_id: int,
         *,
@@ -4403,7 +4430,7 @@ class TraderClient:
             self._native_request_inflight_refs += 1
             try:
                 binding = lease._binding
-                envelope, payload = _managed_native_binding_payload(
+                envelope, payload, native_payload = _managed_native_binding_payload(
                     binding,
                     state.owner_intent_id,
                 )
@@ -4420,17 +4447,16 @@ class TraderClient:
                         allow_nan=False,
                     )
                     != lease._binding_payload_json
-                    or envelope["request_payload_json"] != lease._request_payload_json
+                    or envelope["request_payload_json"] != lease._logical_request_payload_json
+                    or envelope["native_request_payload_json"]
+                    != lease._native_request_payload_json
                     or type(request_id) is not int
                     or request_id != envelope["native_request_id"]
                 ):
                     raise CtpExecutionGateError("ctp_managed_native_call_binding_changed")
                 detached_extras: dict[str, Any] = {}
                 if envelope["operation"] == "CANCEL":
-                    detached_extras = {
-                        "RequestID": envelope["native_request_id"],
-                        "OrderActionRef": envelope["native_action_ref"],
-                    }
+                    detached_extras = {"RequestID": envelope["native_request_id"]}
                 for field_name, expected_identity in (
                     ("BrokerID", self._bound_broker_id),
                     ("InvestorID", self._bound_user_id),
@@ -4442,7 +4468,7 @@ class TraderClient:
                         )
                 detached = _copy_managed_native_field(
                     field,
-                    payload,
+                    native_payload,
                     extra_values=detached_extras,
                 )
                 if envelope["operation"] == "CANCEL":
@@ -4508,7 +4534,7 @@ class TraderClient:
 
     def submit_order_insert_with_lease(
         self,
-        lease: CtpManagedNativeCallLeaseV1,
+        lease: CtpManagedNativeCallLeaseV2,
         field: Any,
         request_id: int,
     ) -> Any:
@@ -4523,7 +4549,7 @@ class TraderClient:
 
     def submit_order_action_with_lease(
         self,
-        lease: CtpManagedNativeCallLeaseV1,
+        lease: CtpManagedNativeCallLeaseV2,
         field: Any,
         request_id: int,
     ) -> Any:
