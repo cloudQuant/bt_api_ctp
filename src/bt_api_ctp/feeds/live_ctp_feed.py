@@ -1044,6 +1044,27 @@ class CtpRequestData(Feed):
     def cancel_order(self, symbol, order_id=None, extra_data=None, **kwargs):
         execution_capability = kwargs.pop("_execution_capability", None)
         exchange_id = kwargs.get("exchange_id", "")
+        runtime_order_id = kwargs.get("runtime_order_id")
+        managed_intent_id = kwargs.get("managed_intent_id")
+        runtime_action_id = kwargs.get("runtime_action_id")
+        managed_cancel_intent_id = kwargs.get("managed_cancel_intent_id")
+        managed_cancel = ctp_client._validate_managed_cancel_identity(
+            runtime_order_id=runtime_order_id,
+            managed_intent_id=managed_intent_id,
+            runtime_action_id=runtime_action_id,
+            managed_cancel_intent_id=managed_cancel_intent_id,
+        )
+        order_ref = kwargs.get("order_ref", "")
+        front_id = kwargs.get("front_id", 0)
+        session_id = kwargs.get("session_id", 0)
+        if managed_cancel:
+            ctp_client._validate_managed_cancel_target_values(
+                order_ref=order_ref,
+                order_sys_id=order_id,
+                exchange_id=exchange_id,
+                front_id=front_id,
+                session_id=session_id,
+            )
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         self._ensure_trading_ready()
         trader = self._trader
@@ -1057,23 +1078,33 @@ class CtpRequestData(Feed):
         field.ActionFlag = "0"
         if exchange_id:
             field.ExchangeID = exchange_id
-        order_ref = kwargs.get("order_ref", "")
-        front_id = kwargs.get("front_id", 0)
-        session_id = kwargs.get("session_id", 0)
-        if order_id:
+        if managed_cancel:
+            field.UserID = self.user_id
+            field.ExchangeID = exchange_id
+            field.OrderRef = order_ref
+            field.OrderSysID = order_id
+            field.FrontID = front_id
+            field.SessionID = session_id
+        elif order_id:
             field.OrderSysID = str(order_id)
-        if order_ref:
+        if not managed_cancel and order_ref:
             field.OrderRef = str(order_ref)
             field.FrontID = int(front_id) if front_id else trader._front_id
             field.SessionID = int(session_id) if session_id else trader._session_id
         request_id = trader._next_request_id()
+        field.RequestID = request_id
+        field.OrderActionRef = request_id
         submit = getattr(trader, "submit_order_action", None)
         if callable(submit):
-            ret = submit(
-                field,
-                request_id,
-                execution_capability=execution_capability,
-            )
+            submit_kwargs = {"execution_capability": execution_capability}
+            if managed_cancel:
+                submit_kwargs.update(
+                    runtime_order_id=runtime_order_id,
+                    managed_intent_id=managed_intent_id,
+                    runtime_action_id=runtime_action_id,
+                    managed_cancel_intent_id=managed_cancel_intent_id,
+                )
+            ret = submit(field, request_id, **submit_kwargs)
         else:
             # See the insert path above.  A cancellation is also a real CTP
             # write and must cross the typed, locked native gate.

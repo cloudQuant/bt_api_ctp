@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -424,11 +425,31 @@ class TestCtpOrderThreadingRegression:
                 return 0
 
         client = TraderClient("tcp://test", "9999", "demo", "secret")
-        client._connected = True
-        client._authentication_state = "authenticated"
-        client._login_state = "logged_in"
-        client._query_interval = 0
         client._api = FakeApi(client)
+        with client._query_state_lock:
+            client._connected = True
+            client._authentication_state = "authenticated"
+            client._login_state = "logging_in"
+            client._connection_generation = 1
+            request_id = client._next_request_id()
+            client._login_request_id = request_id
+            client._login_connection_generation = 1
+            spi = ctp_client._TraderSpi(client, client._api)
+            client._spi = spi
+        client._query_interval = 0
+        spi.OnRspUserLogin(
+            SimpleNamespace(
+                BrokerID=client._bound_broker_id,
+                UserID=client._bound_user_id,
+                TradingDay="20260925",
+                FrontID=7,
+                SessionID=19,
+                MaxOrderRef="0",
+            ),
+            SimpleNamespace(ErrorID=0, ErrorMsg=""),
+            request_id,
+            True,
+        )
 
         rows = client.query_orders(instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01)
 
@@ -437,7 +458,8 @@ class TestCtpOrderThreadingRegression:
         assert client._api.field.InvestorID == "demo"
         assert client._api.field.InstrumentID == "IF2506"
         assert client._api.field.ExchangeID == "CFFEX"
-        assert client._api.req_id == 1
+        # The terminal fake login above consumed request ID 1.
+        assert client._api.req_id == 2
 
     def test_trader_client_snapshots_order_insert_errors(self):
         from bt_api_ctp.ctp.client import TraderClient, _TraderSpi

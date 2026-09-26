@@ -53,7 +53,14 @@ def _connect_and_login(client: TraderClient, api: _FakeTraderApi) -> _TraderSpi:
         True,
     )
     spi.OnRspUserLogin(
-        SimpleNamespace(FrontID=7, SessionID=19, TradingDay="20260925", MaxOrderRef="90"),
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=7,
+            SessionID=19,
+            TradingDay="20260925",
+            MaxOrderRef="90",
+        ),
         SimpleNamespace(ErrorID=0, ErrorMsg=""),
         api.login_request_ids[-1],
         True,
@@ -254,7 +261,14 @@ def test_reconnect_and_native_api_replacement_separate_callback_epochs() -> None
         True,
     )
     first_spi.OnRspUserLogin(
-        SimpleNamespace(FrontID=7, SessionID=20, TradingDay="20260925", MaxOrderRef="90"),
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=7,
+            SessionID=20,
+            TradingDay="20260925",
+            MaxOrderRef="90",
+        ),
         SimpleNamespace(ErrorID=0, ErrorMsg=""),
         first_api.login_request_ids[-1],
         True,

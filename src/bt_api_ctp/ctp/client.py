@@ -44,7 +44,7 @@ import uuid
 import weakref
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from functools import wraps
@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from bt_api_ctp.instrument import normalize_ctp_instrument
+from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
     QueryResult,
     _attach_query_source,
@@ -154,6 +155,9 @@ CTP_REQUEST_COUNT_KEYS = (
     "query_settlement_confirmation",
 )
 
+_QUERY_FILTER_UNSET = object()
+_TRADER_LOGIN_IDENTITY_SEAL = object()
+
 
 # The CTP vendor API owns a native callback thread after ``Init()``.  On the
 # macOS framework, calling ``Release()`` while a separate Python thread is
@@ -175,11 +179,16 @@ _RELEASING_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
 # IDs remain claimed while the API is alive so a repeated observer request can
 # never issue Join twice. A successful Release removes the claim.
 _CLAIMED_CTP_NATIVE_JOIN_API_IDS: set[int] = set()
+_RETURNED_CTP_NATIVE_JOIN_API_IDS: set[int] = set()
 # A failed native Release has an unknown partial outcome. Keep the session
 # retained and permanently fence further Release calls for that API: a second
 # attempt could double-free resources that the first call already freed.
 _POISONED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
+_RELEASED_CTP_NATIVE_SESSION_APIS: weakref.WeakSet[Any] = weakref.WeakSet()
+_RELEASED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
 _MAX_NATIVE_JOIN_WAIT_SECONDS = 60.0
+_MAX_CTP_STOP_WAIT_SECONDS = 30.0
+_NO_EXPECTED_NATIVE_API = object()
 
 
 @dataclass(frozen=True)
@@ -202,6 +211,27 @@ class CtpNativeJoinWaitResult:
 
     join_call_finished: bool
     observation: CtpNativeJoinObservation
+
+
+@dataclass(frozen=True)
+class CtpNativeStopReceipt:
+    """Bounded observation of one exact native API stop attempt."""
+
+    connection_generation: int
+    join_required: bool
+    join_completed: bool
+    native_released: bool
+    thread_alive: bool | None
+    timed_out: bool
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.native_released is True
+            and (self.join_required is False or self.join_completed is True)
+            and self.thread_alive is False
+            and self.timed_out is False
+        )
 
 
 class _CtpNativeJoinTracker:
@@ -243,6 +273,141 @@ class _CtpNativeJoinTracker:
         return CtpNativeJoinWaitResult(join_call_finished, observation)
 
 
+def _make_ctp_native_stop_receipt(
+    client: Any,
+    timeout: float,
+    *,
+    lock: Any,
+    api_attribute: str,
+) -> CtpNativeStopReceipt:
+    """Stop one client and observe its exact Join/Release lifecycle boundedly."""
+
+    if type(timeout) not in (int, float):
+        raise ValueError("invalid CTP native stop timeout")
+    try:
+        timeout_seconds = float(timeout)
+    except (OverflowError, ValueError):
+        raise ValueError("invalid CTP native stop timeout") from None
+    if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+        raise ValueError("invalid CTP native stop timeout")
+    wait_seconds = min(timeout_seconds, _MAX_CTP_STOP_WAIT_SECONDS)
+
+    with lock:
+        api = getattr(client, api_attribute)
+        connection_generation = int(client._connection_generation)
+        thread = client._thread
+        tracker = client._native_join_tracker
+        if api is None:
+            api = client._last_stopped_native_api
+            connection_generation = (
+                client._last_stopped_connection_generation if api is not None else connection_generation
+            )
+            join_required = client._last_stop_join_required
+            thread = client._last_stop_join_thread
+            tracker = client._last_stop_join_tracker
+        else:
+            native_may_be_live = client._native_init_started or client._join_active
+            join_required = bool(
+                native_may_be_live
+                and (client._join_active or (thread is not None and thread.is_alive()))
+            ) or _ctp_native_join_claimed(api)
+
+    if api is None:
+        return CtpNativeStopReceipt(
+            connection_generation=connection_generation,
+            join_required=False,
+            join_completed=True,
+            native_released=True,
+            thread_alive=False,
+            timed_out=False,
+        )
+
+    with lock:
+        active_api = getattr(client, api_attribute)
+    if active_api is api:
+        # The expected API is checked by the same client lock that detaches it,
+        # so a concurrent restart cannot make this receipt stop a newer API.
+        client._stop_native_session(expected_api=api)
+
+    if not join_required:
+        return CtpNativeStopReceipt(
+            connection_generation=connection_generation,
+            join_required=False,
+            join_completed=True,
+            native_released=_ctp_native_api_release_confirmed(api),
+            thread_alive=False,
+            timed_out=False,
+        )
+
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        result = tracker.wait(0.0) if tracker is not None else None
+        observation = result.observation if result is not None else None
+        join_completed = observation is not None and observation.state == "returned"
+        join_failed = observation is not None and observation.state == "failed"
+        native_released = _ctp_native_api_release_confirmed(api)
+        release_poisoned = _ctp_native_api_release_poisoned(api)
+
+        if thread is None:
+            # This receipt reports the Python Join-observer thread, not the
+            # native Join state. No observer was installed, so that thread is
+            # definitively absent; tracker.join_completed remains the separate
+            # evidence that prevents an active synchronous Join from being
+            # reported complete.
+            thread_alive = False
+        elif thread is threading.current_thread():
+            thread_alive = True
+        else:
+            remaining = max(0.0, deadline - time.monotonic())
+            if thread.is_alive() and remaining > 0:
+                try:
+                    thread.join(remaining)
+                except (AttributeError, RuntimeError):
+                    pass
+            thread_alive = thread.is_alive()
+
+        native_released = _ctp_native_api_release_confirmed(api)
+        if native_released and join_completed and thread_alive is False:
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=True,
+                native_released=True,
+                thread_alive=False,
+                timed_out=False,
+            )
+        if release_poisoned and join_completed and (thread is None or thread_alive is False):
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=True,
+                native_released=False,
+                thread_alive=thread_alive,
+                timed_out=False,
+            )
+        if join_failed and thread_alive is False:
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=False,
+                native_released=False,
+                thread_alive=False,
+                timed_out=False,
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=join_completed,
+                native_released=native_released,
+                thread_alive=thread_alive,
+                timed_out=not join_failed,
+            )
+        time.sleep(min(0.01, remaining))
+
+
 def _retain_live_ctp_native_session(
     api: Any, spi: Any, join_thread: threading.Thread | None
 ) -> None:
@@ -256,6 +421,32 @@ def _retain_live_ctp_native_session(
         _RETIRED_CTP_NATIVE_SESSIONS.append((api, spi, join_thread))
 
 
+def _ctp_native_api_released_locked(api: Any) -> bool:
+    if id(api) in _RELEASED_CTP_NATIVE_SESSION_API_IDS:
+        return True
+    try:
+        return api in _RELEASED_CTP_NATIVE_SESSION_APIS
+    except TypeError:
+        return False
+
+
+def _ctp_native_api_release_confirmed(api: Any) -> bool:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return _ctp_native_api_released_locked(api)
+
+
+def _ctp_native_api_release_poisoned(api: Any) -> bool:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return id(api) in _POISONED_CTP_NATIVE_SESSION_API_IDS
+
+
+def _register_ctp_native_api(api: Any) -> None:
+    """Clear a recycled ID fallback when a factory returns a new API object."""
+
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        _RELEASED_CTP_NATIVE_SESSION_API_IDS.discard(id(api))
+
+
 def _set_retired_ctp_native_session_join_thread(api: Any, join_thread: threading.Thread) -> bool:
     """Claim one Join observer for a retained native session."""
 
@@ -265,11 +456,10 @@ def _set_retired_ctp_native_session_join_thread(api: Any, join_thread: threading
             api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
             or api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
             or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+            or _ctp_native_api_released_locked(api)
         ):
             return False
-        for index, (existing_api, spi, existing_thread) in enumerate(
-            _RETIRED_CTP_NATIVE_SESSIONS
-        ):
+        for index, (existing_api, spi, existing_thread) in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
             if existing_api is api:
                 if existing_thread is not None:
                     return False
@@ -288,67 +478,139 @@ def _claim_ctp_native_join(api: Any) -> bool:
             api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
             or api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
             or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+            or _ctp_native_api_released_locked(api)
         ):
             return False
         _CLAIMED_CTP_NATIVE_JOIN_API_IDS.add(api_id)
         return True
 
 
-def _forget_ctp_native_join_claim(api: Any) -> None:
+def _mark_ctp_native_join_returned(api: Any) -> None:
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
-        _CLAIMED_CTP_NATIVE_JOIN_API_IDS.discard(id(api))
+        api_id = id(api)
+        if api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS:
+            _RETURNED_CTP_NATIVE_JOIN_API_IDS.add(api_id)
 
 
-def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
-    """Release one retained session only after its native ``Join`` returned.
+def _ctp_native_join_claimed(api: Any) -> bool:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return id(api) in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
 
-    The entry stays retained unless ``Release`` returns successfully. The
-    in-progress set prevents concurrent Join observers from issuing a second
-    ``Release`` while keeping the registry lock free during the native call.
-    A failed call has an unknown partial outcome, so it poisons the API ID and
-    cannot be retried safely.
+
+def _ctp_native_join_returned(api: Any) -> bool:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return id(api) in _RETURNED_CTP_NATIVE_JOIN_API_IDS
+
+
+def _release_ctp_native_api_once(
+    api: Any,
+    *,
+    spi: Any = None,
+    join_thread: threading.Thread | None = None,
+    after_join: bool = False,
+) -> bool:
+    """Detach and release one CTP API through the shared lifecycle fence.
+
+    Immediate cleanup is valid only when no Join is active. Deferred cleanup
+    is valid only for a retained API whose sole Join claim has completed. The
+    same reservation protects the immediate detach call and Release call from
+    duplicate concurrent cleanup. Any failed Release poisons and retains the
+    API because its native state may have been partially freed.
     """
 
     retained: tuple[Any, Any, threading.Thread | None] | None = None
+    api_id = id(api)
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
-        api_id = id(api)
         if (
             api_id in _RELEASING_CTP_NATIVE_SESSION_API_IDS
             or api_id in _POISONED_CTP_NATIVE_SESSION_API_IDS
+            or _ctp_native_api_released_locked(api)
         ):
             return False
         for entry in _RETIRED_CTP_NATIVE_SESSIONS:
             if entry[0] is api:
                 retained = entry
-                _RELEASING_CTP_NATIVE_SESSION_API_IDS.add(api_id)
                 break
-    if retained is None:
-        return False
+        if after_join:
+            if (
+                api_id not in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
+                or api_id not in _RETURNED_CTP_NATIVE_JOIN_API_IDS
+                or retained is None
+            ):
+                return False
+        elif api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS or retained is not None:
+            return False
+        _RELEASING_CTP_NATIVE_SESSION_API_IDS.add(api_id)
 
-    # Join has returned, so the vendor callback thread is no longer live and
-    # Release is safe on the audited macOS framework.  Do not call
-    # RegisterSpi(None) again: stop() already made the documented detach
-    # attempt before the session entered this registry.
+    if not after_join:
+        with suppress(Exception):
+            api.RegisterSpi(None)
+
+    # A failed Release has an unknown partial outcome, so keep both Python
+    # owners alive and fence every later attempt.
     release_succeeded = False
     try:
         api.Release()
         release_succeeded = True
     except Exception as exc:
         _logger.error(
-            "CTP native API Release failed after Join (error_type=%s)",
+            "CTP native API Release failed (error_type=%s)",
             type(exc).__name__,
         )
     finally:
         with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
             if not release_succeeded:
                 _POISONED_CTP_NATIVE_SESSION_API_IDS.add(api_id)
+                if retained is None and not any(
+                    entry[0] is api for entry in _RETIRED_CTP_NATIVE_SESSIONS
+                ):
+                    _RETIRED_CTP_NATIVE_SESSIONS.append((api, spi, join_thread))
             _RELEASING_CTP_NATIVE_SESSION_API_IDS.discard(api_id)
             if release_succeeded:
                 _CLAIMED_CTP_NATIVE_JOIN_API_IDS.discard(api_id)
+                _RETURNED_CTP_NATIVE_JOIN_API_IDS.discard(api_id)
+                try:
+                    _RELEASED_CTP_NATIVE_SESSION_APIS.add(api)
+                except TypeError:
+                    _RELEASED_CTP_NATIVE_SESSION_API_IDS.add(api_id)
                 _RETIRED_CTP_NATIVE_SESSIONS[:] = [
                     entry for entry in _RETIRED_CTP_NATIVE_SESSIONS if entry[0] is not api
                 ]
     return release_succeeded
+
+
+def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
+    """Release a retained native API only after its Join returned."""
+
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        retained = next((entry for entry in _RETIRED_CTP_NATIVE_SESSIONS if entry[0] is api), None)
+    if retained is None:
+        return False
+    return _release_ctp_native_api_once(
+        api,
+        spi=retained[1],
+        join_thread=retained[2],
+        after_join=True,
+    )
+
+
+def _release_ctp_native_api_immediately(
+    api: Any,
+    spi: Any,
+    *,
+    state_lock: Any,
+    pending_api_ids: set[int],
+) -> bool:
+    """Detach and release a non-joined API, fencing restart on uncertainty."""
+
+    api_id = id(api)
+    with state_lock:
+        pending_api_ids.add(api_id)
+    released = _release_ctp_native_api_once(api, spi=spi)
+    if released or _ctp_native_api_release_confirmed(api):
+        with state_lock:
+            pending_api_ids.discard(api_id)
+    return released
 
 
 _CTP_EXECUTION_GATE_PROOF_FIELDS = (
@@ -383,6 +645,12 @@ _CTP_EXCHANGE_ALIASES = {"ZCE": "CZCE"}
 _CTP_INSTRUMENT_RE = re.compile(r"^[A-Z]{1,3}[0-9]{3,4}$")
 _CTP_BUNDLE_INSTRUMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$")
 _CTP_GATE_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+_CTP_MANAGED_RUNTIME_ORDER_ID_RE = re.compile(r"^bt-managed-v1:[0-9a-f]{64}$")
+_CTP_MANAGED_INTENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_CTP_MANAGED_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_CTP_MANAGED_ORDER_REF_RE = re.compile(r"^[0-9]{12}$")
+_CTP_MANAGED_ORDER_SYS_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+_CTP_MANAGED_NATIVE_ACTION_REF_RE = re.compile(r"^[0-9]{1,12}$")
 # The public API view is intentionally much narrower than the SWIG object.
 # Raw lifecycle calls can change the effective native connection while leaving
 # the Python-side immutable front binding unchanged.  Keep the tiny allowlist
@@ -396,6 +664,143 @@ class CtpExecutionGateError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _validate_managed_cancel_identity(
+    *,
+    runtime_order_id: Any,
+    managed_intent_id: Any,
+    runtime_action_id: Any,
+    managed_cancel_intent_id: Any,
+) -> bool:
+    """Recognize and validate the explicit managed-cancel opt-in tuple.
+
+    Calls that omit all four values keep the legacy cancellation contract.
+    Supplying any value opts into the stricter managed contract, so partial
+    identities never fall back to the legacy target alternatives.
+    """
+
+    values = (
+        runtime_order_id,
+        managed_intent_id,
+        runtime_action_id,
+        managed_cancel_intent_id,
+    )
+    if all(value is None for value in values):
+        return False
+    if any(value is None for value in values):
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_identity_incomplete")
+    if (
+        type(runtime_order_id) is not str
+        or _CTP_MANAGED_RUNTIME_ORDER_ID_RE.fullmatch(runtime_order_id) is None
+        or type(managed_intent_id) is not str
+        or _CTP_MANAGED_INTENT_ID_RE.fullmatch(managed_intent_id) is None
+        or type(runtime_action_id) is not str
+        or _CTP_MANAGED_ACTION_ID_RE.fullmatch(runtime_action_id) is None
+        or type(managed_cancel_intent_id) is not str
+        or _CTP_MANAGED_ACTION_ID_RE.fullmatch(managed_cancel_intent_id) is None
+    ):
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_identity_invalid")
+    if runtime_action_id != managed_cancel_intent_id:
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_action_mismatch")
+    if managed_cancel_intent_id == managed_intent_id:
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_intent_reused")
+    return True
+
+
+def _validate_managed_cancel_target_values(
+    *,
+    order_ref: Any,
+    order_sys_id: Any,
+    exchange_id: Any,
+    front_id: Any,
+    session_id: Any,
+) -> None:
+    """Validate the I9 cancel target tuple before allocating a request ID."""
+
+    if (
+        type(order_ref) is not str
+        or _CTP_MANAGED_ORDER_REF_RE.fullmatch(order_ref) is None
+        or type(order_sys_id) is not str
+        or _CTP_MANAGED_ORDER_SYS_ID_RE.fullmatch(order_sys_id) is None
+        or type(exchange_id) is not str
+        or not exchange_id
+        or exchange_id != exchange_id.strip()
+        or not exchange_id.isascii()
+        or type(front_id) is not int
+        or front_id <= 0
+        or type(session_id) is not int
+        or session_id <= 0
+    ):
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_target_incomplete")
+
+
+def _validate_managed_cancel_native_fields(
+    snapshot: _ManagedOrderActionFieldSnapshot,
+    request_id: int,
+) -> None:
+    """Require the complete SDK native-field target consumed by the I9 mapper."""
+
+    identity = snapshot.identity
+    if (
+        type(snapshot.request_id_value) is not int
+        or snapshot.request_id_value != request_id
+        or identity.field_request_id != request_id
+        or type(snapshot.front_id_value) is not int
+        or identity.front_id is None
+        or identity.front_id <= 0
+        or type(snapshot.session_id_value) is not int
+        or identity.session_id is None
+        or identity.session_id <= 0
+        or type(snapshot.order_action_ref_value) is not int
+        or snapshot.order_action_ref_value != request_id
+        or _CTP_MANAGED_ORDER_REF_RE.fullmatch(identity.order_ref) is None
+        or _CTP_MANAGED_ORDER_SYS_ID_RE.fullmatch(identity.order_sys_id) is None
+        or not identity.exchange_id
+        or identity.exchange_id != identity.exchange_id.strip()
+        or not identity.exchange_id.isascii()
+        or not identity.instrument_id
+        or identity.action_flag != "0"
+        or _CTP_MANAGED_NATIVE_ACTION_REF_RE.fullmatch(identity.order_action_ref) is None
+        or identity.order_action_ref != str(request_id)
+    ):
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_target_invalid")
+
+
+def _copy_managed_order_action_field(
+    template: Any,
+    snapshot: _ManagedOrderActionFieldSnapshot,
+) -> Any:
+    """Build a detached native field exclusively from the validated snapshot."""
+
+    identity = snapshot.identity
+    try:
+        detached = type(template)()
+        if detached is template:
+            raise TypeError("native field constructor did not create a distinct object")
+        values = {
+            "BrokerID": identity.broker_id,
+            "InvestorID": identity.investor_id,
+            "UserID": snapshot.user_id,
+            "InstrumentID": identity.instrument_id,
+            "ExchangeID": identity.exchange_id,
+            "OrderRef": identity.order_ref,
+            "OrderSysID": identity.order_sys_id,
+            "FrontID": snapshot.front_id_value,
+            "SessionID": snapshot.session_id_value,
+            "RequestID": snapshot.request_id_value,
+            "OrderActionRef": snapshot.order_action_ref_value,
+            "ActionFlag": identity.action_flag,
+        }
+        for name, value in values.items():
+            setattr(detached, name, value)
+    except Exception as exc:
+        raise CtpExecutionGateError(
+            "ctp_execution_gate_managed_cancel_native_snapshot_unavailable"
+        ) from exc
+    if _managed_order_action_field_snapshot(detached) != snapshot:
+        raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_native_snapshot_mismatch")
+    return detached
 
 
 class CtpNativeCallbackConsumerError(RuntimeError):
@@ -1019,6 +1424,132 @@ def _snapshot_ctp_field(field):
     return result
 
 
+def _native_text_field(field: Any, name: str) -> str:
+    value = _native_field_value(field, name, "")
+    return _native_text_value(value)
+
+
+def _native_field_value(field: Any, name: str, default: Any = None) -> Any:
+    try:
+        return getattr(field, name, default) if field is not None else default
+    except Exception:
+        return default
+
+
+def _native_text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _native_callback_flag(value: Any) -> bool | None:
+    """Normalize SWIG callback flags without accepting coercible strings."""
+    if type(value) is bool:
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    return None
+
+
+def _native_int_field(field: Any, name: str) -> int | None:
+    return _native_int_value(_native_field_value(field, name, 0))
+
+
+def _native_int_value(value: Any) -> int | None:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+@dataclass(frozen=True)
+class _OrderActionIdentity:
+    broker_id: str
+    investor_id: str
+    order_action_ref: str
+    order_ref: str
+    field_request_id: int | None
+    front_id: int | None
+    session_id: int | None
+    exchange_id: str
+    order_sys_id: str
+    action_flag: str
+    instrument_id: str
+
+
+@dataclass(frozen=True)
+class _ManagedOrderActionFieldSnapshot:
+    """One read of caller-owned fields plus the normalized callback identity."""
+
+    identity: _OrderActionIdentity
+    user_id: str
+    request_id_value: Any
+    front_id_value: Any
+    session_id_value: Any
+    order_action_ref_value: Any
+
+
+def _managed_order_action_field_snapshot(field: Any) -> _ManagedOrderActionFieldSnapshot:
+    """Read every field used by managed validation exactly once."""
+
+    raw = {
+        name: _native_field_value(field, name, default)
+        for name, default in (
+            ("BrokerID", ""),
+            ("InvestorID", ""),
+            ("UserID", ""),
+            ("OrderActionRef", ""),
+            ("OrderRef", ""),
+            ("RequestID", 0),
+            ("FrontID", 0),
+            ("SessionID", 0),
+            ("ExchangeID", ""),
+            ("OrderSysID", ""),
+            ("ActionFlag", ""),
+            ("InstrumentID", ""),
+        )
+    }
+    identity = _OrderActionIdentity(
+        broker_id=_native_text_value(raw["BrokerID"]),
+        investor_id=_native_text_value(raw["InvestorID"]),
+        order_action_ref=_native_text_value(raw["OrderActionRef"]),
+        order_ref=_native_text_value(raw["OrderRef"]),
+        field_request_id=_native_int_value(raw["RequestID"]),
+        front_id=_native_int_value(raw["FrontID"]),
+        session_id=_native_int_value(raw["SessionID"]),
+        exchange_id=_native_text_value(raw["ExchangeID"]),
+        order_sys_id=_native_text_value(raw["OrderSysID"]),
+        action_flag=_native_text_value(raw["ActionFlag"]),
+        instrument_id=_native_text_value(raw["InstrumentID"]),
+    )
+    return _ManagedOrderActionFieldSnapshot(
+        identity=identity,
+        user_id=_native_text_value(raw["UserID"]),
+        request_id_value=raw["RequestID"],
+        front_id_value=raw["FrontID"],
+        session_id_value=raw["SessionID"],
+        order_action_ref_value=raw["OrderActionRef"],
+    )
+
+
+def _order_action_identity(field: Any) -> _OrderActionIdentity:
+    return _OrderActionIdentity(
+        broker_id=_native_text_field(field, "BrokerID"),
+        investor_id=_native_text_field(field, "InvestorID"),
+        order_action_ref=_native_text_field(field, "OrderActionRef"),
+        order_ref=_native_text_field(field, "OrderRef"),
+        field_request_id=_native_int_field(field, "RequestID"),
+        front_id=_native_int_field(field, "FrontID"),
+        session_id=_native_int_field(field, "SessionID"),
+        exchange_id=_native_text_field(field, "ExchangeID"),
+        order_sys_id=_native_text_field(field, "OrderSysID"),
+        action_flag=_native_text_field(field, "ActionFlag"),
+        instrument_id=_native_text_field(field, "InstrumentID"),
+    )
+
+
 class _QueryRecordSnapshot(dict[str, Any]):
     """Detached CTP query row retaining legacy attribute-style reads."""
 
@@ -1045,6 +1576,81 @@ def _rsp_error(rsp_info: Any) -> tuple[int | None, str]:
     return error_id, str(getattr(rsp_info, "ErrorMsg", "") or "")
 
 
+def _query_filter_items(filters: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
+    if filters is None:
+        return ()
+    if not isinstance(filters, Mapping):
+        raise TypeError("query request intent filters must be a mapping")
+    if any(type(name) is not str or type(value) is not str for name, value in filters.items()):
+        raise TypeError("query request intent filters must contain exact strings")
+    return tuple(sorted(filters.items()))
+
+
+def _read_native_query_filter_items(
+    field: Any,
+    request_intent_items: tuple[tuple[str, str], ...],
+) -> tuple[tuple[str, str], ...]:
+    """Read back only intended filter fields from the populated native request.
+
+    Missing getters, non-string wrapper results and any setter normalization
+    reject the request before a native query API is called. Unset fields are
+    not added to the returned evidence.
+    """
+    if field is None:
+        raise TypeError("native query filter field is required")
+    readback: list[tuple[str, str]] = []
+    for name, intended_value in request_intent_items:
+        try:
+            actual_value = getattr(field, name)
+        except Exception as exc:
+            raise ValueError(f"native query filter getter unavailable:{name}") from exc
+        if type(actual_value) is not str:
+            raise TypeError(f"native query filter getter type invalid:{name}")
+        if actual_value != intended_value:
+            raise ValueError(f"native query filter readback mismatch:{name}")
+        readback.append((name, actual_value))
+    return tuple(readback)
+
+
+def _query_parameter_items(
+    parameters: Mapping[str, float] | None,
+) -> tuple[tuple[str, float], ...]:
+    """Validate typed numeric query inputs without mixing them into filters."""
+    if parameters is None:
+        return ()
+    if not isinstance(parameters, Mapping):
+        raise TypeError("query request intent parameters must be a mapping")
+    if any(
+        type(name) is not str
+        or type(value) is not float
+        or not math.isfinite(value)
+        for name, value in parameters.items()
+    ):
+        raise TypeError("query request intent parameters must contain finite floats")
+    return tuple(sorted(parameters.items()))
+
+
+def _read_native_query_parameter_items(
+    field: Any,
+    request_intent_items: tuple[tuple[str, float], ...],
+) -> tuple[tuple[str, float], ...]:
+    """Read back numeric request parameters before submission, exactly typed."""
+    if field is None:
+        raise TypeError("native query parameter field is required")
+    readback: list[tuple[str, float]] = []
+    for name, intended_value in request_intent_items:
+        try:
+            actual_value = getattr(field, name)
+        except Exception as exc:
+            raise ValueError(f"native query parameter getter unavailable:{name}") from exc
+        if type(actual_value) is not float or not math.isfinite(actual_value):
+            raise TypeError(f"native query parameter getter type invalid:{name}")
+        if actual_value != intended_value:
+            raise ValueError(f"native query parameter readback mismatch:{name}")
+        readback.append((name, actual_value))
+    return tuple(readback)
+
+
 @dataclass
 class _QueryAccumulator:
     request_type: str
@@ -1064,6 +1670,11 @@ class _QueryAccumulator:
     unsupported: bool = False
     submit_code: int | None = None
     source_issuer: object | None = None
+    request_intent_filters: tuple[tuple[str, str], ...] = ()
+    request_filters: tuple[tuple[str, str], ...] = ()
+    request_intent_parameters: tuple[tuple[str, float], ...] = ()
+    request_parameters: tuple[tuple[str, float], ...] = ()
+    explicit_request_filters: tuple[str, ...] = ()
     trading_day: str = ""
     broker_id: str = ""
     investor_id: str = ""
@@ -1109,11 +1720,16 @@ class _QueryAccumulator:
                 trading_day=self.trading_day,
                 broker_id=self.broker_id,
                 investor_id=self.investor_id,
+                request_intent_filters=self.request_intent_filters,
                 started_at_utc=self.started_at_utc,
                 completed_at_utc=self.completed_at_utc,
                 started_monotonic=self.started_monotonic,
                 completed_monotonic=self.completed_monotonic,
                 records_sha256=self.source_records_sha256,
+                request_filters=self.request_filters,
+                request_intent_parameters=self.request_intent_parameters,
+                request_parameters=self.request_parameters,
+                explicit_request_filters=self.explicit_request_filters,
             ),
         )
 
@@ -1282,6 +1898,11 @@ class MdClient:
         self._native_init_started = False
         self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
+        self._last_stopped_native_api = None
+        self._last_stopped_connection_generation = 0
+        self._last_stop_join_required = False
+        self._last_stop_join_thread: threading.Thread | None = None
+        self._last_stop_join_tracker: _CtpNativeJoinTracker | None = None
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
@@ -1372,6 +1993,7 @@ class MdClient:
                 _retain_live_ctp_native_session(api, spi, self._thread)
                 observe_join = True
             else:
+                self._pending_native_join_api_ids.add(id(api))
                 release_now = True
             self._api = None
             self._spi = None
@@ -1386,10 +2008,12 @@ class MdClient:
                 api.RegisterSpi(None)
             self._start_join_observer(api)
         elif release_now:
-            with suppress(Exception):
-                api.RegisterSpi(None)
-            with suppress(Exception):
-                api.Release()
+            _release_ctp_native_api_immediately(
+                api,
+                spi,
+                state_lock=self._state_lock,
+                pending_api_ids=self._pending_native_join_api_ids,
+            )
         return True
 
     def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
@@ -1402,6 +2026,7 @@ class MdClient:
             join_result = api.Join()
             join_returned = True
             tracker.returned(join_result)
+            _mark_ctp_native_join_returned(api)
         except BaseException as exc:
             tracker.failed(exc)
             raise
@@ -1509,6 +2134,7 @@ class MdClient:
         flow = _flow_dir(f"md_{self.broker_id}_{self.user_id}")
         try:
             api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
+            _register_ctp_native_api(api)
         except Exception:
             self._clear_start_reservation(generation)
             raise
@@ -1528,10 +2154,12 @@ class MdClient:
                 self._join_active = False
                 self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
-            with suppress(Exception):
-                api.RegisterSpi(None)
-            with suppress(Exception):
-                api.Release()
+            _release_ctp_native_api_immediately(
+                api,
+                spi,
+                state_lock=self._state_lock,
+                pending_api_ids=self._pending_native_join_api_ids,
+            )
             return
 
         init_invoked = False
@@ -1613,7 +2241,7 @@ class MdClient:
         with self._state_lock:
             return self._loggedin
 
-    def stop(self):
+    def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP market-data session without freeing a live SWIG director.
 
         The vendor macOS framework is unsafe if ``Release()`` races a live
@@ -1625,15 +2253,22 @@ class MdClient:
         # Set this before waiting for a native registration call's lock.  It
         # is the post-call fence that prevents RegisterFront/Init from running
         # when stop races RegisterSpi on another thread.
-        self._startup_cancel_event.set()
+        if expected_api is _NO_EXPECTED_NATIVE_API:
+            self._startup_cancel_event.set()
         with self._state_lock:
+            api = self._api
+            if expected_api is not _NO_EXPECTED_NATIVE_API and (
+                api is None or api is not expected_api
+            ):
+                return False
+            if expected_api is not _NO_EXPECTED_NATIVE_API:
+                self._startup_cancel_event.set()
             # A stop issued while CreateFtdc* is still running must cancel the
             # reserved generation before start() can register it.
             self._lifecycle_generation += 1
             self._starting_generation = None
             self._loggedin = False
             self._connected = False
-            api = self._api
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
@@ -1641,10 +2276,19 @@ class MdClient:
                 self._join_active or (join_thread is not None and join_thread.is_alive())
             )
             if api is None:
-                return
-            if join_active:
+                return False
+            join_claimed = _ctp_native_join_claimed(api)
+            join_required = bool(join_active or join_claimed)
+            self._last_stopped_native_api = api
+            self._last_stopped_connection_generation = self._connection_generation
+            self._last_stop_join_required = join_required
+            self._last_stop_join_thread = join_thread
+            self._last_stop_join_tracker = self._native_join_tracker
+            if join_active or join_claimed:
                 self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, join_thread)
+            else:
+                self._pending_native_join_api_ids.add(id(api))
             self._api = None
             self._spi = None
             self._thread = None
@@ -1657,12 +2301,37 @@ class MdClient:
             # callback already in flight while the registration is changed.
             with suppress(Exception):
                 api.RegisterSpi(None)
-            return
+            return True
 
-        with suppress(Exception):
-            api.RegisterSpi(None)
-            api.Release()
-            _forget_ctp_native_join_claim(api)
+        if join_claimed:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            if _ctp_native_join_returned(api):
+                if _release_retired_ctp_native_session_after_join(api):
+                    with self._state_lock:
+                        self._pending_native_join_api_ids.discard(id(api))
+            return True
+
+        _release_ctp_native_api_immediately(
+            api,
+            spi,
+            state_lock=self._state_lock,
+            pending_api_ids=self._pending_native_join_api_ids,
+        )
+        return True
+
+    def stop(self):
+        self._stop_native_session()
+
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        """Stop this market-data API and return a bounded lifecycle receipt."""
+
+        return _make_ctp_native_stop_receipt(
+            self,
+            timeout,
+            lock=self._state_lock,
+            api_attribute="_api",
+        )
 
     @property
     def is_ready(self):
@@ -1692,6 +2361,26 @@ def _fence_trader_spi_callback(callback):
         return callback(self, *args, **kwargs)
 
     return guarded
+
+
+@dataclass(frozen=True)
+class _TraderLoginIdentityObservation:
+    """Fenced native identity accepted for one login request and generation."""
+
+    _seal: object
+    broker_id: str
+    user_id: str
+    trading_day: str
+    connection_generation: int
+    request_id: int
+
+
+@dataclass(frozen=True)
+class _TraderLoginError:
+    """Sanitized login identity failure passed to the legacy error callback."""
+
+    ErrorID: int
+    ErrorMsg: str
 
 
 class _TraderSpi(CThostFtdcTraderSpi):
@@ -1777,15 +2466,21 @@ class _TraderSpi(CThostFtdcTraderSpi):
             if not accepted:
                 self._c._authentication_late_callback_count += 1
                 return
+            if _native_callback_flag(bIsLast) is not True:
+                return
             self._c._authentication_request_id = None
             self._c._authentication_connection_generation = None
             error_id, _ = _rsp_error(pRspInfo)
             if error_id not in (None, 0):
                 self._c._authentication_state = "failed"
+                self._c._login_identity_observation = None
+                self._c._trading_day = ""
                 self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
                 error_callback = self._c.on_error
             else:
                 self._c._authentication_state = "authenticated"
+                self._c._login_identity_observation = None
+                self._c._trading_day = ""
                 field = CThostFtdcReqUserLoginField()
                 field.BrokerID = self._c._bound_broker_id
                 field.UserID = self._c._bound_user_id
@@ -1813,6 +2508,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     and self._c._connection_generation == generation
                 ):
                     self._c._login_state = "failed"
+                    self._c._login_identity_observation = None
+                    self._c._trading_day = ""
                     self._c._last_session_error = {
                         "error": "login_submit_failed",
                         "detail": (
@@ -1828,6 +2525,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     and self._c._connection_generation == generation
                 ):
                     self._c._login_state = "failed"
+                    self._c._login_identity_observation = None
+                    self._c._trading_day = ""
                     self._c._last_session_error = {
                         "error": "login_submit_rejected",
                         "submit_code": ret,
@@ -1837,25 +2536,62 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
         login_callback = None
         error_callback = None
+        error_info = pRspInfo
         with self._c._query_state_lock:
+            try:
+                request_id = int(nRequestID)
+            except (TypeError, ValueError, OverflowError):
+                request_id = -1
             accepted = (
                 self._is_current_locked()
                 and self._c._login_state == "logging_in"
-                and self._c._login_request_id == int(nRequestID)
+                and self._c._login_request_id == request_id
                 and self._c._login_connection_generation == self._c._connection_generation
             )
             if not accepted:
                 self._c._login_late_callback_count += 1
                 return
+            if _native_callback_flag(bIsLast) is not True:
+                return
             generation = self._c._connection_generation
             self._c._login_request_id = None
             self._c._login_connection_generation = None
             error_id, _ = _rsp_error(pRspInfo)
-            if error_id in (None, 0):
+            broker_id = _native_text_field(pRspUserLogin, "BrokerID").strip()
+            user_id = _native_text_field(pRspUserLogin, "UserID").strip()
+            trading_day = _native_text_field(pRspUserLogin, "TradingDay").strip()
+            failure_reason = ""
+            if error_id not in (None, 0):
+                failure_reason = "provider_login_rejected"
+            elif not broker_id or broker_id != self._c._bound_broker_id:
+                failure_reason = "broker_id_mismatch"
+            elif not user_id or user_id != self._c._bound_user_id:
+                failure_reason = "user_id_mismatch"
+            elif (
+                len(trading_day) != 8
+                or not trading_day.isascii()
+                or not trading_day.isdigit()
+            ):
+                failure_reason = "trading_day_invalid"
+            else:
+                try:
+                    datetime.strptime(trading_day, "%Y%m%d")
+                except ValueError:
+                    failure_reason = "trading_day_invalid"
+
+            if not failure_reason:
                 self._c._login_state = "logged_in"
-                self._c._front_id = pRspUserLogin.FrontID
-                self._c._session_id = pRspUserLogin.SessionID
-                self._c._trading_day = str(getattr(pRspUserLogin, "TradingDay", "") or "")
+                self._c._front_id = getattr(pRspUserLogin, "FrontID", 0)
+                self._c._session_id = getattr(pRspUserLogin, "SessionID", 0)
+                self._c._trading_day = trading_day
+                self._c._login_identity_observation = _TraderLoginIdentityObservation(
+                    _seal=_TRADER_LOGIN_IDENTITY_SEAL,
+                    broker_id=broker_id,
+                    user_id=user_id,
+                    trading_day=trading_day,
+                    connection_generation=generation,
+                    request_id=request_id,
+                )
                 with suppress(TypeError, ValueError):
                     self._c._max_order_ref = max(
                         self._c._max_order_ref,
@@ -1875,12 +2611,20 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 login_callback = self._c.on_login
             else:
                 self._c._login_state = "failed"
-                self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
+                self._c._login_identity_observation = None
+                self._c._trading_day = ""
+                self._c._ready = False
+                self._c._last_session_error = {
+                    "error": "login_identity_rejected",
+                    "reason": failure_reason,
+                }
                 error_callback = self._c.on_error
+                if error_callback is not None and error_id == 0:
+                    error_info = _TraderLoginError(ErrorID=-1, ErrorMsg=failure_reason)
         if login_callback is not None:
             login_callback(pRspUserLogin)
         if error_callback is not None:
-            error_callback(pRspInfo)
+            error_callback(error_info)
 
     @_fence_trader_spi_callback
     def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
@@ -1998,35 +2742,30 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     @_fence_trader_spi_callback
     def OnRtnOrder(self, pOrder):
-        if not self._is_current():
-            return
-        self._c._record_native_callback_event(
-            self,
-            event_type="OnRtnOrder",
-            native_field=pOrder,
-            field_names=_TRADER_ORDER_CALLBACK_FIELDS,
-        )
-        self._c._push_order_event(pOrder)
+        self._c._handle_order_return(pOrder, origin_api=self._native_api, origin_spi=self)
 
     @_fence_trader_spi_callback
     def OnRspOrderAction(self, pInputOrderAction, pRspInfo, nRequestID, bIsLast):
-        self._c._record_native_callback_event(
-            self,
-            event_type="OnRspOrderAction",
-            native_field=pInputOrderAction,
-            field_names=_TRADER_ORDER_ACTION_CALLBACK_FIELDS,
+        self._c._handle_order_action_callback(
+            source="OnRspOrderAction",
+            field=pInputOrderAction,
             rsp_info=pRspInfo,
-            callback_fields=(("nRequestID", nRequestID), ("bIsLast", bIsLast)),
+            request_id=nRequestID,
+            is_last=bIsLast,
+            origin_api=self._native_api,
+            origin_spi=self,
         )
 
     @_fence_trader_spi_callback
     def OnErrRtnOrderAction(self, pOrderAction, pRspInfo):
-        self._c._record_native_callback_event(
-            self,
-            event_type="OnErrRtnOrderAction",
-            native_field=pOrderAction,
-            field_names=_TRADER_ORDER_ACTION_CALLBACK_FIELDS,
+        self._c._handle_order_action_callback(
+            source="OnErrRtnOrderAction",
+            field=pOrderAction,
             rsp_info=pRspInfo,
+            request_id=None,
+            is_last=None,
+            origin_api=self._native_api,
+            origin_spi=self,
         )
 
     @_fence_trader_spi_callback
@@ -2138,6 +2877,11 @@ class TraderClient:
         self._native_init_started = False
         self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
+        self._last_stopped_native_api = None
+        self._last_stopped_connection_generation = 0
+        self._last_stop_join_required = False
+        self._last_stop_join_thread: threading.Thread | None = None
+        self._last_stop_join_tracker: _CtpNativeJoinTracker | None = None
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
@@ -2156,6 +2900,7 @@ class TraderClient:
         self._login_request_id: int | None = None
         self._login_connection_generation: int | None = None
         self._login_late_callback_count = 0
+        self._login_identity_observation: _TraderLoginIdentityObservation | None = None
         self._query_done = threading.Event()
         self._last_account = None
         self._last_positions = []
@@ -2166,6 +2911,10 @@ class TraderClient:
         self._query_lock = threading.Lock()
         self._query_state_lock = threading.RLock()
         self._query_history: dict[int, _QueryAccumulator] = {}
+        self._order_action_history: dict[tuple[int, str], CtpOrderActionEvidence] = {}
+        self._order_action_identities: dict[tuple[int, str], _OrderActionIdentity] = {}
+        self._managed_cancel_actions_seen: set[str] = set()
+        self._order_action_late_callback_count = 0
         # Every typed query source and session scope from this client share an
         # opaque issuer.  Equal account strings from a different object or a
         # hand-built mapping can therefore never certify the same query.
@@ -2218,6 +2967,8 @@ class TraderClient:
         lock = getattr(self, "_query_state_lock", None)
         if lock is None:
             self.__native_api = value
+            if current is not None and hasattr(self, "_login_identity_observation"):
+                self._login_identity_observation = None
             self._native_api_generation = getattr(self, "_native_api_generation", 0) + 1
             self._native_callback_queue_generation = (
                 getattr(self, "_native_callback_queue_generation", 0) + 1
@@ -2235,6 +2986,8 @@ class TraderClient:
                 self._execution_preflight_epoch += 1
             self._session_native_api = None
             self._session_native_front = None
+            if current is not None and hasattr(self, "_login_identity_observation"):
+                self._login_identity_observation = None
             # Any callbacks from the previous SPI become stale immediately.
             self._spi = None
             self.__native_api = value
@@ -2295,6 +3048,25 @@ class TraderClient:
             or investor_id != self._bound_user_id
             or (require_user_id and user_id != self._bound_user_id)
             or (not require_user_id and user_id and user_id != self._bound_user_id)
+        ):
+            self._revoke_execution_gate_locked("ctp_execution_gate_native_field_identity_mismatch")
+            raise CtpExecutionGateError("ctp_execution_gate_native_field_identity_mismatch")
+
+    def _require_native_field_identity_snapshot_locked(
+        self,
+        snapshot: _ManagedOrderActionFieldSnapshot,
+        *,
+        require_user_id: bool,
+    ) -> None:
+        """Validate account fields from the same detached read as the target."""
+
+        self._require_bound_identity_locked(require_active_front=True)
+        identity = snapshot.identity
+        if (
+            identity.broker_id != self._bound_broker_id
+            or identity.investor_id != self._bound_user_id
+            or (require_user_id and snapshot.user_id != self._bound_user_id)
+            or (not require_user_id and snapshot.user_id and snapshot.user_id != self._bound_user_id)
         ):
             self._revoke_execution_gate_locked("ctp_execution_gate_native_field_identity_mismatch")
             raise CtpExecutionGateError("ctp_execution_gate_native_field_identity_mismatch")
@@ -2959,20 +3731,308 @@ class TraderClient:
         request_id: int,
         *,
         execution_capability: object | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
     ) -> Any:
-        """Submit one cancellation under the managed native-order gate."""
+        """Submit one gated cancellation and retain its exact callback target.
+
+        Supplying the managed identity tuple opts into the strict I9 target
+        contract. Calls that omit it preserve the legacy OrderRef/OrderSysID
+        target alternatives for existing public callers.
+        """
+
+        managed_cancel = _validate_managed_cancel_identity(
+            runtime_order_id=runtime_order_id,
+            managed_intent_id=managed_intent_id,
+            runtime_action_id=runtime_action_id,
+            managed_cancel_intent_id=managed_cancel_intent_id,
+        )
 
         with self._query_state_lock:
-            self._require_execution_write_locked(
-                execution_capability,
-                getattr(field, "InstrumentID", ""),
-                getattr(field, "ExchangeID", ""),
+            if type(request_id) is not int or request_id <= 0:
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_invalid")
+            if managed_cancel:
+                snapshot = _managed_order_action_field_snapshot(field)
+                identity = snapshot.identity
+                self._require_execution_write_locked(
+                    execution_capability,
+                    identity.instrument_id,
+                    identity.exchange_id,
+                )
+                self._require_native_field_identity_snapshot_locked(
+                    snapshot,
+                    require_user_id=False,
+                )
+                api = self._api
+                if api is None:
+                    raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+                _validate_managed_cancel_native_fields(snapshot, request_id)
+                request_field = _copy_managed_order_action_field(field, snapshot)
+            else:
+                self._require_execution_write_locked(
+                    execution_capability,
+                    getattr(field, "InstrumentID", ""),
+                    getattr(field, "ExchangeID", ""),
+                )
+                self._require_native_field_identity_locked(field, require_user_id=False)
+                api = self._api
+                if api is None:
+                    raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+                identity = _order_action_identity(field)
+                request_field = field
+            key = (request_id, identity.order_action_ref)
+            order_identity_present = bool(
+                (identity.order_ref and identity.front_id and identity.session_id)
+                or (identity.order_sys_id and identity.exchange_id)
             )
-            self._require_native_field_identity_locked(field, require_user_id=False)
-            if self._api is None:
-                raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+            if (
+                identity.field_request_id != request_id
+                or not identity.order_action_ref
+                or identity.action_flag != "0"
+                or not order_identity_present
+                or self._connection_generation <= 0
+                or not self._trading_day
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_invalid")
+            if key in self._order_action_history:
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_identity_reused")
+            if any(
+                known_request_id == request_id for known_request_id, _ in self._order_action_history
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_reused")
+            if (
+                managed_cancel
+                and managed_cancel_intent_id in self._managed_cancel_actions_seen
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_action_reused")
+
+            now = datetime.now(timezone.utc)
+            self._order_action_history[key] = CtpOrderActionEvidence(
+                request_id=request_id,
+                order_action_ref=identity.order_action_ref,
+                status="unknown",
+                account_fingerprint=f"acct_{self._account_fingerprint}",
+                trading_day=self._trading_day,
+                connection_generation=self._connection_generation,
+                order_ref=identity.order_ref,
+                order_sys_id=identity.order_sys_id,
+                front_id=identity.front_id or 0,
+                session_id=identity.session_id or 0,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                action_flag=identity.action_flag,
+                evidence_source="",
+                callback_received=False,
+                evidence_received=False,
+                error_code=None,
+                error_message="",
+                reason="awaiting_native_callback",
+                submitted_at_utc=now,
+                observed_at_utc=None,
+                submit_code=None,
+            )
+            self._order_action_identities[key] = identity
+            if managed_cancel:
+                # Reserve before native dispatch: an exception can mean the
+                # provider saw the request, so this action ID is never retried.
+                self._managed_cancel_actions_seen.add(managed_cancel_intent_id)
             self._record_request("order_action")
-            return self._api.ReqOrderAction(field, request_id)
+            try:
+                ret = api.ReqOrderAction(request_field, request_id)
+            except Exception:
+                self._order_action_history[key] = replace(
+                    self._order_action_history[key], reason="native_submit_exception"
+                )
+                raise
+            try:
+                submit_code = int(ret) if ret is not None else None
+            except (TypeError, ValueError, OverflowError):
+                submit_code = None
+            self._order_action_history[key] = replace(
+                self._order_action_history[key], submit_code=submit_code
+            )
+            return ret
+
+    def get_order_action_evidence(
+        self,
+        request_id: int,
+        *,
+        order_action_ref: str | int | None = None,
+    ) -> CtpOrderActionEvidence | None:
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        with self._query_state_lock:
+            if order_action_ref is None:
+                matches = [
+                    value
+                    for (known_request_id, _), value in self._order_action_history.items()
+                    if known_request_id == normalized_request_id
+                ]
+                return matches[0] if len(matches) == 1 else None
+            return self._order_action_history.get((normalized_request_id, str(order_action_ref)))
+
+    def _handle_order_return(self, field: Any, *, origin_api: Any, origin_spi: _TraderSpi) -> None:
+        callback = None
+        with self._query_state_lock:
+            if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
+                return
+            if origin_api is not None:
+                self._record_native_callback_event(
+                    origin_spi,
+                    event_type="OnRtnOrder",
+                    native_field=field,
+                    field_names=_TRADER_ORDER_CALLBACK_FIELDS,
+                )
+            snapshot = _snapshot_ctp_field(field)
+            if snapshot:
+                self._order_events.put(snapshot)
+            callback = self.on_order
+        if callback is not None:
+            callback(field)
+
+    def _handle_order_action_callback(
+        self,
+        *,
+        source: str,
+        field: Any,
+        rsp_info: Any,
+        request_id: Any,
+        is_last: Any,
+        origin_api: Any,
+        origin_spi: _TraderSpi,
+    ) -> None:
+        if type(is_last) is not bool:
+            is_last = None
+
+        error_callback = None
+        with self._query_state_lock:
+            if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
+                return
+
+            identity = _order_action_identity(field)
+            error_code, error_message = _rsp_error(rsp_info)
+            request_value = (
+                _native_int_field(field, "RequestID")
+                if source == "OnErrRtnOrderAction" and request_id is None
+                else request_id
+            )
+            try:
+                normalized_request_id = int(request_value)
+            except (TypeError, ValueError, OverflowError):
+                normalized_request_id = None
+
+            # Both source provenance and the typed target result are recorded
+            # before releasing the API-generation lock. A replacement cannot
+            # split one callback across two generations.
+            if origin_api is not None:
+                self._record_native_callback_event(
+                    origin_spi,
+                    event_type=source,
+                    native_field=field,
+                    field_names=_TRADER_ORDER_ACTION_CALLBACK_FIELDS,
+                    rsp_info=rsp_info,
+                    callback_fields=(
+                        (("nRequestID", request_id), ("bIsLast", is_last))
+                        if source == "OnRspOrderAction"
+                        else ()
+                    ),
+                )
+
+            if source == "OnRspOrderAction":
+                candidates = [
+                    key
+                    for key in self._order_action_history
+                    if normalized_request_id is not None and key[0] == normalized_request_id
+                ]
+                if len(candidates) != 1:
+                    candidates = [key for key in candidates if key[1] == identity.order_action_ref]
+            else:
+                candidates = [
+                    key for key in self._order_action_history if key[1] == identity.order_action_ref
+                ]
+                if identity.field_request_id not in (None, 0):
+                    candidates = [key for key in candidates if key[0] == identity.field_request_id]
+                exact_candidates = [
+                    key for key in candidates if self._order_action_identities[key] == identity
+                ]
+                if exact_candidates:
+                    candidates = exact_candidates
+
+            if len(candidates) == 1:
+                key = candidates[0]
+                evidence = self._order_action_history[key]
+                expected_identity = self._order_action_identities[key]
+                identity_matches = expected_identity == identity
+                scope_matches = (
+                    evidence.account_fingerprint == f"acct_{self._account_fingerprint}"
+                    and evidence.connection_generation == self._connection_generation
+                    and evidence.trading_day == self._trading_day
+                )
+                order_identity_present = bool(
+                    (identity.order_ref and identity.front_id and identity.session_id)
+                    or (identity.order_sys_id and identity.exchange_id)
+                )
+                if evidence.status != "unknown" and (not identity_matches or not scope_matches):
+                    self._order_action_late_callback_count += 1
+                else:
+                    updated = replace(
+                        evidence,
+                        evidence_source=source,
+                        callback_received=True,
+                        evidence_received=identity_matches and scope_matches,
+                        error_code=error_code,
+                        error_message=error_message,
+                        observed_at_utc=datetime.now(timezone.utc),
+                    )
+                    if not identity_matches:
+                        reason, status = "callback_identity_mismatch", "unknown"
+                    elif identity.field_request_id != evidence.request_id:
+                        reason, status = "native_request_id_mismatch", "unknown"
+                        updated = replace(updated, evidence_received=False)
+                    elif not scope_matches:
+                        reason, status = "callback_session_scope_mismatch", "unknown"
+                        updated = replace(updated, evidence_received=False)
+                    elif not order_identity_present:
+                        reason, status = "native_order_identity_incomplete", "unknown"
+                        updated = replace(updated, evidence_received=False)
+                    elif identity.action_flag != "0":
+                        reason, status = "action_flag_not_cancel", "unknown"
+                        updated = replace(updated, evidence_received=False)
+                    elif error_code is None:
+                        reason, status = "native_response_info_missing", "unknown"
+                    elif source == "OnRspOrderAction" and is_last is not True:
+                        reason, status = "native_response_not_terminal", "unknown"
+                    elif error_code != 0:
+                        reason, status = "native_cancel_rejected", "rejected"
+                    elif source == "OnErrRtnOrderAction":
+                        reason, status = "native_error_return_without_error_code", "unknown"
+                    else:
+                        reason, status = "cancel_request_accepted", "accepted"
+                    if evidence.status == "rejected" and status == "accepted":
+                        reason, status = evidence.reason, "rejected"
+                    elif evidence.status == "accepted" and status == "unknown":
+                        reason, status = evidence.reason, "accepted"
+                    self._order_action_history[key] = replace(updated, status=status, reason=reason)
+            else:
+                self._order_action_late_callback_count += 1
+
+            error_payload = {
+                "event": "order_action_response"
+                if source == "OnRspOrderAction"
+                else "order_action_error",
+                "request_id": normalized_request_id,
+                "error_id": error_code if error_code is not None else 0,
+                "error_msg": error_message,
+                "field": _snapshot_ctp_field(field),
+            }
+            self._error_events.put(error_payload)
+            error_callback = self.on_error if rsp_info is not None else None
+        if error_callback is not None:
+            error_callback(rsp_info)
 
     def _next_request_id(self) -> int:
         with self._query_state_lock:
@@ -3024,6 +4084,8 @@ class TraderClient:
             self._ready = False
             self._authentication_state = "authenticating"
             self._login_state = "not_started"
+            self._login_identity_observation = None
+            self._trading_day = ""
             self._authentication_request_id = None
             self._authentication_connection_generation = None
             self._login_request_id = None
@@ -3048,6 +4110,8 @@ class TraderClient:
             self._ready = False
             self._authentication_state = "disconnected"
             self._login_state = "disconnected"
+            self._login_identity_observation = None
+            self._trading_day = ""
             self._authentication_request_id = None
             self._authentication_connection_generation = None
             self._login_request_id = None
@@ -3327,17 +4391,54 @@ class TraderClient:
         # typed scope created below is trusted by evidence consumers.
         self.get_session_state()
         with self._query_state_lock:
+            observation = self._current_login_identity_locked()
+            if observation is None:
+                broker_id = ""
+                investor_id = ""
+                trading_day = ""
+                account_fingerprint = ""
+                read_only_ready = False
+            else:
+                broker_id = observation.broker_id
+                investor_id = observation.user_id
+                trading_day = observation.trading_day
+                account_fingerprint = hashlib.sha256(
+                    f"{broker_id}:{investor_id}".encode()
+                ).hexdigest()[:16]
+                read_only_ready = True
             return _new_query_session_scope(
                 issuer=self._query_evidence_issuer,
-                account_fingerprint=self._account_fingerprint,
+                account_fingerprint=account_fingerprint,
                 connection_generation=self._connection_generation,
-                trading_day=self._trading_day,
-                broker_id=self._bound_broker_id,
-                investor_id=self._bound_user_id,
-                read_only_ready=self.is_read_only_ready,
+                trading_day=trading_day,
+                broker_id=broker_id,
+                investor_id=investor_id,
+                read_only_ready=read_only_ready,
                 captured_at_utc=datetime.now(timezone.utc),
                 captured_monotonic=time.monotonic(),
             )
+
+    def _current_login_identity_locked(
+        self,
+    ) -> _TraderLoginIdentityObservation | None:
+        observation = self._login_identity_observation
+        if (
+            type(observation) is not _TraderLoginIdentityObservation
+            or observation._seal is not _TRADER_LOGIN_IDENTITY_SEAL
+            or observation.connection_generation != self._connection_generation
+            or observation.connection_generation <= 0
+            or observation.request_id <= 0
+            or observation.broker_id != self._bound_broker_id
+            or observation.user_id != self._bound_user_id
+            or observation.trading_day != self._trading_day
+            or self._login_state != "logged_in"
+            or self._authentication_state != "authenticated"
+            or not self._connected
+        ):
+            return None
+        if not self._bound_identity_is_current(require_active_front=False):
+            return None
+        return observation
 
     def get_request_counts(self) -> dict[str, int]:
         """Return a read-only snapshot of native requests issued this session."""
@@ -3426,6 +4527,7 @@ class TraderClient:
                 _retain_live_ctp_native_session(api, spi, self._thread)
                 observe_join = True
             else:
+                self._pending_native_join_api_ids.add(id(api))
                 release_now = True
             self._api = None
             self._thread = None
@@ -3439,10 +4541,12 @@ class TraderClient:
                 api.RegisterSpi(None)
             self._start_join_observer(api)
         elif release_now:
-            with suppress(Exception):
-                api.RegisterSpi(None)
-            with suppress(Exception):
-                api.Release()
+            _release_ctp_native_api_immediately(
+                api,
+                spi,
+                state_lock=self._query_state_lock,
+                pending_api_ids=self._pending_native_join_api_ids,
+            )
         return True
 
     def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
@@ -3455,6 +4559,7 @@ class TraderClient:
             join_result = api.Join()
             join_returned = True
             tracker.returned(join_result)
+            _mark_ctp_native_join_returned(api)
         except BaseException as exc:
             tracker.failed(exc)
             raise
@@ -3510,6 +4615,7 @@ class TraderClient:
         flow = _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
         try:
             api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
+            _register_ctp_native_api(api)
         except Exception:
             self._clear_start_reservation(generation)
             raise
@@ -3529,10 +4635,12 @@ class TraderClient:
                 self._join_active = False
                 self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
-            with suppress(Exception):
-                api.RegisterSpi(None)
-            with suppress(Exception):
-                api.Release()
+            _release_ctp_native_api_immediately(
+                api,
+                spi,
+                state_lock=self._query_state_lock,
+                pending_api_ids=self._pending_native_join_api_ids,
+            )
             return
 
         init_invoked = False
@@ -3633,8 +4741,40 @@ class TraderClient:
             time.sleep(min(0.2, max(0.0, deadline - time.time())))
         return self.is_ready
 
-    def _new_query_accumulator(self, request_type: str) -> _QueryAccumulator:
+    def _new_query_accumulator(
+        self,
+        request_type: str,
+        request_filters: Mapping[str, str] | None = None,
+        explicit_request_filters: tuple[str, ...] = (),
+        *,
+        request_intent_filters: Mapping[str, str] | None = None,
+        request_parameters: Mapping[str, float] | None = None,
+        request_intent_parameters: Mapping[str, float] | None = None,
+    ) -> _QueryAccumulator:
         request_id = self._next_request_id()
+        filter_items = _query_filter_items(request_filters)
+        intent_items = (
+            filter_items
+            if request_intent_filters is None
+            else _query_filter_items(request_intent_filters)
+        )
+        if intent_items != filter_items:
+            raise ValueError("native query filter readback does not match request intent")
+        parameter_items = _query_parameter_items(request_parameters)
+        parameter_intent_items = (
+            parameter_items
+            if request_intent_parameters is None
+            else _query_parameter_items(request_intent_parameters)
+        )
+        if parameter_intent_items != parameter_items:
+            raise ValueError("native query parameter readback does not match request intent")
+        if (
+            type(explicit_request_filters) is not tuple
+            or any(type(name) is not str for name in explicit_request_filters)
+            or len(explicit_request_filters) != len(set(explicit_request_filters))
+            or any(name not in dict(filter_items) for name in explicit_request_filters)
+        ):
+            raise TypeError("explicit query filter names must identify captured filters")
         accumulator = _QueryAccumulator(
             request_type=request_type,
             request_id=request_id,
@@ -3642,9 +4782,14 @@ class TraderClient:
             account_fingerprint=self._account_fingerprint,
             started_at_utc=datetime.now(timezone.utc),
             source_issuer=self._query_evidence_issuer,
+            request_intent_filters=intent_items,
+            request_intent_parameters=parameter_intent_items,
             trading_day=self._trading_day,
             broker_id=self._bound_broker_id,
             investor_id=self._bound_user_id,
+            request_filters=filter_items,
+            request_parameters=parameter_items,
+            explicit_request_filters=tuple(sorted(explicit_request_filters)),
             started_monotonic=time.monotonic(),
         )
         with self._query_state_lock:
@@ -3663,8 +4808,11 @@ class TraderClient:
         message: str,
         *,
         unsupported: bool = False,
+        include_query_source: bool = True,
     ) -> QueryResult[Any]:
         accumulator = self._new_query_accumulator(request_type)
+        if not include_query_source:
+            accumulator.source_issuer = None
         accumulator.error_code = -3 if unsupported else -1
         accumulator.error_message = message
         accumulator.unsupported = unsupported
@@ -3774,6 +4922,11 @@ class TraderClient:
         request_type: str,
         submit: Callable[[int], Any] | None,
         timeout: float,
+        *,
+        request_filter_field: Any | None = None,
+        request_intent_filters: Mapping[str, str] | None = None,
+        request_intent_parameters: Mapping[str, float] | None = None,
+        explicit_request_filters: tuple[str, ...] = (),
     ) -> QueryResult[Any]:
         if not self.is_read_only_ready:
             return self._local_query_failure(request_type, "trader_not_logged_in")
@@ -3788,7 +4941,42 @@ class TraderClient:
             wait_time = self._query_interval - elapsed
             if wait_time > 0:
                 time.sleep(wait_time)
-            accumulator = self._new_query_accumulator(request_type)
+            try:
+                request_intent_items = _query_filter_items(request_intent_filters)
+                request_filter_items = _read_native_query_filter_items(
+                    request_filter_field,
+                    request_intent_items,
+                )
+            except (TypeError, ValueError) as exc:
+                return self._local_query_failure(
+                    request_type,
+                    f"native_query_filter_readback_failed:{exc}",
+                    unsupported=True,
+                    include_query_source=False,
+                )
+            try:
+                request_intent_parameter_items = _query_parameter_items(
+                    request_intent_parameters
+                )
+                request_parameter_items = _read_native_query_parameter_items(
+                    request_filter_field,
+                    request_intent_parameter_items,
+                )
+            except (TypeError, ValueError) as exc:
+                return self._local_query_failure(
+                    request_type,
+                    f"native_query_parameter_readback_failed:{exc}",
+                    unsupported=True,
+                    include_query_source=False,
+                )
+            accumulator = self._new_query_accumulator(
+                request_type,
+                dict(request_filter_items),
+                explicit_request_filters=explicit_request_filters,
+                request_intent_filters=dict(request_intent_items),
+                request_parameters=dict(request_parameter_items),
+                request_intent_parameters=dict(request_intent_parameter_items),
+            )
             self._record_request(f"query_{request_type}")
             try:
                 ret = submit(accumulator.request_id)
@@ -3836,13 +5024,27 @@ class TraderClient:
 
     def query_account_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQryTradingAccountField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "account",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryTradingAccount", None) if self._api else None
         return self._execute_query(
             "account",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_account(self, timeout=5):
@@ -3851,13 +5053,27 @@ class TraderClient:
 
     def query_positions_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQryInvestorPositionField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "positions",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryInvestorPosition", None) if self._api else None
         return self._execute_query(
             "positions",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_positions(self, timeout=5):
@@ -3868,19 +5084,30 @@ class TraderClient:
         self, instrument_id="", exchange_id="", order_sys_id="", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryOrderField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
-        if instrument_id:
-            field.InstrumentID = str(instrument_id)
-        if exchange_id:
-            field.ExchangeID = str(exchange_id)
-        if order_sys_id:
-            field.OrderSysID = str(order_sys_id)
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+            "InstrumentID": str(instrument_id or ""),
+            "ExchangeID": str(exchange_id or ""),
+            "OrderSysID": str(order_sys_id or ""),
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "orders",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryOrder", None) if self._api else None
         return self._execute_query(
             "orders",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_orders(self, instrument_id="", exchange_id="", order_sys_id="", timeout=5):
@@ -3902,29 +5129,32 @@ class TraderClient:
         timeout=5,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryTradeField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
-        for name, value in (
-            ("InstrumentID", instrument_id),
-            ("ExchangeID", exchange_id),
-            ("TradeID", trade_id),
-            ("TradeTimeStart", start_time),
-            ("TradeTimeEnd", end_time),
-        ):
-            if value:
-                try:
-                    setattr(field, name, str(value))
-                except (AttributeError, TypeError, ValueError):
-                    return self._local_query_failure(
-                        "trades",
-                        f"native_trade_filter_unsupported:{name}",
-                        unsupported=True,
-                    )
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+            "InstrumentID": str(instrument_id or ""),
+            "ExchangeID": str(exchange_id or ""),
+            "TradeID": str(trade_id or ""),
+            "TradeTimeStart": str(start_time or ""),
+            "TradeTimeEnd": str(end_time or ""),
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "trades",
+                f"native_trade_filter_unsupported:{name}",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryTrade", None) if self._api else None
         return self._execute_query(
             "trades",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_trades(self, **kwargs: Any) -> list[Any]:
@@ -3941,12 +5171,15 @@ class TraderClient:
         is limited to the connected front, account and trading day.
         """
         field = CThostFtdcQryInstrumentField()
-        field.InstrumentID = str(instrument_id or "")
+        intent_filters = {"InstrumentID": str(instrument_id or "")}
+        field.InstrumentID = intent_filters["InstrumentID"]
         if exchange_id:
-            field.ExchangeID = str(exchange_id)
+            intent_filters["ExchangeID"] = str(exchange_id)
+            field.ExchangeID = intent_filters["ExchangeID"]
         if product_id:
             try:
-                field.ProductID = str(product_id)
+                intent_filters["ProductID"] = str(product_id)
+                field.ProductID = intent_filters["ProductID"]
             except Exception:
                 # Do not silently fall back to the potentially expensive,
                 # unfiltered instrument query when this native ABI cannot
@@ -3955,12 +5188,15 @@ class TraderClient:
                     "instruments",
                     "native_instrument_filter_unsupported:ProductID",
                     unsupported=True,
+                    include_query_source=False,
                 )
         method = getattr(self._api, "ReqQryInstrument", None) if self._api else None
         return self._execute_query(
             "instruments",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_instrument(self, instrument_id, exchange_id="", timeout=5):
@@ -3969,25 +5205,42 @@ class TraderClient:
         ).first
 
     def query_instrument_margin_rate_result(
-        self, instrument_id, exchange_id="", hedge_flag="1", timeout=5
+        self, instrument_id, exchange_id="", hedge_flag=_QUERY_FILTER_UNSET, timeout=5
     ) -> QueryResult[Any]:
+        hedge_flag_explicit = hedge_flag is not _QUERY_FILTER_UNSET
+        if not hedge_flag_explicit:
+            hedge_flag = "1"
+        hedge_flag_value = str(hedge_flag or "")
         field = CThostFtdcQryInstrumentMarginRateField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
-        field.InstrumentID = str(instrument_id or "")
-        if exchange_id:
-            field.ExchangeID = str(exchange_id)
-        if hedge_flag:
-            field.HedgeFlag = str(hedge_flag)
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+            "InstrumentID": str(instrument_id or ""),
+            "ExchangeID": str(exchange_id or ""),
+            "HedgeFlag": hedge_flag_value,
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "margin_rate",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryInstrumentMarginRate", None) if self._api else None
         return self._execute_query(
             "margin_rate",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
+            explicit_request_filters=("HedgeFlag",) if hedge_flag_explicit else (),
         )
 
     def query_instrument_margin_rate(
-        self, instrument_id, exchange_id="", hedge_flag="1", timeout=5
+        self, instrument_id, exchange_id="", hedge_flag=_QUERY_FILTER_UNSET, timeout=5
     ):
         return self.query_instrument_margin_rate_result(
             instrument_id,
@@ -4000,16 +5253,29 @@ class TraderClient:
         self, instrument_id, exchange_id="", timeout=5
     ) -> QueryResult[Any]:
         field = CThostFtdcQryInstrumentCommissionRateField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
-        field.InstrumentID = str(instrument_id or "")
-        if exchange_id:
-            field.ExchangeID = str(exchange_id)
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+            "InstrumentID": str(instrument_id or ""),
+            "ExchangeID": str(exchange_id or ""),
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "commission_rate",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQryInstrumentCommissionRate", None) if self._api else None
         return self._execute_query(
             "commission_rate",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def query_instrument_commission_rate(self, instrument_id, exchange_id="", timeout=5):
@@ -4025,13 +5291,23 @@ class TraderClient:
                 setattr(field, name, value)
         except Exception:
             return self._local_query_failure(
-                request_type, "native_query_fields_unsupported", unsupported=True
+                request_type,
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
             )
         method = getattr(self._api, method_name, None) if self._api else None
         return self._execute_query(
             request_type,
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters={
+                name: value for name, value in values.items() if type(value) is str
+            },
+            request_intent_parameters={
+                name: value for name, value in values.items() if type(value) is float
+            },
         )
 
     def query_depth_market_data_result(
@@ -4113,13 +5389,27 @@ class TraderClient:
 
     def query_settlement_confirmation_result(self, timeout=5) -> QueryResult[Any]:
         field = CThostFtdcQrySettlementInfoConfirmField()
-        field.BrokerID = self._bound_broker_id
-        field.InvestorID = self._bound_user_id
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "settlement_confirmation",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
         method = getattr(self._api, "ReqQrySettlementInfoConfirm", None) if self._api else None
         return self._execute_query(
             "settlement_confirmation",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
         )
 
     def verify_settlement_confirmation(self, timeout=5) -> QueryResult[Any]:
@@ -4549,7 +5839,7 @@ class TraderClient:
         """Return the stable public view of the current native trader API."""
         return self._api_view
 
-    def stop(self):
+    def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP trader session without freeing a live SWIG director.
 
         The vendor macOS framework is unsafe if ``Release()`` races a live
@@ -4561,14 +5851,21 @@ class TraderClient:
         # Set this before waiting for a native registration call's lock.  It
         # is the post-call fence that prevents later startup calls when stop
         # races RegisterSpi on another thread.
-        self._startup_cancel_event.set()
+        if expected_api is _NO_EXPECTED_NATIVE_API:
+            self._startup_cancel_event.set()
         with self._query_state_lock:
+            api = self._api
+            if expected_api is not _NO_EXPECTED_NATIVE_API and (
+                api is None or api is not expected_api
+            ):
+                return False
+            if expected_api is not _NO_EXPECTED_NATIVE_API:
+                self._startup_cancel_event.set()
             # A stop issued while CreateFtdc* is still running must cancel the
             # reserved generation before start() can register it.
             self._lifecycle_generation += 1
             self._starting_generation = None
             self._on_front_disconnected("client_stop")
-            api = self._api
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
@@ -4576,10 +5873,19 @@ class TraderClient:
                 self._join_active or (join_thread is not None and join_thread.is_alive())
             )
             if api is None:
-                return
-            if join_active:
+                return False
+            join_claimed = _ctp_native_join_claimed(api)
+            join_required = bool(join_active or join_claimed)
+            self._last_stopped_native_api = api
+            self._last_stopped_connection_generation = self._connection_generation
+            self._last_stop_join_required = join_required
+            self._last_stop_join_thread = join_thread
+            self._last_stop_join_tracker = self._native_join_tracker
+            if join_active or join_claimed:
                 self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, join_thread)
+            else:
+                self._pending_native_join_api_ids.add(id(api))
             self._api = None
             self._thread = None
             self._join_active = False
@@ -4591,12 +5897,37 @@ class TraderClient:
             # callback already in flight while the registration is changed.
             with suppress(Exception):
                 api.RegisterSpi(None)
-            return
+            return True
 
-        with suppress(Exception):
-            api.RegisterSpi(None)
-            api.Release()
-            _forget_ctp_native_join_claim(api)
+        if join_claimed:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            if _ctp_native_join_returned(api):
+                if _release_retired_ctp_native_session_after_join(api):
+                    with self._query_state_lock:
+                        self._pending_native_join_api_ids.discard(id(api))
+            return True
+
+        _release_ctp_native_api_immediately(
+            api,
+            spi,
+            state_lock=self._query_state_lock,
+            pending_api_ids=self._pending_native_join_api_ids,
+        )
+        return True
+
+    def stop(self):
+        self._stop_native_session()
+
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        """Stop this trader API and return a bounded lifecycle receipt."""
+
+        return _make_ctp_native_stop_receipt(
+            self,
+            timeout,
+            lock=self._query_state_lock,
+            api_attribute="_api",
+        )
 
     @property
     def is_ready(self):
@@ -4606,15 +5937,8 @@ class TraderClient:
 
     @property
     def is_read_only_ready(self):
-        return (
-            self._connected
-            and self._authentication_state == "authenticated"
-            and self._login_state == "logged_in"
-            # Read-only discovery remains available with an offline/test
-            # native API.  The stronger active-front check is enforced only
-            # at arm, settlement, and native order final gates.
-            and self._bound_identity_is_current(require_active_front=False)
-        )
+        with self._query_state_lock:
+            return self._current_login_identity_locked() is not None
 
     @property
     def is_trading_ready(self):
