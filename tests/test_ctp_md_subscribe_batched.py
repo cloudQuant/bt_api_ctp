@@ -17,9 +17,7 @@ class TestSubscribeBatched:
     def test_splits_into_configured_batches(self):
         client = _client()
         batches: list[list[str]] = []
-        client._api = SimpleNamespace(
-            SubscribeMarketData=lambda batch: batches.append(list(batch))
-        )
+        client._api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
         client._loggedin = True
 
         client.subscribe_batched(
@@ -82,9 +80,7 @@ class TestSubscribeBatched:
     def test_single_batch_when_below_batch_size(self):
         client = _client()
         batches: list[list[str]] = []
-        client._api = SimpleNamespace(
-            SubscribeMarketData=lambda batch: batches.append(list(batch))
-        )
+        client._api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
         client._loggedin = True
 
         client.subscribe_batched(["rb2510", "cu2510"], batch_size=100, interval_sec=0.0)
@@ -94,9 +90,7 @@ class TestSubscribeBatched:
     def test_empty_list_is_a_noop(self):
         client = _client()
         batches: list[list[str]] = []
-        client._api = SimpleNamespace(
-            SubscribeMarketData=lambda batch: batches.append(list(batch))
-        )
+        client._api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
         client._loggedin = True
 
         client.subscribe_batched([], batch_size=10, interval_sec=0.0)
@@ -112,9 +106,7 @@ class TestSubscribeBatched:
     def test_existing_subscribe_semantics_unchanged(self):
         client = _client()
         batches: list[list[str]] = []
-        client._api = SimpleNamespace(
-            SubscribeMarketData=lambda batch: batches.append(list(batch))
-        )
+        client._api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
         client._loggedin = True
 
         client.subscribe(["rb2510"])
@@ -133,9 +125,11 @@ class TestDeferredResubscribeOnLogin:
 
     def _wired_client(self, api):
         client = _client()
+        api.ReqUserLogin = lambda _field, _request_id: 0
         spi = _MdSpi(client, native_api=api)
         client._api = api
         client._spi = spi
+        spi.OnFrontConnected()
         return client, spi
 
     def test_inline_resubscribe_is_the_default(self):

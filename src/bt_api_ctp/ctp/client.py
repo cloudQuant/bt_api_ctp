@@ -47,6 +47,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -73,6 +74,7 @@ from ._ctp_base import (
     is_ctp_native_loaded as _is_vendored_ctp_native_loaded,
 )
 from .callback_events import CtpTraderCallbackSourceEvent, snapshot_exact_fields
+from .callback_ingress import SKIP_ORIGINAL_CALLBACK as _CALLBACK_INGRESS_SKIP_ORIGINAL
 from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
 from .ctp_structs_common import (
     CThostFtdcReqAuthenticateField,
@@ -1761,19 +1763,46 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connection_generation += 1
             self._c._connected = True
+            self._c._loggedin = False
+            self._c._clear_active_md_identity_locked()
             generation = self._c._connection_generation
-            front = self._c.front
+            front = self._c._bound_front
+            request_id = self._c._begin_md_login_request_locked(generation)
             field = CThostFtdcReqUserLoginField()
-            field.BrokerID = self._c.broker_id
-            field.UserID = self._c.user_id
+            field.BrokerID = self._c._bound_broker_id
+            field.UserID = self._c._bound_user_id
             field.Password = self._c.password
             api = self._c._api
         # 连接代次是断线/重连的唯一权威标识，必须留痕，否则无人值守时断线不可见。
         _logger.info(
             "CTP market-data front connected (generation=%s, front=%s)", generation, front
         )
+        if request_id is None:
+            _logger.error(
+                "CTP market-data login request ID space exhausted (generation=%s)", generation
+            )
+            return
         if api is not None:
-            api.ReqUserLogin(field, 1)
+            result = api.ReqUserLogin(field, request_id)
+            if type(result) is int and result != 0:
+                with self._c._state_lock:
+                    if (
+                        self._is_current_locked()
+                        and self._c._login_request_id == request_id
+                        and self._c._login_request_generation == generation
+                    ):
+                        self._c._login_request_pending = False
+                        self._c._login_request_id = None
+                        self._c._login_request_generation = None
+                        self._c._loggedin = False
+                        self._c._clear_active_md_identity_locked()
+                _logger.warning(
+                    "CTP market-data login request rejected "
+                    "(generation=%s, request_id=%s, result=%s)",
+                    generation,
+                    request_id,
+                    result,
+                )
 
     def OnFrontDisconnected(self, nReason):
         with self._c._state_lock:
@@ -1781,6 +1810,10 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connected = False
             self._c._loggedin = False
+            self._c._clear_active_md_identity_locked()
+            self._c._login_request_pending = False
+            self._c._login_request_id = None
+            self._c._login_request_generation = None
             generation = self._c._connection_generation
             callback = self._c.on_disconnect
         # 常见原因码：0x1001 网络读失败、0x2001 接收心跳超时、0x2003 收到错误报文。
@@ -1791,6 +1824,8 @@ class _MdSpi(CThostFtdcMdSpi):
             callback(nReason)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
+        from bt_api_ctp.md_identity import MdIdentityObservation
+
         subscribe = None
         callback = None
         error_callback = None
@@ -1803,15 +1838,47 @@ class _MdSpi(CThostFtdcMdSpi):
             if not self._is_current_locked():
                 return
             generation = self._c._connection_generation
-            if pRspInfo and pRspInfo.ErrorID == 0:
+            terminal = type(bIsLast) in (bool, int) and bIsLast == 1
+            current_request = (
+                type(nRequestID) is int
+                and self._c._login_request_pending
+                and self._c._login_request_id == nRequestID
+                and self._c._login_request_generation == generation
+            )
+            if not terminal or not current_request:
+                return
+            self._c._login_request_pending = False
+            error_id = getattr(pRspInfo, "ErrorID", None) if pRspInfo is not None else None
+            if pRspInfo is not None and type(error_id) is int and error_id == 0:
                 self._c._loggedin = True
                 login_ok = True
-                trading_day = str(getattr(pRspUserLogin, "TradingDay", "") or "")
+                broker_id = self._source_identity_text(
+                    getattr(pRspUserLogin, "BrokerID", None)
+                )
+                user_id = self._source_identity_text(getattr(pRspUserLogin, "UserID", None))
+                trading_day = self._source_identity_text(
+                    getattr(pRspUserLogin, "TradingDay", None)
+                )
+                self._c._active_md_identity = MdIdentityObservation(
+                    front=self._c._bound_front,
+                    broker_id=broker_id,
+                    user_id=user_id,
+                    connection_generation=generation,
+                    request_id=nRequestID,
+                    trading_day=trading_day,
+                    authenticated=True,
+                )
+                self._c._active_md_identity_api = (
+                    self._native_api if self._native_api is not None else self._c._api
+                )
+                self._c._active_md_identity_spi = self
                 pending = len(self._c._pending_instruments)
                 if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
                     subscribe = (self._c._api, list(self._c._pending_instruments))
                 callback = self._c.on_login
             else:
+                self._c._loggedin = False
+                self._c._clear_active_md_identity_locked()
                 error_callback = self._c.on_error
                 error_info = pRspInfo
         if login_ok:
@@ -1834,6 +1901,12 @@ class _MdSpi(CThostFtdcMdSpi):
             callback(pRspUserLogin)
         if error_callback is not None:
             error_callback(error_info)
+
+    @staticmethod
+    def _source_identity_text(value):
+        """Keep only exact nonempty callback strings; never synthesize fields."""
+
+        return value if type(value) is str and value else None
 
     def OnRtnDepthMarketData(self, pDepthMarketData):
         with self._c._state_lock:
@@ -1875,6 +1948,10 @@ class MdClient:
         self.broker_id = broker_id
         self.user_id = user_id
         self.password = password
+        # Constructor-bound identity is independent of mutable legacy fields.
+        self.__bound_front = front if type(front) is str else None
+        self.__bound_broker_id = broker_id if type(broker_id) is str else None
+        self.__bound_user_id = user_id if type(user_id) is str else None
 
         self.on_tick = None  # callback(CThostFtdcDepthMarketDataField)
         self.on_login = None  # callback(CThostFtdcRspUserLoginField)
@@ -1891,11 +1968,24 @@ class MdClient:
         # False = 调用方自行异步分批重订阅，避免阻塞 CTP 原生回调线程。
         self.auto_resubscribe_on_login = True
         self._connection_generation = 0
+        self._login_request_counter = 0
+        self._login_request_id = None
+        self._login_request_generation = None
+        self._login_request_pending = False
+        self._active_md_identity = None
+        self._active_md_identity_api = None
+        self._active_md_identity_spi = None
         self._api = None
         self._spi = None
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        # Native startup calls must run without ``_state_lock`` because a CTP
+        # registration call may synchronously wait for a callback thread that
+        # also needs this lock.  Keep a per-API in-flight count so stop can
+        # detach/release only after the call has returned.
+        self._startup_native_call_refs: dict[int, int] = {}
+        self._deferred_startup_cleanups: dict[int, tuple[Any, Any, bool]] = {}
         self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
         self._last_stopped_native_api = None
@@ -1907,6 +1997,67 @@ class MdClient:
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
         self._state_lock = threading.RLock()
+
+    @property
+    def _bound_front(self):
+        return self.__bound_front
+
+    @property
+    def _bound_broker_id(self):
+        return self.__bound_broker_id
+
+    @property
+    def _bound_user_id(self):
+        return self.__bound_user_id
+
+    @property
+    def active_md_identity(self):
+        """Atomic current login fact, not a feed/profile proof."""
+
+        from bt_api_ctp.md_identity import MdIdentityObservation
+
+        with self._state_lock:
+            identity = self._active_md_identity
+            if (
+                identity is None
+                or type(identity) is not MdIdentityObservation
+                or not self._connected
+                or not self._loggedin
+                or self._login_request_pending
+                or type(self._login_request_id) is not int
+                or type(self._login_request_generation) is not int
+                or type(self._connection_generation) is not int
+                or identity.request_id != self._login_request_id
+                or identity.connection_generation != self._login_request_generation
+                or identity.connection_generation != self._connection_generation
+                or identity.front != self._bound_front
+                or identity.authenticated is not True
+                or self._active_md_identity_api is not self._api
+                or self._active_md_identity_spi is not self._spi
+            ):
+                return None
+            return identity
+
+    def _begin_md_login_request_locked(self, generation):
+        """Record the exact request/generation pair before sending login."""
+
+        if self._login_request_counter >= 2_147_483_647:
+            self._login_request_id = None
+            self._login_request_generation = None
+            self._login_request_pending = False
+            self._loggedin = False
+            self._clear_active_md_identity_locked()
+            return None
+        self._login_request_counter += 1
+        self._login_request_id = self._login_request_counter
+        self._login_request_generation = generation
+        self._login_request_pending = True
+        return self._login_request_id
+
+    def _clear_active_md_identity_locked(self):
+        self._active_md_identity = None
+        self._active_md_identity_api = None
+        self._active_md_identity_spi = None
 
     def _reserve_start_generation(self) -> int:
         """Reserve one startup generation before creating the native API."""
@@ -1920,6 +2071,12 @@ class MdClient:
             generation = self._lifecycle_generation
             self._starting_generation = generation
             self._startup_cancel_event.clear()
+            self._connected = False
+            self._loggedin = False
+            self._clear_active_md_identity_locked()
+            self._login_request_id = None
+            self._login_request_generation = None
+            self._login_request_pending = False
             return generation
 
     def _clear_start_reservation(self, generation: int) -> None:
@@ -1945,14 +2102,14 @@ class MdClient:
         *,
         starts_native_thread: bool = False,
     ) -> tuple[bool, bool]:
-        """Run one native startup call with pre/post cancellation fences.
+        """Run one native startup call outside the lifecycle lock.
 
-        Holding the lifecycle lock only for an individual native call lets a
-        concurrent ``stop`` take effect between registration calls.  The
-        pre/post checks ensure it cannot be followed by a later
-        ``RegisterFront`` or ``Init`` from the cancelled generation.
+        The generation check and in-flight reference are changed atomically,
+        but vendor code runs unlocked so a synchronous callback can take the
+        same lifecycle lock.  A concurrent stop records deferred cleanup and
+        cancels all subsequent startup calls; the final reference performs
+        that cleanup after the active native call returns.
         """
-
         with self._state_lock:
             if not self._is_start_current_locked(api, spi, generation):
                 return False, False
@@ -1969,8 +2126,82 @@ class MdClient:
                     self._native_init_started = False
                     self._join_active = False
                 return False, False
+            api_id = id(api)
+            self._startup_native_call_refs[api_id] = (
+                self._startup_native_call_refs.get(api_id, 0) + 1
+            )
+
+        callback_error: BaseException | None = None
+        try:
             callback()
-            return True, self._is_start_current_locked(api, spi, generation)
+        except BaseException as exc:
+            callback_error = exc
+            raise
+        finally:
+            deferred_cleanup = None
+            with self._state_lock:
+                ref_count = self._startup_native_call_refs.get(api_id, 0)
+                if ref_count <= 1:
+                    self._startup_native_call_refs.pop(api_id, None)
+                    deferred_cleanup = self._deferred_startup_cleanups.pop(api_id, None)
+                else:
+                    self._startup_native_call_refs[api_id] = ref_count - 1
+                active_after_call = self._is_start_current_locked(api, spi, generation)
+
+            if deferred_cleanup is not None:
+                try:
+                    self._complete_deferred_startup_cleanup(*deferred_cleanup)
+                except BaseException:
+                    # Preserve the original startup exception.  The cleanup
+                    # path has already retained/poisoned the native API where
+                    # possible, so replacing the vendor exception would lose
+                    # the failure that triggered the fail-closed path.
+                    if callback_error is None:
+                        raise
+                    _logger.exception(
+                        "CTP MD deferred startup cleanup failed while preserving startup error"
+                    )
+
+        return True, active_after_call
+
+    def _complete_deferred_startup_cleanup(
+        self, api: Any, spi: Any, native_may_be_live: bool
+    ) -> None:
+        """Finish stop cleanup after the last in-flight startup call returns."""
+
+        if not native_may_be_live:
+            _release_ctp_native_api_immediately(
+                api,
+                spi,
+                state_lock=self._state_lock,
+                pending_api_ids=self._pending_native_join_api_ids,
+            )
+            return
+
+        _retain_live_ctp_native_session(api, spi, None)
+        detach_error: BaseException | None = None
+        try:
+            api.RegisterSpi(None)
+        except BaseException as exc:
+            detach_error = exc
+
+        try:
+            if _ctp_native_join_claimed(api):
+                if _ctp_native_join_returned(api):
+                    if _release_retired_ctp_native_session_after_join(api):
+                        with self._state_lock:
+                            self._pending_native_join_api_ids.discard(id(api))
+            else:
+                self._start_join_observer(api)
+        except BaseException:
+            if detach_error is None:
+                raise
+            _logger.exception(
+                "CTP MD Join observer setup failed after deferred callback detach failure"
+            )
+
+        if detach_error is not None:
+            raise detach_error
 
     def _abort_startup(
         self,
@@ -2002,11 +2233,29 @@ class MdClient:
             self._native_init_started = False
             self._starting_generation = None
             self._lifecycle_generation += 1
+            self._connected = False
+            self._loggedin = False
+            self._clear_active_md_identity_locked()
+            self._login_request_id = None
+            self._login_request_generation = None
+            self._login_request_pending = False
 
         if observe_join:
-            with suppress(Exception):
+            detach_error: BaseException | None = None
+            try:
                 api.RegisterSpi(None)
-            self._start_join_observer(api)
+            except BaseException as exc:
+                detach_error = exc
+            try:
+                self._start_join_observer(api)
+            except BaseException:
+                if detach_error is None:
+                    raise
+                _logger.exception(
+                    "CTP MD Join observer setup failed after startup detach failure"
+                )
+            if detach_error is not None:
+                raise detach_error
         elif release_now:
             _release_ctp_native_api_immediately(
                 api,
@@ -2131,11 +2380,11 @@ class MdClient:
         """
         _check_native_module()
         generation = self._reserve_start_generation()
-        flow = _flow_dir(f"md_{self.broker_id}_{self.user_id}")
+        flow = _flow_dir(f"md_{self._bound_broker_id}_{self._bound_user_id}")
         try:
             api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
             _register_ctp_native_api(api)
-        except Exception:
+        except BaseException:
             self._clear_start_reservation(generation)
             raise
         spi = _MdSpi(self, api)
@@ -2177,7 +2426,7 @@ class MdClient:
                 self._abort_startup(api, spi, generation)
                 return
             invoked, active = self._run_startup_call(
-                api, spi, generation, lambda: api.RegisterFront(self.front)
+                api, spi, generation, lambda: api.RegisterFront(self._bound_front)
             )
             if not invoked or not active:
                 self._abort_startup(api, spi, generation)
@@ -2198,20 +2447,25 @@ class MdClient:
                 # released when the native thread exits.
                 self._start_join_observer(api)
                 return
-        except Exception:
+        except BaseException:
             # Init is a void vendor call, but if a binding raises after it was
             # entered, fail safe and retain until Join proves native shutdown.
-            handled = self._abort_startup(
-                api,
-                spi,
-                generation,
-                native_init_may_be_live=init_invoked,
-            )
-            if init_invoked and not handled:
-                # A concurrent stop may have set the cancellation fence while
-                # Init raised.  Attach the observer whether it already
-                # retained the session or is about to do so.
-                self._start_join_observer(api)
+            try:
+                handled = self._abort_startup(
+                    api,
+                    spi,
+                    generation,
+                    native_init_may_be_live=init_invoked,
+                )
+                if init_invoked and not handled:
+                    # A concurrent stop may have set the cancellation fence
+                    # while Init raised.  Attach the observer whether it
+                    # already retained the session or is about to do so.
+                    self._start_join_observer(api)
+            except BaseException:
+                _logger.exception(
+                    "CTP MD startup cleanup failed while preserving startup error"
+                )
             raise
 
         if block:
@@ -2244,10 +2498,10 @@ class MdClient:
     def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP market-data session without freeing a live SWIG director.
 
-        The vendor macOS framework is unsafe if ``Release()`` races a live
-        ``Join()``.  Detach the native callback first, then retain the API,
-        director and Join thread until Join returns.  Once it has returned,
-        the Join observer releases the retained session immediately.
+        An in-flight startup call is allowed to return before callback
+        unregistration or Release. If Init may have started native threads,
+        retain the API and director until the sole Join returns; the Join
+        observer then releases the retained session.
         """
 
         # Set this before waiting for a native registration call's lock.  It
@@ -2269,6 +2523,10 @@ class MdClient:
             self._starting_generation = None
             self._loggedin = False
             self._connected = False
+            self._clear_active_md_identity_locked()
+            self._login_request_id = None
+            self._login_request_generation = None
+            self._login_request_pending = False
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
@@ -2294,6 +2552,25 @@ class MdClient:
             self._thread = None
             self._join_active = False
             self._native_init_started = False
+
+            # A native startup call may still be inside vendor code.  Keep the
+            # API/SPI alive and defer both callback detachment and Release
+            # until that call returns; releasing concurrently with Init is
+            # unsafe, and detaching concurrently with RegisterSpi can race the
+            # vendor's own callback registration.
+            startup_call_active = self._startup_native_call_refs.get(id(api), 0) > 0
+            if startup_call_active:
+                prior = self._deferred_startup_cleanups.get(id(api))
+                self._deferred_startup_cleanups[id(api)] = (
+                    api,
+                    spi,
+                    native_may_be_live or bool(prior and prior[2]),
+                )
+                if native_may_be_live:
+                    _retain_live_ctp_native_session(api, spi, join_thread)
+
+        if startup_call_active:
+            return True
 
         if join_active:
             # RegisterSpi(None) is the vendor's documented callback
@@ -2352,13 +2629,20 @@ class MdClient:
 def _fence_trader_spi_callback(callback):
     @wraps(callback)
     def guarded(self, *args, **kwargs):
-        with self._c._query_state_lock:
-            if not self._is_current_locked():
+        client = self._c
+        with client._query_state_lock:
+            client._callback_inflight_refs += 1
+            current = self._is_current_locked()
+        try:
+            if not current:
                 return None
-        # Callback bodies take the state lock only while mutating SDK state.
-        # In particular, user callbacks must never run while this lock is held:
-        # they may synchronously start a typed query that needs _query_lock.
-        return callback(self, *args, **kwargs)
+            # Callback bodies take the state lock only while mutating SDK
+            # state. User callbacks may synchronously start a typed query.
+            return callback(self, *args, **kwargs)
+        finally:
+            with client._query_state_lock:
+                client._callback_inflight_refs = max(0, client._callback_inflight_refs - 1)
+                client._maybe_finish_deferred_native_release_locked()
 
     return guarded
 
@@ -2375,6 +2659,439 @@ class _TraderLoginIdentityObservation:
     request_id: int
 
 
+@dataclass
+class _TraderCallbackIngressState:
+    """Process-local side of a durable, opt-in Trader callback owner."""
+
+    owner_handle: Any
+    owner_intent_id: str
+    append_sink: Any
+    session_binder: Callable[..., Any]
+    command_binding_verifier: Callable[..., Any]
+    poison_sink: Callable[..., Any] | None = None
+    phase: str = "PRE_START"
+    sequence: int = 0
+    prelogin_front_seen: bool = False
+    active_session: Any = None
+    login_bind_pending: bool = False
+    pending_login_callback: tuple[Callable[..., Any], Any] | None = None
+    poisoned: bool = False
+    poison_reason: str | None = None
+    native_call_refs: int = 0
+    callback_refs: int = 0
+    command_lease: Any = None
+    current_source_tags: tuple[str, str, str, str, int, int] | None = None
+    current_source_tags_object: Any = None
+    used_command_ids: set[str] = dataclass_field(default_factory=set)
+    retired_sources: list[tuple[Any, Any]] = dataclass_field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CtpManagedNativeCallLeaseV1:
+    """Opaque one-shot pin for a Store-claimed managed native request."""
+
+    _seal: object
+    _owner_handle: Any
+    _binding: Any
+    _api: Any
+    _spi: Any
+    _active_session: Any
+    _source_tags: tuple[str, str, str, str, int, int]
+    _method_name: str
+    _nonce: str
+    _binding_payload_json: str
+    _request_payload_json: str
+
+
+_CTP_MANAGED_NATIVE_CALL_LEASE_SEAL = object()
+_CTP_MANAGED_BINDING_PAYLOAD_KEYS = frozenset(
+    {
+        "binding_type",
+        "owner_intent_id",
+        "account_key",
+        "scope_key",
+        "command_id",
+        "operation",
+        "trading_day",
+        "request_payload_json",
+        "request_payload_sha256",
+        "reservation_managed_intent_id",
+        "managed_action_id",
+        "runtime_order_id",
+        "order_ref",
+        "native_request_id",
+        "native_action_ref",
+        "cancel_target_order_ref",
+        "cancel_target_exchange_id",
+        "cancel_target_order_sys_id",
+        "cancel_target_front_id",
+        "cancel_target_session_id",
+        "session_binding_sha256",
+        "session_generation_id",
+        "dispatch_front_id",
+        "dispatch_session_id",
+        "writer_owner_id",
+        "writer_fencing_token",
+        "expires_at_ns",
+    }
+)
+_CTP_MANAGED_SUBMIT_REQUIRED_FIELDS = frozenset(
+    {
+        "InstrumentID",
+        "OrderRef",
+        "Direction",
+        "CombOffsetFlag",
+        "CombHedgeFlag",
+        "OrderPriceType",
+        "LimitPrice",
+        "VolumeTotalOriginal",
+        "TimeCondition",
+        "ExchangeID",
+    }
+)
+_CTP_MANAGED_SUBMIT_OPTIONAL_FIELDS = frozenset(
+    {
+        "BrokerID",
+        "InvestorID",
+        "UserID",
+        "GTDDate",
+        "VolumeCondition",
+        "MinVolume",
+        "ContingentCondition",
+        "StopPrice",
+        "ForceCloseReason",
+        "IsAutoSuspend",
+        "UserForceClose",
+        "IsSwapOrder",
+        "BusinessUnit",
+        "InvestUnitID",
+        "AccountID",
+        "RequestID",
+    }
+)
+_CTP_MANAGED_CANCEL_REQUIRED_FIELDS = frozenset(
+    {
+        "InstrumentID",
+        "OrderRef",
+        "ExchangeID",
+        "OrderSysID",
+        "FrontID",
+        "SessionID",
+        "ActionFlag",
+        "LimitPrice",
+        "VolumeChange",
+    }
+)
+_CTP_MANAGED_CANCEL_OPTIONAL_FIELDS = frozenset(
+    {
+        "BrokerID",
+        "InvestorID",
+        "UserID",
+        "InvestUnitID",
+        "AccountID",
+        "RequestID",
+        "OrderActionRef",
+    }
+)
+_CTP_MANAGED_PRICE_FIELDS = frozenset({"LimitPrice", "StopPrice"})
+_CTP_MANAGED_INTEGER_FIELDS = frozenset(
+    {
+        "FrontID",
+        "SessionID",
+        "RequestID",
+        "VolumeTotalOriginal",
+        "MinVolume",
+        "IsAutoSuspend",
+        "UserForceClose",
+        "IsSwapOrder",
+        "VolumeChange",
+    }
+)
+_CTP_INGRESS_SAFE_REQUEST_METHODS = frozenset(
+    {
+        "ReqAuthenticate",
+        "ReqUserLogin",
+        "ReqQryTradingAccount",
+        "ReqQryInvestorPosition",
+        "ReqQryOrder",
+        "ReqQryTrade",
+        "ReqQryInstrument",
+        "ReqQryInstrumentMarginRate",
+        "ReqQryInstrumentCommissionRate",
+        "ReqQryOptionInstrTradeCost",
+        "ReqQryOptionInstrCommRate",
+        "ReqQryDepthMarketData",
+        "ReqQrySettlementInfoConfirm",
+        "ReqSettlementInfoConfirm",
+    }
+)
+
+
+def _managed_native_binding_payload(binding: Any, owner_intent_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate a Store-issued native binding and its canonical field payload."""
+
+    if type(binding).__name__ != "CtpManagedNativeCallBindingV1":
+        raise CtpExecutionGateError("ctp_managed_native_binding_untyped")
+    to_payload = getattr(binding, "to_payload", None)
+    if not callable(to_payload):
+        raise CtpExecutionGateError("ctp_managed_native_binding_untyped")
+    try:
+        envelope = to_payload()
+    except Exception as exc:
+        raise CtpExecutionGateError("ctp_managed_native_binding_unreadable") from exc
+    if type(envelope) is not dict or set(envelope) != _CTP_MANAGED_BINDING_PAYLOAD_KEYS:
+        raise CtpExecutionGateError("ctp_managed_native_binding_schema_invalid")
+    if (
+        envelope.get("binding_type") != "ctp_managed_native_call_binding.v1"
+        or envelope.get("owner_intent_id") != owner_intent_id
+        or envelope.get("operation") not in {"SUBMIT", "CANCEL"}
+    ):
+        raise CtpExecutionGateError("ctp_managed_native_binding_identity_invalid")
+    if type(envelope.get("managed_action_id")) is not str or not envelope[
+        "managed_action_id"
+    ].strip():
+        raise CtpExecutionGateError("ctp_managed_native_binding_action_invalid")
+    for name in (
+        "owner_intent_id",
+        "account_key",
+        "scope_key",
+        "command_id",
+        "trading_day",
+        "request_payload_json",
+        "request_payload_sha256",
+        "reservation_managed_intent_id",
+        "managed_action_id",
+        "runtime_order_id",
+        "order_ref",
+        "session_binding_sha256",
+        "session_generation_id",
+        "writer_owner_id",
+    ):
+        value = envelope.get(name)
+        if type(value) is not str or not value or value != value.strip():
+            raise CtpExecutionGateError("ctp_managed_native_binding_text_invalid")
+    for name in (
+        "native_request_id",
+        "dispatch_front_id",
+        "dispatch_session_id",
+        "writer_fencing_token",
+        "expires_at_ns",
+    ):
+        if type(envelope.get(name)) is not int or envelope[name] <= 0:
+            raise CtpExecutionGateError("ctp_managed_native_binding_integer_invalid")
+    digest = envelope["request_payload_sha256"]
+    if re.fullmatch(r"[0-9a-f]{64}", digest, re.ASCII) is None:
+        raise CtpExecutionGateError("ctp_managed_native_binding_digest_invalid")
+    payload_text = envelope["request_payload_json"]
+    try:
+        payload = json.loads(payload_text)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid") from exc
+    if type(payload) is not dict or any(type(key) is not str for key in payload):
+        raise CtpExecutionGateError("ctp_managed_native_request_payload_invalid")
+    canonical_payload = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    if canonical_payload != payload_text or hashlib.sha256(payload_text.encode("utf-8")).hexdigest() != digest:
+        raise CtpExecutionGateError("ctp_managed_native_request_payload_digest_mismatch")
+
+    if envelope["operation"] == "SUBMIT":
+        allowed = _CTP_MANAGED_SUBMIT_REQUIRED_FIELDS | _CTP_MANAGED_SUBMIT_OPTIONAL_FIELDS
+        required = _CTP_MANAGED_SUBMIT_REQUIRED_FIELDS
+    else:
+        allowed = _CTP_MANAGED_CANCEL_REQUIRED_FIELDS | _CTP_MANAGED_CANCEL_OPTIONAL_FIELDS
+        required = _CTP_MANAGED_CANCEL_REQUIRED_FIELDS
+    if not required.issubset(payload) or set(payload) - allowed:
+        raise CtpExecutionGateError("ctp_managed_native_request_payload_fields_invalid")
+    if envelope["operation"] == "CANCEL":
+        target_fields = {
+            "OrderRef": envelope.get("cancel_target_order_ref"),
+            "ExchangeID": envelope.get("cancel_target_exchange_id"),
+            "OrderSysID": envelope.get("cancel_target_order_sys_id"),
+            "FrontID": envelope.get("cancel_target_front_id"),
+            "SessionID": envelope.get("cancel_target_session_id"),
+            "ActionFlag": "0",
+        }
+        if (
+            type(envelope.get("native_action_ref")) is not str
+            or not envelope["native_action_ref"]
+            or envelope["native_action_ref"] != envelope["native_action_ref"].strip()
+            or not envelope["native_action_ref"].isascii()
+            or type(envelope.get("cancel_target_front_id")) is not int
+            or envelope["cancel_target_front_id"] <= 0
+            or type(envelope.get("cancel_target_session_id")) is not int
+            or envelope["cancel_target_session_id"] <= 0
+            or envelope.get("order_ref") != envelope.get("cancel_target_order_ref")
+            or any(
+                type(envelope.get(name)) is not str
+                or not envelope[name]
+                or envelope[name] != envelope[name].strip()
+                or not envelope[name].isascii()
+                for name in (
+                    "cancel_target_order_ref",
+                    "cancel_target_exchange_id",
+                    "cancel_target_order_sys_id",
+                )
+            )
+            or any(
+                _managed_payload_scalar(key, payload.get(key))
+                != _managed_payload_scalar(key, value)
+                for key, value in target_fields.items()
+            )
+            or (
+                "RequestID" in payload
+                and (
+                    type(payload["RequestID"]) is not int
+                    or payload["RequestID"] != envelope["native_request_id"]
+                )
+            )
+            or (
+                "OrderActionRef" in payload
+                and (
+                    type(payload["OrderActionRef"]) is not str
+                    or payload["OrderActionRef"] != envelope["native_action_ref"]
+                )
+            )
+            or payload.get("LimitPrice") not in (0, 0.0)
+            or payload.get("VolumeChange") != 0
+            or type(payload.get("VolumeChange")) is not int
+        ):
+            raise CtpExecutionGateError("ctp_managed_native_cancel_binding_mismatch")
+    else:
+        if (
+            envelope.get("order_ref") != payload.get("OrderRef")
+            or any(
+                envelope.get(name) is not None
+                for name in (
+                    "native_action_ref",
+                    "cancel_target_order_ref",
+                    "cancel_target_exchange_id",
+                    "cancel_target_order_sys_id",
+                    "cancel_target_front_id",
+                    "cancel_target_session_id",
+                )
+            )
+            or (
+                "RequestID" in payload
+                and (
+                    type(payload["RequestID"]) is not int
+                    or payload["RequestID"] != envelope["native_request_id"]
+                )
+            )
+        ):
+            raise CtpExecutionGateError("ctp_managed_native_submit_binding_mismatch")
+    return envelope, payload
+
+
+def _managed_native_field_scalar(name: str, value: Any) -> Any:
+    """Normalize one allowlisted CTP getter without weakening its type."""
+
+    if name in _CTP_MANAGED_PRICE_FIELDS:
+        if type(value) not in (int, float) or (type(value) is float and not math.isfinite(value)):
+            raise CtpExecutionGateError("ctp_managed_native_field_numeric_invalid")
+        try:
+            normalized = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise CtpExecutionGateError("ctp_managed_native_field_numeric_invalid") from exc
+        if not normalized.is_finite():
+            raise CtpExecutionGateError("ctp_managed_native_field_numeric_invalid")
+        return normalized
+    if name in _CTP_MANAGED_INTEGER_FIELDS:
+        if type(value) is not int:
+            raise CtpExecutionGateError("ctp_managed_native_field_integer_invalid")
+        return value
+    if type(value) is not str or not value.isascii() or value != value.strip():
+        raise CtpExecutionGateError("ctp_managed_native_field_text_invalid")
+    return value
+
+
+def _managed_payload_scalar(name: str, value: Any) -> Any:
+    if name in _CTP_MANAGED_PRICE_FIELDS:
+        if type(value) not in (int, float, str) or (
+            type(value) is float and not math.isfinite(value)
+        ):
+            raise CtpExecutionGateError("ctp_managed_native_payload_numeric_invalid")
+        try:
+            normalized = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise CtpExecutionGateError("ctp_managed_native_payload_numeric_invalid") from exc
+        if not normalized.is_finite():
+            raise CtpExecutionGateError("ctp_managed_native_payload_numeric_invalid")
+        return normalized
+    if name in _CTP_MANAGED_INTEGER_FIELDS:
+        if type(value) is not int:
+            raise CtpExecutionGateError("ctp_managed_native_payload_integer_invalid")
+        return value
+    if type(value) is not str or not value.isascii() or value != value.strip():
+        raise CtpExecutionGateError("ctp_managed_native_payload_text_invalid")
+    return value
+
+
+def _copy_managed_native_field(
+    field: Any,
+    payload: dict[str, Any],
+    *,
+    extra_values: Mapping[str, Any] | None = None,
+) -> Any:
+    """Detach, set and getter-verify precisely the fields in the Store payload."""
+
+    values = dict(payload)
+    if extra_values:
+        for name, value in extra_values.items():
+            if name in values and values[name] != value:
+                raise CtpExecutionGateError("ctp_managed_native_field_extra_mismatch")
+            values[name] = value
+    normalized_payload = {
+        name: _managed_payload_scalar(name, value) for name, value in payload.items()
+    }
+    normalized = {name: _managed_payload_scalar(name, value) for name, value in values.items()}
+    try:
+        source_snapshot = {
+            name: _managed_native_field_scalar(name, getattr(field, name))
+            for name in payload
+        }
+        if source_snapshot != normalized_payload:
+            raise CtpExecutionGateError("ctp_managed_native_field_binding_mismatch")
+        detached = type(field)()
+        if detached is field:
+            raise TypeError("native field constructor reused caller field")
+        for name, value in values.items():
+            setter_value = (
+                float(_managed_payload_scalar(name, value))
+                if name in _CTP_MANAGED_PRICE_FIELDS
+                else value
+            )
+            setattr(detached, name, setter_value)
+        actual = {
+            name: _managed_native_field_scalar(name, getattr(detached, name))
+            for name in values
+        }
+    except CtpExecutionGateError:
+        raise
+    except Exception as exc:
+        raise CtpExecutionGateError("ctp_managed_native_field_snapshot_unavailable") from exc
+    if actual != normalized:
+        raise CtpExecutionGateError("ctp_managed_native_field_snapshot_mismatch")
+    return detached
+
+
+def _is_callback_ingress_poison_receipt(receipt: Any, owner_id: str, sequence: int) -> bool:
+    """Accept only the typed, committed poison acknowledgement from the fixed sink."""
+
+    return (
+        type(receipt).__name__ == "CtpTraderCallbackIngressPoisonAckV2"
+        and getattr(receipt, "owner_intent_id", None) == owner_id
+        and getattr(receipt, "durable_state", None) == "POISONED"
+        and type(getattr(receipt, "last_source_sequence", None)) is int
+        and getattr(receipt, "last_source_sequence", None) == sequence
+        and getattr(receipt, "committed", None) is True
+    )
+
+
 @dataclass(frozen=True)
 class _TraderLoginError:
     """Sanitized login identity failure passed to the legacy error callback."""
@@ -2389,6 +3106,10 @@ class _TraderSpi(CThostFtdcTraderSpi):
         self._c = client
         self._native_api = native_api
         self._native_spi_source_id = uuid.uuid4().hex
+        self._native_api_generation: int | None = None
+        self._native_client_epoch: str | None = None
+        self._native_api_source_id: str | None = None
+        self._callback_source_tags: Any = None
 
     def _is_current_locked(self) -> bool:
         if self._native_api is None:
@@ -2418,7 +3139,12 @@ class _TraderSpi(CThostFtdcTraderSpi):
             self._c._record_request("authenticate")
             api = self._c._api
         try:
-            ret = api.ReqAuthenticate(field, request_id)
+            ret = self._c._invoke_session_native_request(
+                api,
+                "ReqAuthenticate",
+                field,
+                request_id,
+            )
         except Exception as exc:
             with self._c._query_state_lock:
                 if (
@@ -2499,7 +3225,15 @@ class _TraderSpi(CThostFtdcTraderSpi):
             return
         api, field, request_id, generation = login_submission
         try:
-            ret = _submit_trader_user_login(api, field, request_id)
+            ret = self._c._invoke_session_native_request(
+                api,
+                "ReqUserLogin",
+                field,
+                request_id,
+                request_submitter=lambda pinned_api, request_args: _submit_trader_user_login(
+                    pinned_api, *request_args
+                ),
+            )
         except Exception as exc:
             with self._c._query_state_lock:
                 if (
@@ -2622,9 +3356,20 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 if error_callback is not None and error_id == 0:
                     error_info = _TraderLoginError(ErrorID=-1, ErrorMsg=failure_reason)
         if login_callback is not None:
-            login_callback(pRspUserLogin)
+            ingress = self._c._callback_ingress
+            if ingress is None:
+                login_callback(pRspUserLogin)
+            else:
+                with self._c._query_state_lock:
+                    ingress.pending_login_callback = (login_callback, pRspUserLogin)
         if error_callback is not None:
             error_callback(error_info)
+
+    @staticmethod
+    def _source_identity_text(value):
+        """Keep only exact nonempty callback strings; never synthesize fields."""
+
+        return value if type(value) is str and value else None
 
     @_fence_trader_spi_callback
     def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
@@ -2807,6 +3552,39 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
 
+def _dispatch_trader_spi_callback(
+    spi: _TraderSpi,
+    callback_name: str,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+    original: Callable[..., Any],
+) -> Any:
+    """Class-level dispatcher shared by managed and ordinary Trader clients."""
+
+    client = getattr(spi, "_c", None)
+    if client is None:
+        return None
+    return client._dispatch_callback_ingress(spi, callback_name, args, kwargs, original)
+
+
+def _ctp_query_callback_name(request_type: str) -> str | None:
+    """Map each SDK query accumulator kind to its one exact callback family."""
+
+    return {
+        "account": "OnRspQryTradingAccount",
+        "positions": "OnRspQryInvestorPosition",
+        "orders": "OnRspQryOrder",
+        "trades": "OnRspQryTrade",
+        "instruments": "OnRspQryInstrument",
+        "depth_market_data": "OnRspQryDepthMarketData",
+        "option_trade_cost": "OnRspQryOptionInstrTradeCost",
+        "option_commission_rate": "OnRspQryOptionInstrCommRate",
+        "margin_rate": "OnRspQryInstrumentMarginRate",
+        "commission_rate": "OnRspQryInstrumentCommissionRate",
+        "settlement_confirmation": "OnRspQrySettlementInfoConfirm",
+    }.get(request_type)
+
+
 class TraderClient:
     """交易客户端封装
 
@@ -2954,10 +3732,81 @@ class TraderClient:
         self._native_callback_consumer_lease: _NativeCallbackEventConsumerLease | None = None
         self._native_callback_legacy_waiters = 0
         self._native_callback_released_consumer_tokens = weakref.WeakSet()
+        self._callback_ingress: _TraderCallbackIngressState | None = None
+        self._managed_native_call_leases: dict[str, CtpManagedNativeCallLeaseV1] = {}
+        self._managed_callback_thread_state = threading.local()
+        self._callback_ingress_deferred_cleanup: tuple[Any, Any, bool, bool] | None = None
+        self._callback_ingress_cleanup_scheduled = False
+        self._native_stop_in_progress = False
+        self._native_request_inflight_refs = 0
+        self._callback_inflight_refs = 0
 
     @property
     def _api(self) -> Any:
         return getattr(self, "_TraderClient__native_api", None)
+
+    def _poison_callback_ingress_locked(
+        self,
+        reason_code: str,
+        *,
+        source_tags: tuple[str, str, str, str, int, int] | None = None,
+    ) -> None:
+        """Latch a one-way managed-source fence while the lifecycle lock is held."""
+
+        state = getattr(self, "_callback_ingress", None)
+        if state is None or state.poisoned:
+            return
+        allowed_reasons = {
+            "owner_stop",
+            "source_replaced",
+            "disconnect",
+            "lifecycle_transition",
+            "source_gap",
+            "queue_overflow",
+            "unknown_source",
+            "unsupported_financial",
+            "capture_incomplete",
+            "callback_handler_error",
+            "append_failure",
+            "append_commit_unknown",
+            "native_call_ambiguous",
+            "native_call_receipt_mismatch",
+            "native_call_lease_failure",
+            "source_identity_mismatch",
+        }
+        if reason_code not in allowed_reasons:
+            reason_code = "source_gap"
+        state.poisoned = True
+        state.phase = "POISONED"
+        state.poison_reason = reason_code
+        state.active_session = None
+        state.login_bind_pending = False
+        managed_leases = getattr(self, "_managed_native_call_leases", {})
+        for nonce, lease in tuple(managed_leases.items()):
+            if state.command_lease is lease:
+                managed_leases.pop(nonce, None)
+                state.command_lease = None
+                state.native_call_refs = max(0, state.native_call_refs - 1)
+        if getattr(self, "_execution_gate_capability", None) is not None:
+            self._revoke_execution_gate_locked(f"ctp_callback_ingress_{reason_code}")
+        poison_sink = state.poison_sink
+        if poison_sink is None:
+            return
+        source_tags = source_tags or state.current_source_tags
+        try:
+            receipt = poison_sink(
+                state.owner_handle,
+                reason_code,
+                source_tags=source_tags,
+                last_sequence=state.sequence,
+            )
+        except BaseException:
+            # The durable owner intent is itself a permanent restart fence.
+            # Keep this process poisoned when its additional poison write is
+            # absent or ambiguous.
+            return
+        if not _is_callback_ingress_poison_receipt(receipt, state.owner_intent_id, state.sequence):
+            state.poison_reason = "append_commit_unknown"
 
     @_api.setter
     def _api(self, value: Any) -> None:
@@ -2977,6 +3826,34 @@ class TraderClient:
             self._native_api_source_id = uuid.uuid4().hex if value is not None else None
             return
         with lock:
+            ingress = getattr(self, "_callback_ingress", None)
+            if ingress is not None and current is not None and current is not value:
+                self._poison_callback_ingress_locked(
+                    "owner_stop" if value is None else "source_replaced"
+                )
+                if not getattr(self, "_native_stop_in_progress", False):
+                    spi = getattr(self, "_spi", None)
+                    join_thread = getattr(self, "_thread", None)
+                    join_claimed = _ctp_native_join_claimed(current)
+                    join_required = bool(
+                        getattr(self, "_join_active", False)
+                        or join_claimed
+                        or (join_thread is not None and join_thread.is_alive())
+                    )
+                    if join_required:
+                        # A replacement can race an active Join just like
+                        # stop(). Keep the exact old director alive in the
+                        # retired-session registry until Join proves return;
+                        # the deferred cleanup tuple only spans callback/Req
+                        # reference drain and may be cleared earlier.
+                        _retain_live_ctp_native_session(current, spi, join_thread)
+                    self._callback_ingress_deferred_cleanup = (
+                        current,
+                        spi,
+                        join_required,
+                        join_claimed,
+                    )
+                    self._maybe_finish_deferred_native_release_locked()
             self._revoke_native_callback_event_consumer_locked(
                 "ctp_native_callback_consumer_native_api_changed"
             )
@@ -3000,6 +3877,961 @@ class TraderClient:
             condition = getattr(self, "_native_callback_event_condition", None)
             if condition is not None:
                 condition.notify_all()
+
+    def install_callback_ingress_sink(
+        self,
+        owner_handle: Any,
+        append_sink: Any,
+        session_binder: Callable[..., Any],
+        command_binding_verifier: Callable[..., Any],
+    ) -> None:
+        """Install the fixed durable callback owner before any native start.
+
+        The caller must first persist a one-shot Store owner intent. The SDK
+        keeps the exact sink, binder, and verifier objects for this client;
+        none can be replaced after installation.
+        """
+
+        owner_intent_id = getattr(owner_handle, "owner_intent_id", None)
+        if (
+            type(owner_intent_id) is not str
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", owner_intent_id, re.ASCII)
+            is None
+        ):
+            raise CtpExecutionGateError("ctp_callback_ingress_owner_handle_invalid")
+        if not callable(getattr(append_sink, "append", None)) or not callable(
+            getattr(append_sink, "poison_ingress", None)
+        ):
+            raise CtpExecutionGateError("ctp_callback_ingress_sink_invalid")
+        if not callable(session_binder) or not callable(command_binding_verifier):
+            raise CtpExecutionGateError("ctp_callback_ingress_binding_invalid")
+
+        with self._query_state_lock:
+            if self._callback_ingress is not None:
+                raise CtpExecutionGateError("ctp_callback_ingress_already_installed")
+            if (
+                self._api is not None
+                or self._starting_generation is not None
+                or self._native_api_generation != 0
+                or self._callback_source_sequence != 0
+                or self._connected
+                or self._login_identity_observation is not None
+                or self._native_callback_consumer_lease is not None
+                or self._native_callback_legacy_waiters != 0
+                or not self._native_callback_events.empty()
+                or not self._order_events.empty()
+                or not self._trade_events.empty()
+                or not self._error_events.empty()
+                or self._pending_native_join_api_ids
+                or self._query_history
+            ):
+                raise CtpExecutionGateError("ctp_callback_ingress_cutover_not_clean")
+
+            state = _TraderCallbackIngressState(
+                owner_handle=owner_handle,
+                owner_intent_id=owner_intent_id,
+                append_sink=append_sink,
+                session_binder=session_binder,
+                command_binding_verifier=command_binding_verifier,
+                poison_sink=append_sink.poison_ingress,
+            )
+            # Install the same code-owned dispatcher on every generated SPI
+            # method. The helper checks exact inventory equality and is
+            # idempotent only for this dispatcher.
+            from .callback_ingress import install_trader_spi_callback_dispatch
+
+            install_trader_spi_callback_dispatch(_TraderSpi, _dispatch_trader_spi_callback)
+            self._callback_ingress = state
+
+    def bind_active_callback_session(self, owner_handle: Any) -> Any:
+        """Bind the installed owner after this SDK accepts terminal login."""
+
+        with self._query_state_lock:
+            state = self._callback_ingress
+            observation = self._login_identity_observation
+            spi = self._spi
+            api = self._api
+            if (
+                state is None
+                or owner_handle is not state.owner_handle
+                or state.owner_intent_id != getattr(owner_handle, "owner_intent_id", None)
+                or state.poisoned
+                or state.active_session is not None
+                or state.phase != "LOGIN_BIND_PENDING"
+                or not state.login_bind_pending
+                or observation is None
+                or observation._seal is not _TRADER_LOGIN_IDENTITY_SEAL
+                or self._current_login_identity_locked() is not observation
+                or spi is None
+                or api is None
+                or spi._native_api is not api
+                or spi._native_api_source_id != self._native_api_source_id
+                or spi._native_api_generation != self._native_api_generation
+                or spi._native_client_epoch != self._native_client_epoch
+                or self._session_native_api is not api
+            ):
+                self._poison_callback_ingress_locked("lifecycle_transition")
+                raise CtpExecutionGateError("ctp_callback_ingress_login_binding_invalid")
+
+            tags = spi._callback_source_tags
+            tag_values = (
+                getattr(tags, "source_instance_id", None),
+                getattr(tags, "native_client_epoch", None),
+                getattr(tags, "native_api_source_id", None),
+                getattr(tags, "native_spi_source_id", None),
+                getattr(tags, "native_api_generation", None),
+                getattr(tags, "connection_generation", None),
+            )
+            if (
+                tags is not state.current_source_tags_object
+                or tag_values != state.current_source_tags
+            ):
+                self._poison_callback_ingress_locked("source_identity_mismatch")
+                raise CtpExecutionGateError("ctp_callback_ingress_source_identity_mismatch")
+            try:
+                session = state.session_binder(
+                    owner_handle,
+                    observation=observation,
+                    source_tags=tags,
+                    high_watermark=state.sequence,
+                )
+            except BaseException as exc:
+                self._poison_callback_ingress_locked("lifecycle_transition")
+                raise CtpExecutionGateError("ctp_callback_ingress_session_bind_failed") from exc
+            expected_tags = (
+                tags.source_instance_id,
+                tags.native_client_epoch,
+                tags.native_api_source_id,
+                tags.native_spi_source_id,
+                tags.native_api_generation,
+                tags.connection_generation,
+            )
+            session_identity_matches = (
+                type(session).__name__ == "CtpCallbackSessionBindingV1"
+                and type(getattr(session, "source_high_watermark", None)) is int
+                and type(getattr(session, "source_connection_generation", None)) is int
+                and type(getattr(session, "connection_generation", None)) is int
+                and type(getattr(session, "native_api_generation", None)) is int
+                and type(getattr(session, "dispatch_front_id", None)) is int
+                and type(getattr(session, "dispatch_session_id", None)) is int
+                and all(
+                    type(getattr(session, name, None)) is str
+                    and bool(getattr(session, name, None))
+                    for name in (
+                        "owner_intent_id",
+                        "account_key",
+                        "scope_key",
+                        "trading_day",
+                        "session_generation_id",
+                        "source_instance_id",
+                        "native_client_epoch",
+                        "native_api_source_id",
+                        "native_spi_source_id",
+                        "session_binding_sha256",
+                    )
+                )
+                and getattr(session, "owner_intent_id", None) == state.owner_intent_id
+                and getattr(session, "source_instance_id", None) == tags.source_instance_id
+                and getattr(session, "native_client_epoch", None) == tags.native_client_epoch
+                and getattr(session, "native_api_source_id", None) == tags.native_api_source_id
+                and getattr(session, "native_spi_source_id", None) == tags.native_spi_source_id
+                and getattr(session, "native_api_generation", None)
+                == tags.native_api_generation
+                and getattr(session, "connection_generation", None)
+                == observation.connection_generation
+                and getattr(session, "source_high_watermark", None) == state.sequence
+                and getattr(session, "trading_day", None) == observation.trading_day
+                and getattr(session, "dispatch_front_id", None) == self._front_id
+                and getattr(session, "dispatch_session_id", None) == self._session_id
+                and type(getattr(session, "session_binding_sha256", None)) is str
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    getattr(session, "session_binding_sha256", ""),
+                    re.ASCII,
+                )
+                is not None
+            )
+            if not session_identity_matches:
+                self._poison_callback_ingress_locked("lifecycle_transition")
+                raise CtpExecutionGateError("ctp_callback_ingress_session_bind_unconfirmed")
+            source_tags_tuple = expected_tags
+            if tuple(
+                getattr(session, name, None)
+                for name in (
+                    "source_instance_id",
+                    "native_client_epoch",
+                    "native_api_source_id",
+                    "native_spi_source_id",
+                    "native_api_generation",
+                    "source_connection_generation",
+                )
+            ) != source_tags_tuple:
+                self._poison_callback_ingress_locked("source_identity_mismatch")
+                raise CtpExecutionGateError("ctp_callback_ingress_session_source_mismatch")
+            state.active_session = session
+            state.phase = "ACTIVE"
+            state.login_bind_pending = False
+            return session
+
+    def _invoke_session_native_request(
+        self,
+        api: Any,
+        method_name: str,
+        *args: Any,
+        request_submitter: Callable[[Any, tuple[Any, ...]], Any] | None = None,
+        settlement_authorization: Any = None,
+    ) -> Any:
+        """Invoke a pinned session Req with every SDK lock released.
+
+        This internal lease is limited to authentication, login, and read-only
+        queries. Managed order/action sends use their Store-issued one-shot
+        `CtpManagedNativeCallLeaseV1` instead.
+        """
+
+        if not method_name.startswith("Req"):
+            raise CtpExecutionGateError("ctp_managed_native_request_kind_blocked")
+        with self._query_state_lock:
+            state = self._callback_ingress
+            if api is None or self._api is not api or (state is not None and self._spi is None):
+                if state is not None:
+                    self._poison_callback_ingress_locked("source_identity_mismatch")
+                raise CtpExecutionGateError("ctp_managed_native_request_source_mismatch")
+            if state is not None:
+                if state.poisoned or state.phase not in {"PRE_LOGIN", "ACTIVE"}:
+                    raise CtpExecutionGateError("ctp_callback_ingress_owner_poisoned")
+                if method_name not in _CTP_INGRESS_SAFE_REQUEST_METHODS:
+                    self._poison_callback_ingress_locked("unsupported_financial")
+                    raise CtpExecutionGateError("ctp_callback_ingress_native_request_unsupported")
+                if method_name in {"ReqAuthenticate", "ReqUserLogin"}:
+                    if state.phase != "PRE_LOGIN" or state.active_session is not None:
+                        self._poison_callback_ingress_locked("lifecycle_transition")
+                        raise CtpExecutionGateError("ctp_callback_ingress_lifecycle_request_invalid")
+                elif state.phase != "ACTIVE" or state.active_session is None:
+                    self._poison_callback_ingress_locked("lifecycle_transition")
+                    raise CtpExecutionGateError("ctp_callback_ingress_query_before_active")
+                if method_name == "ReqSettlementInfoConfirm":
+                    if (
+                        type(settlement_authorization) is not _CtpSettlementAuthorization
+                        or settlement_authorization._seal is not _CTP_EXECUTION_AUTHORIZATION_SEAL
+                        or settlement_authorization._client_ref() is not self
+                        or settlement_authorization._used is not True
+                        or settlement_authorization._account_fingerprint
+                        != self._account_fingerprint
+                        or settlement_authorization._trading_day != self._trading_day
+                        or settlement_authorization._connection_generation
+                        != self._connection_generation
+                        or len(args) < 2
+                        or type(args[1]) is not int
+                        or args[1] != self._settlement_request_id
+                    ):
+                        raise CtpExecutionGateError("ctp_settlement_authorization_required")
+                    if state.command_lease is not None:
+                        raise CtpExecutionGateError("ctp_native_request_inflight")
+                    state.command_lease = settlement_authorization
+                spi = self._spi
+                if (
+                    spi._native_api is not api
+                    or spi._callback_source_tags is None
+                    or spi._callback_source_tags.native_api_generation != self._native_api_generation
+                    or spi._callback_source_tags.native_api_source_id != self._native_api_source_id
+                ):
+                    self._poison_callback_ingress_locked("source_identity_mismatch")
+                    raise CtpExecutionGateError("ctp_callback_ingress_source_identity_mismatch")
+            else:
+                spi = self._spi
+            method = None
+            if request_submitter is None:
+                try:
+                    method = getattr(api, method_name, None)
+                except BaseException:
+                    if state is not None:
+                        self._poison_callback_ingress_locked("native_call_lease_failure")
+                    raise
+                if not callable(method):
+                    if state is not None:
+                        self._poison_callback_ingress_locked("native_call_lease_failure")
+                    raise CtpExecutionGateError("ctp_native_request_method_unavailable")
+            elif not callable(request_submitter):
+                if state is not None:
+                    self._poison_callback_ingress_locked("native_call_lease_failure")
+                raise CtpExecutionGateError("ctp_native_request_submitter_unavailable")
+            if state is not None:
+                state.native_call_refs += 1
+            self._native_request_inflight_refs += 1
+
+        call_failed = False
+        invalid_return_type = False
+        try:
+            if request_submitter is None:
+                result = method(*args)
+            else:
+                result = request_submitter(api, args)
+        except BaseException:
+            call_failed = True
+            raise
+        finally:
+            with self._query_state_lock:
+                self._native_request_inflight_refs = max(
+                    0, self._native_request_inflight_refs - 1
+                )
+                if state is not None:
+                    state.native_call_refs -= 1
+                    if state.command_lease is settlement_authorization:
+                        state.command_lease = None
+                    if call_failed:
+                        self._poison_callback_ingress_locked("native_call_ambiguous")
+                    elif type(result) is not int:
+                        invalid_return_type = True
+                        self._poison_callback_ingress_locked("native_call_ambiguous")
+                    elif result != 0 and method_name in {"ReqAuthenticate", "ReqUserLogin"}:
+                        self._poison_callback_ingress_locked("lifecycle_transition")
+                self._maybe_finish_deferred_native_release_locked()
+        if invalid_return_type:
+            raise CtpExecutionGateError("ctp_callback_ingress_native_request_result_invalid")
+        return result
+
+    def acquire_managed_native_call_lease(
+        self,
+        owner_handle: Any,
+        binding: Any,
+    ) -> CtpManagedNativeCallLeaseV1:
+        """Pin the exact active API/SPI for one Store-claimed command call."""
+
+        with self._query_state_lock:
+            state = self._callback_ingress
+            if (
+                state is None
+                or owner_handle is not state.owner_handle
+                or state.poisoned
+                or state.phase != "ACTIVE"
+                or state.active_session is None
+                or state.command_lease is not None
+                or state.native_call_refs != 0
+                or self._native_request_inflight_refs != 0
+            ):
+                raise CtpExecutionGateError("ctp_managed_native_call_owner_unavailable")
+            api = self._api
+            spi = self._spi
+            tags = getattr(spi, "_callback_source_tags", None) if spi is not None else None
+            if (
+                api is None
+                or spi is None
+                or spi._native_api is not api
+                or tags is None
+                or tags != state.current_source_tags_object
+                or self._session_native_api is not api
+            ):
+                self._poison_callback_ingress_locked("source_identity_mismatch")
+                raise CtpExecutionGateError("ctp_managed_native_call_source_mismatch")
+
+            try:
+                verified = state.command_binding_verifier(owner_handle, binding)
+            except BaseException as exc:
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                raise CtpExecutionGateError("ctp_managed_native_call_binding_rejected") from exc
+            if verified is not binding:
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                raise CtpExecutionGateError("ctp_managed_native_call_binding_rejected")
+            try:
+                envelope, payload = _managed_native_binding_payload(
+                    binding,
+                    state.owner_intent_id,
+                )
+            except Exception as exc:
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                if isinstance(exc, CtpExecutionGateError):
+                    raise
+                raise CtpExecutionGateError(
+                    "ctp_managed_native_call_binding_invalid"
+                ) from exc
+            session = state.active_session
+            session_values = {
+                "account_key": getattr(session, "account_key", None),
+                "scope_key": getattr(session, "scope_key", None),
+                "trading_day": getattr(session, "trading_day", None),
+                "session_binding_sha256": getattr(session, "session_binding_sha256", None),
+                "session_generation_id": getattr(session, "session_generation_id", None),
+                "dispatch_front_id": getattr(session, "dispatch_front_id", None),
+                "dispatch_session_id": getattr(session, "dispatch_session_id", None),
+            }
+            if (
+                any(envelope.get(name) != value for name, value in session_values.items())
+                or envelope["expires_at_ns"] <= time.time_ns()
+                or envelope["operation"] not in {"SUBMIT", "CANCEL"}
+                or (
+                    envelope["operation"] == "SUBMIT"
+                    and envelope["native_action_ref"] is not None
+                )
+                or (
+                    envelope["operation"] == "CANCEL"
+                    and (
+                        type(envelope["managed_action_id"]) is not str
+                        or not envelope["managed_action_id"]
+                    )
+                )
+            ):
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                raise CtpExecutionGateError("ctp_managed_native_call_binding_session_mismatch")
+
+            source_tag_tuple = (
+                tags.source_instance_id,
+                tags.native_client_epoch,
+                tags.native_api_source_id,
+                tags.native_spi_source_id,
+                tags.native_api_generation,
+                tags.connection_generation,
+            )
+            if (
+                getattr(session, "source_instance_id", None) != source_tag_tuple[0]
+                or getattr(session, "native_client_epoch", None) != source_tag_tuple[1]
+                or getattr(session, "native_api_source_id", None) != source_tag_tuple[2]
+                or getattr(session, "native_spi_source_id", None) != source_tag_tuple[3]
+                or getattr(session, "native_api_generation", None) != source_tag_tuple[4]
+                or getattr(session, "source_connection_generation", None) != source_tag_tuple[5]
+                or getattr(session, "connection_generation", None) != self._connection_generation
+                or type(getattr(session, "source_high_watermark", None)) is not int
+                or session.source_high_watermark > state.sequence
+            ):
+                self._poison_callback_ingress_locked("source_identity_mismatch")
+                raise CtpExecutionGateError("ctp_managed_native_call_session_source_mismatch")
+
+            used_commands = getattr(state, "used_command_ids", None)
+            if used_commands is None:
+                state.used_command_ids = set()
+                used_commands = state.used_command_ids
+            command_id = envelope["command_id"]
+            if command_id in used_commands:
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                raise CtpExecutionGateError("ctp_managed_native_call_binding_reused")
+            operation = envelope["operation"]
+            method_name = "ReqOrderInsert" if operation == "SUBMIT" else "ReqOrderAction"
+            lease = CtpManagedNativeCallLeaseV1(
+                _seal=_CTP_MANAGED_NATIVE_CALL_LEASE_SEAL,
+                _owner_handle=owner_handle,
+                _binding=binding,
+                _api=api,
+                _spi=spi,
+                _active_session=session,
+                _source_tags=source_tag_tuple,
+                _method_name=method_name,
+                _nonce=uuid.uuid4().hex,
+                _binding_payload_json=json.dumps(
+                    envelope,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ),
+                _request_payload_json=envelope["request_payload_json"],
+            )
+            used_commands.add(command_id)
+            state.command_lease = lease
+            state.native_call_refs += 1
+            self._managed_native_call_leases[lease._nonce] = lease
+            return lease
+
+    def release_managed_native_call_lease(self, lease: CtpManagedNativeCallLeaseV1) -> None:
+        """Poison and retire an acquired lease that was not sent."""
+
+        with self._query_state_lock:
+            state = self._callback_ingress
+            current = self._managed_native_call_leases.get(
+                getattr(lease, "_nonce", "")
+            )
+            if (
+                state is None
+                or current is not lease
+                or lease._seal is not _CTP_MANAGED_NATIVE_CALL_LEASE_SEAL
+            ):
+                raise CtpExecutionGateError("ctp_managed_native_call_lease_invalid")
+            self._managed_native_call_leases.pop(lease._nonce, None)
+            state.command_lease = None
+            state.native_call_refs = max(0, state.native_call_refs - 1)
+            self._poison_callback_ingress_locked("native_call_lease_failure")
+            self._maybe_finish_deferred_native_release_locked()
+
+    def _submit_with_managed_native_call_lease(
+        self,
+        lease: CtpManagedNativeCallLeaseV1,
+        field: Any,
+        request_id: int,
+        *,
+        method_name: str,
+    ) -> Any:
+        with self._query_state_lock:
+            state = self._callback_ingress
+            current = self._managed_native_call_leases.get(
+                getattr(lease, "_nonce", "")
+            )
+            if (
+                state is None
+                or current is not lease
+                or state.command_lease is not lease
+                or lease._seal is not _CTP_MANAGED_NATIVE_CALL_LEASE_SEAL
+                or lease._owner_handle is not state.owner_handle
+                or state.poisoned
+                or state.phase != "ACTIVE"
+                or state.active_session is not lease._active_session
+                or self._api is not lease._api
+                or self._spi is not lease._spi
+                or getattr(lease._spi, "_callback_source_tags", None) is None
+                or (
+                    getattr(lease._spi, "_callback_source_tags", None)
+                    != getattr(state, "current_source_tags_object", None)
+                )
+                or lease._source_tags
+                != (
+                    getattr(lease._spi._callback_source_tags, "source_instance_id", None),
+                    getattr(lease._spi._callback_source_tags, "native_client_epoch", None),
+                    getattr(lease._spi._callback_source_tags, "native_api_source_id", None),
+                    getattr(lease._spi._callback_source_tags, "native_spi_source_id", None),
+                    getattr(lease._spi._callback_source_tags, "native_api_generation", None),
+                    getattr(lease._spi._callback_source_tags, "connection_generation", None),
+                )
+            ):
+                if state is not None and current is lease:
+                    self._managed_native_call_leases.pop(lease._nonce, None)
+                    if state.command_lease is lease:
+                        state.command_lease = None
+                    state.native_call_refs = max(0, state.native_call_refs - 1)
+                    self._poison_callback_ingress_locked("source_identity_mismatch")
+                    self._maybe_finish_deferred_native_release_locked()
+                raise CtpExecutionGateError("ctp_managed_native_call_lease_invalid")
+
+            self._managed_native_call_leases.pop(lease._nonce, None)
+            state.command_lease = None
+            self._native_request_inflight_refs += 1
+            try:
+                binding = lease._binding
+                envelope, payload = _managed_native_binding_payload(
+                    binding,
+                    state.owner_intent_id,
+                )
+                if (
+                    envelope["operation"]
+                    != ("SUBMIT" if method_name == "ReqOrderInsert" else "CANCEL")
+                    or method_name != lease._method_name
+                    or envelope["expires_at_ns"] <= time.time_ns()
+                    or json.dumps(
+                        envelope,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                        allow_nan=False,
+                    )
+                    != lease._binding_payload_json
+                    or envelope["request_payload_json"] != lease._request_payload_json
+                    or type(request_id) is not int
+                    or request_id != envelope["native_request_id"]
+                ):
+                    raise CtpExecutionGateError("ctp_managed_native_call_binding_changed")
+                detached_extras: dict[str, Any] = {}
+                if envelope["operation"] == "CANCEL":
+                    detached_extras = {
+                        "RequestID": envelope["native_request_id"],
+                        "OrderActionRef": envelope["native_action_ref"],
+                    }
+                for field_name, expected_identity in (
+                    ("BrokerID", self._bound_broker_id),
+                    ("InvestorID", self._bound_user_id),
+                    ("UserID", self._bound_user_id),
+                ):
+                    if field_name in payload and payload[field_name] != expected_identity:
+                        raise CtpExecutionGateError(
+                            "ctp_managed_native_field_account_mismatch"
+                        )
+                detached = _copy_managed_native_field(
+                    field,
+                    payload,
+                    extra_values=detached_extras,
+                )
+                if envelope["operation"] == "CANCEL":
+                    if (
+                        _managed_native_field_scalar("RequestID", detached.RequestID)
+                        != envelope["native_request_id"]
+                        or _managed_native_field_scalar(
+                            "OrderActionRef", detached.OrderActionRef
+                        )
+                        != envelope["native_action_ref"]
+                        or payload.get("OrderRef") != envelope["cancel_target_order_ref"]
+                        or payload.get("ExchangeID")
+                        != envelope["cancel_target_exchange_id"]
+                        or payload.get("OrderSysID")
+                        != envelope["cancel_target_order_sys_id"]
+                        or payload.get("FrontID") != envelope["cancel_target_front_id"]
+                        or payload.get("SessionID") != envelope["cancel_target_session_id"]
+                        or payload.get("ActionFlag") != "0"
+                    ):
+                        raise CtpExecutionGateError("ctp_managed_native_cancel_field_mismatch")
+                native_method = getattr(lease._api, method_name, None)
+                if not callable(native_method):
+                    raise CtpExecutionGateError("ctp_managed_native_call_method_unavailable")
+            except BaseException:
+                state.native_call_refs = max(0, state.native_call_refs - 1)
+                self._native_request_inflight_refs = max(
+                    0, self._native_request_inflight_refs - 1
+                )
+                self._poison_callback_ingress_locked("native_call_lease_failure")
+                self._maybe_finish_deferred_native_release_locked()
+                raise
+
+        call_failed = False
+        invalid_result = False
+        lifecycle_invalid = False
+        try:
+            result = native_method(detached, request_id)
+        except BaseException:
+            call_failed = True
+            raise
+        finally:
+            with self._query_state_lock:
+                state.native_call_refs = max(0, state.native_call_refs - 1)
+                self._native_request_inflight_refs = max(0, self._native_request_inflight_refs - 1)
+                invalid_result = not call_failed and (type(result) is not int or result != 0)
+                lifecycle_invalid = (
+                    self._callback_ingress is not state
+                    or state.poisoned
+                    or state.phase != "ACTIVE"
+                    or state.owner_handle is not lease._owner_handle
+                    or state.active_session is not lease._active_session
+                    or self._api is not lease._api
+                    or self._spi is not lease._spi
+                    or getattr(lease._spi, "_callback_source_tags", None)
+                    != getattr(state, "current_source_tags_object", None)
+                )
+                if call_failed or invalid_result or lifecycle_invalid:
+                    self._poison_callback_ingress_locked("native_call_ambiguous")
+                self._maybe_finish_deferred_native_release_locked()
+        if invalid_result or lifecycle_invalid:
+            raise CtpExecutionGateError("ctp_managed_native_call_result_ambiguous")
+        return result
+
+    def submit_order_insert_with_lease(
+        self,
+        lease: CtpManagedNativeCallLeaseV1,
+        field: Any,
+        request_id: int,
+    ) -> Any:
+        """Invoke exactly one pinned ReqOrderInsert without holding SDK locks."""
+
+        return self._submit_with_managed_native_call_lease(
+            lease,
+            field,
+            request_id,
+            method_name="ReqOrderInsert",
+        )
+
+    def submit_order_action_with_lease(
+        self,
+        lease: CtpManagedNativeCallLeaseV1,
+        field: Any,
+        request_id: int,
+    ) -> Any:
+        """Invoke exactly one pinned ReqOrderAction without holding SDK locks."""
+
+        return self._submit_with_managed_native_call_lease(
+            lease,
+            field,
+            request_id,
+            method_name="ReqOrderAction",
+        )
+
+    def _dispatch_callback_ingress(
+        self,
+        spi: _TraderSpi,
+        callback_name: str,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+        original: Callable[..., Any],
+    ) -> Any:
+        """Append one exact-origin callback before invoking its old handler."""
+
+        from .callback_ingress import (
+            CtpTraderCallbackClass,
+            CtpTraderCallbackDisposition,
+            CtpTraderCallbackIngressAckV2,
+            CtpTraderCallbackPhase,
+            CtpTraderCallbackSourceTagsV2,
+            build_callback_ingress_record_v2,
+            callback_ingress_disposition,
+            validate_expected_prelogin_step,
+        )
+
+        with self._query_state_lock:
+            state = self._callback_ingress
+            if state is not None:
+                state.callback_refs += 1
+        if state is None:
+            original(spi, *args, **dict(kwargs))
+            return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+        record = None
+        disposition = CtpTraderCallbackDisposition.POISON
+        call_original_on_poison = callback_name == "OnFrontDisconnected"
+        callback_failed = False
+        try:
+            with self._query_state_lock:
+                if self._callback_ingress is not state or state.poisoned:
+                    return _CALLBACK_INGRESS_SKIP_ORIGINAL
+                state = self._callback_ingress
+                if state is None:
+                    callback_without_ingress = True
+                    source_tags = None
+                else:
+                    callback_without_ingress = False
+                    source_tags = getattr(spi, "_callback_source_tags", None)
+                if callback_without_ingress:
+                    pass
+                elif type(source_tags) is not CtpTraderCallbackSourceTagsV2:
+                    self._poison_callback_ingress_locked("source_identity_mismatch")
+                    return _CALLBACK_INGRESS_SKIP_ORIGINAL
+                else:
+                    if state.poisoned or state.phase == "POISONED":
+                        phase = CtpTraderCallbackPhase.POISONED
+                    elif state.phase == "ACTIVE":
+                        phase = CtpTraderCallbackPhase.ACTIVE
+                    else:
+                        phase = CtpTraderCallbackPhase.PRE_LOGIN
+
+                    state.sequence += 1
+                    try:
+                        record = build_callback_ingress_record_v2(
+                            owner_intent_id=state.owner_intent_id,
+                            callback_name=callback_name,
+                            source_phase=phase,
+                            source_tags=source_tags,
+                            source_sequence=state.sequence,
+                            callback_monotonic_ns=time.monotonic_ns(),
+                            connection_generation=self._connection_generation,
+                            args=args,
+                            kwargs=kwargs,
+                        )
+                    except BaseException:
+                        self._poison_callback_ingress_locked("capture_incomplete")
+                        return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+                    if not record.capture_complete:
+                        self._poison_callback_ingress_locked("capture_incomplete")
+                        return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+                    origin_tags = (
+                        source_tags.source_instance_id,
+                        source_tags.native_client_epoch,
+                        source_tags.native_api_source_id,
+                        source_tags.native_spi_source_id,
+                        source_tags.native_api_generation,
+                        source_tags.connection_generation,
+                    )
+                    current_origin = (
+                        self._callback_source_instance_id,
+                        self._native_client_epoch,
+                        self._native_api_source_id,
+                        getattr(self._spi, "_native_spi_source_id", None),
+                        self._native_api_generation,
+                        getattr(
+                            getattr(self._spi, "_callback_source_tags", None),
+                            "connection_generation",
+                            None,
+                        ),
+                    )
+                    poison_reason = None
+                    if (
+                        origin_tags != current_origin
+                        or spi._native_api is not self._api
+                        or spi is not self._spi
+                        or origin_tags != state.current_source_tags
+                    ):
+                        poison_reason = "source_identity_mismatch"
+
+                    active_query_request_id = None
+                    active_query_kind = None
+                    if phase is CtpTraderCallbackPhase.ACTIVE:
+                        request_id_slot = 1 if callback_name == "OnRspError" else 2
+                        raw_request_id = record.scalar_argument(request_id_slot)
+                        accumulator = None
+                        if type(raw_request_id) is int:
+                            accumulator = self._query_history.get(raw_request_id)
+                        if accumulator is not None:
+                            active_query_request_id = raw_request_id
+                            active_query_kind = _ctp_query_callback_name(
+                                accumulator.request_type
+                            )
+                        if callback_name != "OnRspError" and active_query_kind != callback_name:
+                            active_query_request_id = None
+                            active_query_kind = None
+
+                    disposition = callback_ingress_disposition(
+                        record,
+                        active_query_request_id=active_query_request_id,
+                        active_query_kind=active_query_kind,
+                    )
+                    expected_prelogin = False
+                    if phase is CtpTraderCallbackPhase.PRE_LOGIN:
+                        if callback_name == "OnFrontConnected":
+                            expected_prelogin = (
+                                not state.prelogin_front_seen
+                                and self._connection_generation == 0
+                                and self._connected is False
+                            )
+                        elif callback_name == "OnRspAuthenticate":
+                            expected_prelogin = (
+                                state.prelogin_front_seen
+                                and self._authentication_state == "authenticating"
+                                and self._authentication_request_id == record.scalar_argument(2)
+                                and self._authentication_connection_generation
+                                == self._connection_generation
+                                and validate_expected_prelogin_step(
+                                    record,
+                                    expected_callback_name=callback_name,
+                                    expected_request_id=self._authentication_request_id,
+                                    bound_broker_id=self._bound_broker_id,
+                                    bound_user_id=self._bound_user_id,
+                                )
+                            )
+                        elif callback_name == "OnRspUserLogin":
+                            expected_prelogin = (
+                                state.prelogin_front_seen
+                                and self._authentication_state == "authenticated"
+                                and self._login_state == "logging_in"
+                                and self._login_request_id == record.scalar_argument(2)
+                                and self._login_connection_generation == self._connection_generation
+                                and validate_expected_prelogin_step(
+                                    record,
+                                    expected_callback_name=callback_name,
+                                    expected_request_id=self._login_request_id,
+                                    bound_broker_id=self._bound_broker_id,
+                                    bound_user_id=self._bound_user_id,
+                                )
+                            )
+                        if not expected_prelogin:
+                            disposition = CtpTraderCallbackDisposition.POISON
+                        elif callback_name == "OnFrontConnected":
+                            state.prelogin_front_seen = True
+                        elif callback_name == "OnRspUserLogin":
+                            state.phase = "LOGIN_BIND_PENDING"
+                            state.login_bind_pending = True
+                        elif callback_name == "OnRspAuthenticate":
+                            state.phase = "PRE_LOGIN"
+
+                    try:
+                        ack = state.append_sink.append(record)
+                        if type(ack) is not CtpTraderCallbackIngressAckV2:
+                            raise TypeError("callback ingress sink returned an untyped acknowledgement")
+                        ack.validate_for(record)
+                    except BaseException:
+                        self._poison_callback_ingress_locked("append_commit_unknown")
+                        return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+                    if poison_reason is not None:
+                        disposition = CtpTraderCallbackDisposition.POISON
+                    if disposition is CtpTraderCallbackDisposition.POISON:
+                        reason = poison_reason or (
+                            "disconnect"
+                            if callback_name == "OnFrontDisconnected"
+                            else "unsupported_financial"
+                            if record.callback_class is CtpTraderCallbackClass.UNSUPPORTED_FINANCIAL
+                            else "lifecycle_transition"
+                        )
+                        self._poison_callback_ingress_locked(reason, source_tags=origin_tags)
+                        call_original_on_poison = callback_name == "OnFrontDisconnected"
+
+            if disposition is CtpTraderCallbackDisposition.POISON and not call_original_on_poison:
+                return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+            try:
+                original(spi, *args, **dict(kwargs))
+            except BaseException:
+                with self._query_state_lock:
+                    self._poison_callback_ingress_locked("callback_handler_error")
+                callback_failed = True
+                return _CALLBACK_INGRESS_SKIP_ORIGINAL
+
+            pending_login_callback = None
+            if callback_name == "OnRspUserLogin" and state.login_bind_pending:
+                try:
+                    self.bind_active_callback_session(state.owner_handle)
+                except BaseException:
+                    callback_failed = True
+                    return _CALLBACK_INGRESS_SKIP_ORIGINAL
+                with self._query_state_lock:
+                    pending_login_callback = state.pending_login_callback
+                    state.pending_login_callback = None
+                if pending_login_callback is not None:
+                    callback, field = pending_login_callback
+                    try:
+                        callback(field)
+                    except BaseException:
+                        with self._query_state_lock:
+                            self._poison_callback_ingress_locked("callback_handler_error")
+                        callback_failed = True
+                        return _CALLBACK_INGRESS_SKIP_ORIGINAL
+            return _CALLBACK_INGRESS_SKIP_ORIGINAL
+        finally:
+            with self._query_state_lock:
+                current_state = self._callback_ingress
+                if current_state is not None:
+                    current_state.callback_refs = max(0, current_state.callback_refs - 1)
+                    if callback_failed:
+                        self._poison_callback_ingress_locked("callback_handler_error")
+                    self._maybe_finish_deferred_native_release_locked()
+
+    def _maybe_finish_deferred_native_release_locked(self) -> None:
+        state = self._callback_ingress
+        if (
+            (state is not None and state.native_call_refs != 0)
+            or (state is not None and state.callback_refs != 0)
+            or self._callback_ingress_deferred_cleanup is None
+            or self._callback_ingress_cleanup_scheduled
+            or self._native_request_inflight_refs != 0
+            or self._callback_inflight_refs != 0
+        ):
+            return
+        self._callback_ingress_cleanup_scheduled = True
+        thread = threading.Thread(
+            target=self._finish_deferred_native_release,
+            name="bt-api-ctp-ingress-release",
+            daemon=True,
+        )
+        thread.start()
+
+    def _finish_deferred_native_release(self) -> None:
+        with self._query_state_lock:
+            state = self._callback_ingress
+            pending = self._callback_ingress_deferred_cleanup
+            if (
+                pending is None
+                or (state is not None and state.native_call_refs != 0)
+                or (state is not None and state.callback_refs != 0)
+                or self._native_request_inflight_refs != 0
+                or self._callback_inflight_refs != 0
+            ):
+                self._callback_ingress_cleanup_scheduled = False
+                return
+            api, spi, join_required, join_claimed = pending
+            self._callback_ingress_deferred_cleanup = None
+            self._callback_ingress_cleanup_scheduled = False
+
+        # Native lifecycle operations run without SDK locks. The retained
+        # exact API/SPI pair remains pinned until both callback and request
+        # references have drained.
+        if join_required or join_claimed:
+            with suppress(Exception):
+                api.RegisterSpi(None)
+            if _ctp_native_join_returned(api):
+                if not _release_retired_ctp_native_session_after_join(api):
+                    _release_ctp_native_api_immediately(
+                        api,
+                        spi,
+                        state_lock=self._query_state_lock,
+                        pending_api_ids=self._pending_native_join_api_ids,
+                    )
+            return
+        _release_ctp_native_api_immediately(
+            api,
+            spi,
+            state_lock=self._query_state_lock,
+            pending_api_ids=self._pending_native_join_api_ids,
+        )
 
     def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
         """Check that public compatibility attributes still name this session.
@@ -3080,6 +4912,8 @@ class TraderClient:
         """Resolve a cached public Req* callable at invocation time."""
 
         with self._query_state_lock:
+            if self._callback_ingress is not None:
+                raise CtpExecutionGateError("ctp_callback_ingress_typed_request_required")
             is_read_query = name.startswith(("ReqQry", "ReqQuery"))
             if not is_read_query:
                 # Never expose native request writes through the public API
@@ -3714,16 +5548,19 @@ class TraderClient:
         """Submit one order under the same lock as the final managed-gate check."""
 
         with self._query_state_lock:
+            if self._callback_ingress is not None:
+                raise CtpExecutionGateError("ctp_managed_native_call_lease_required")
             self._require_execution_write_locked(
                 execution_capability,
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
             )
             self._require_native_field_identity_locked(field, require_user_id=True)
-            if self._api is None:
+            api = self._api
+            if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             self._record_request("order_insert")
-            return self._api.ReqOrderInsert(field, request_id)
+        return self._invoke_session_native_request(api, "ReqOrderInsert", field, request_id)
 
     def submit_order_action(
         self,
@@ -3751,6 +5588,8 @@ class TraderClient:
         )
 
         with self._query_state_lock:
+            if self._callback_ingress is not None:
+                raise CtpExecutionGateError("ctp_managed_native_call_lease_required")
             if type(request_id) is not int or request_id <= 0:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_invalid")
             if managed_cancel:
@@ -3839,21 +5678,30 @@ class TraderClient:
                 # provider saw the request, so this action ID is never retried.
                 self._managed_cancel_actions_seen.add(managed_cancel_intent_id)
             self._record_request("order_action")
-            try:
-                ret = api.ReqOrderAction(request_field, request_id)
-            except Exception:
-                self._order_action_history[key] = replace(
-                    self._order_action_history[key], reason="native_submit_exception"
-                )
-                raise
-            try:
-                submit_code = int(ret) if ret is not None else None
-            except (TypeError, ValueError, OverflowError):
-                submit_code = None
-            self._order_action_history[key] = replace(
-                self._order_action_history[key], submit_code=submit_code
+        try:
+            ret = self._invoke_session_native_request(
+                api,
+                "ReqOrderAction",
+                request_field,
+                request_id,
             )
-            return ret
+        except Exception:
+            with self._query_state_lock:
+                if key in self._order_action_history:
+                    self._order_action_history[key] = replace(
+                        self._order_action_history[key], reason="native_submit_exception"
+                    )
+            raise
+        try:
+            submit_code = int(ret) if ret is not None else None
+        except (TypeError, ValueError, OverflowError):
+            submit_code = None
+        with self._query_state_lock:
+            if key in self._order_action_history:
+                self._order_action_history[key] = replace(
+                    self._order_action_history[key], submit_code=submit_code
+                )
+        return ret
 
     def get_order_action_evidence(
         self,
@@ -4226,7 +6074,13 @@ class TraderClient:
             self._record_request("settlement_confirm")
             generation = self._connection_generation
         try:
-            ret = api.ReqSettlementInfoConfirm(field, request_id)
+            ret = self._invoke_session_native_request(
+                api,
+                "ReqSettlementInfoConfirm",
+                field,
+                request_id,
+                settlement_authorization=authorization,
+            )
         except Exception as exc:
             with self._query_state_lock:
                 if (
@@ -4422,7 +6276,10 @@ class TraderClient:
         self,
     ) -> _TraderLoginIdentityObservation | None:
         observation = self._login_identity_observation
+        ingress = self._callback_ingress
         if (
+            (ingress is not None and ingress.poisoned)
+            or
             type(observation) is not _TraderLoginIdentityObservation
             or observation._seal is not _TRADER_LOGIN_IDENTITY_SEAL
             or observation.connection_generation != self._connection_generation
@@ -4503,7 +6360,28 @@ class TraderClient:
                     self._native_init_started = False
                     self._join_active = False
                 return False, False
+            ingress = self._callback_ingress
+            self._native_request_inflight_refs += 1
+            if ingress is not None:
+                ingress.native_call_refs += 1
+
+        callback_failed = False
+        try:
             callback()
+        except BaseException:
+            callback_failed = True
+            raise
+        finally:
+            with self._query_state_lock:
+                self._native_request_inflight_refs = max(
+                    0, self._native_request_inflight_refs - 1
+                )
+                if ingress is not None:
+                    ingress.native_call_refs = max(0, ingress.native_call_refs - 1)
+                    if callback_failed:
+                        self._poison_callback_ingress_locked("native_call_ambiguous")
+                self._maybe_finish_deferred_native_release_locked()
+        with self._query_state_lock:
             return True, self._is_start_current_locked(api, spi, generation)
 
     def _abort_startup(
@@ -4608,15 +6486,34 @@ class TraderClient:
 
     def start(self, block=False):
         """启动连接（默认后台运行）"""
+        with self._query_state_lock:
+            ingress_state = self._callback_ingress
+            if ingress_state is not None and (
+                ingress_state.poisoned or ingress_state.phase != "PRE_START"
+            ):
+                raise CtpExecutionGateError("ctp_callback_ingress_owner_not_startable")
         _check_native_module()
         generation = self._reserve_start_generation()
         with self._query_state_lock:
             self._require_bound_identity_locked(require_active_front=False)
         flow = _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
+        api = None
         try:
             api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
             _register_ctp_native_api(api)
-        except Exception:
+        except BaseException:
+            with self._query_state_lock:
+                self._poison_callback_ingress_locked("source_gap")
+            if api is not None:
+                try:
+                    _release_ctp_native_api_immediately(
+                        api,
+                        None,
+                        state_lock=self._query_state_lock,
+                        pending_api_ids=self._pending_native_join_api_ids,
+                    )
+                except BaseException:
+                    pass
             self._clear_start_reservation(generation)
             raise
         spi = _TraderSpi(self, api)
@@ -4631,10 +6528,38 @@ class TraderClient:
                 cancelled_before_registration = False
                 self._api = api
                 self._spi = spi
+                spi._native_api_generation = self._native_api_generation
+                spi._native_client_epoch = self._native_client_epoch
+                spi._native_api_source_id = self._native_api_source_id
+                if self._callback_ingress is not None:
+                    from .callback_ingress import CtpTraderCallbackSourceTagsV2
+
+                    spi._callback_source_tags = CtpTraderCallbackSourceTagsV2(
+                        source_instance_id=self._callback_source_instance_id,
+                        native_client_epoch=self._native_client_epoch,
+                        native_api_source_id=self._native_api_source_id,
+                        native_spi_source_id=spi._native_spi_source_id,
+                        native_api_generation=self._native_api_generation,
+                        connection_generation=self._connection_generation,
+                    )
+                    self._callback_ingress.current_source_tags = (
+                        spi._callback_source_tags.source_instance_id,
+                        spi._callback_source_tags.native_client_epoch,
+                        spi._callback_source_tags.native_api_source_id,
+                        spi._callback_source_tags.native_spi_source_id,
+                        spi._callback_source_tags.native_api_generation,
+                        spi._callback_source_tags.connection_generation,
+                    )
+                    self._callback_ingress.current_source_tags_object = (
+                        spi._callback_source_tags
+                    )
+                    self._callback_ingress.phase = "PRE_LOGIN"
                 self._native_init_started = False
                 self._join_active = False
                 self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
+            with self._query_state_lock:
+                self._poison_callback_ingress_locked("owner_stop")
             _release_ctp_native_api_immediately(
                 api,
                 spi,
@@ -4688,7 +6613,7 @@ class TraderClient:
                 # released when the native thread exits.
                 self._start_join_observer(api)
                 return
-        except Exception:
+        except BaseException:
             # Init is a void vendor call, but if a binding raises after it was
             # entered, fail safe and retain until Join proves native shutdown.
             handled = self._abort_startup(
@@ -4978,43 +6903,47 @@ class TraderClient:
                 request_intent_parameters=dict(request_intent_parameter_items),
             )
             self._record_request(f"query_{request_type}")
-            try:
-                ret = submit(accumulator.request_id)
-            except Exception as exc:
-                accumulator.error_code = -4
-                accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
-                accumulator.completed_at_utc = datetime.now(timezone.utc)
-                accumulator.completed_monotonic = time.monotonic()
-                accumulator.sealed = True
-                accumulator.event.set()
-                return accumulator.result()
             self._last_query_submitted_at = time.monotonic()
-            accumulator.submit_code = None if ret is None else int(ret)
-            if ret not in (None, 0):
-                accumulator.error_code = int(ret)
-                accumulator.error_message = "query_submit_rejected"
+
+        # Release the query-rate lock before entering native code. A vendor
+        # Req may synchronously invoke a callback on this thread or wait for a
+        # callback thread that must acquire SDK state locks.
+        try:
+            ret = submit(accumulator.request_id)
+        except Exception as exc:
+            accumulator.error_code = -4
+            accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
+            accumulator.completed_at_utc = datetime.now(timezone.utc)
+            accumulator.completed_monotonic = time.monotonic()
+            accumulator.sealed = True
+            accumulator.event.set()
+            return accumulator.result()
+        accumulator.submit_code = None if ret is None else int(ret)
+        if ret not in (None, 0):
+            accumulator.error_code = int(ret)
+            accumulator.error_message = "query_submit_rejected"
+            accumulator.completed_at_utc = datetime.now(timezone.utc)
+            accumulator.completed_monotonic = time.monotonic()
+            accumulator.sealed = True
+            accumulator.event.set()
+            return accumulator.result()
+        observed = accumulator.event.wait(max(float(timeout), 0.0))
+        with self._query_state_lock:
+            # If the terminal callback acquired the state lock at the
+            # timeout boundary, it wins the race and remains complete.
+            if (
+                not observed
+                and not accumulator.is_last_seen
+                and accumulator.error_code in (None, 0)
+            ):
+                accumulator.timed_out = True
+                accumulator.error_message = "query_timeout"
+            if accumulator.completed_at_utc is None:
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
                 accumulator.completed_monotonic = time.monotonic()
-                accumulator.sealed = True
-                accumulator.event.set()
-                return accumulator.result()
-            observed = accumulator.event.wait(max(float(timeout), 0.0))
-            with self._query_state_lock:
-                # If the terminal callback acquired the state lock at the
-                # timeout boundary, it wins the race and remains complete.
-                if (
-                    not observed
-                    and not accumulator.is_last_seen
-                    and accumulator.error_code in (None, 0)
-                ):
-                    accumulator.timed_out = True
-                    accumulator.error_message = "query_timeout"
-                if accumulator.completed_at_utc is None:
-                    accumulator.completed_at_utc = datetime.now(timezone.utc)
-                    accumulator.completed_monotonic = time.monotonic()
-                accumulator.sealed = True
-                accumulator.event.set()
-                return accumulator.result()
+            accumulator.sealed = True
+            accumulator.event.set()
+            return accumulator.result()
 
     def get_query_result(self, request_id: int) -> QueryResult[Any] | None:
         """Return current evidence, including callbacks arriving after timeout."""
@@ -5038,10 +6967,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryTradingAccount", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryTradingAccount", None) if api is not None else None
         return self._execute_query(
             "account",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryTradingAccount", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5067,10 +7003,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryInvestorPosition", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryInvestorPosition", None) if api is not None else None
         return self._execute_query(
             "positions",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryInvestorPosition", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5101,10 +7044,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryOrder", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryOrder", None) if api is not None else None
         return self._execute_query(
             "orders",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryOrder", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5148,10 +7098,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryTrade", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryTrade", None) if api is not None else None
         return self._execute_query(
             "trades",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryTrade", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5190,10 +7147,17 @@ class TraderClient:
                     unsupported=True,
                     include_query_source=False,
                 )
-        method = getattr(self._api, "ReqQryInstrument", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryInstrument", None) if api is not None else None
         return self._execute_query(
             "instruments",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryInstrument", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5229,10 +7193,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryInstrumentMarginRate", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryInstrumentMarginRate", None) if api is not None else None
         return self._execute_query(
             "margin_rate",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryInstrumentMarginRate", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5269,10 +7240,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQryInstrumentCommissionRate", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQryInstrumentCommissionRate", None) if api is not None else None
         return self._execute_query(
             "commission_rate",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryInstrumentCommissionRate", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5296,10 +7274,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, method_name, None) if self._api else None
+        api = self._api
+        method = getattr(api, method_name, None) if api is not None else None
         return self._execute_query(
             request_type,
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, method_name, field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters={
@@ -5403,10 +7388,17 @@ class TraderClient:
                 unsupported=True,
                 include_query_source=False,
             )
-        method = getattr(self._api, "ReqQrySettlementInfoConfirm", None) if self._api else None
+        api = self._api
+        method = getattr(api, "ReqQrySettlementInfoConfirm", None) if api is not None else None
         return self._execute_query(
             "settlement_confirmation",
-            ((lambda request_id: method(field, request_id)) if callable(method) else None),
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQrySettlementInfoConfirm", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
@@ -5873,6 +7865,7 @@ class TraderClient:
                 self._join_active or (join_thread is not None and join_thread.is_alive())
             )
             if api is None:
+                self._poison_callback_ingress_locked("owner_stop")
                 return False
             join_claimed = _ctp_native_join_claimed(api)
             join_required = bool(join_active or join_claimed)
@@ -5886,11 +7879,34 @@ class TraderClient:
                 _retain_live_ctp_native_session(api, spi, join_thread)
             else:
                 self._pending_native_join_api_ids.add(id(api))
+            self._native_stop_in_progress = True
             self._api = None
+            self._native_stop_in_progress = False
             self._thread = None
             self._join_active = False
             self._native_init_started = False
+            ingress_state = self._callback_ingress
+            defer_ingress_cleanup = (
+                self._native_request_inflight_refs > 0
+                or self._callback_inflight_refs > 0
+                or (
+                    ingress_state is not None
+                    and (ingress_state.native_call_refs > 0 or ingress_state.callback_refs > 0)
+                )
+            )
+            if defer_ingress_cleanup:
+                self._callback_ingress_deferred_cleanup = (
+                    api,
+                    spi,
+                    join_required,
+                    join_claimed,
+                )
 
+        if defer_ingress_cleanup:
+            # The final callback/request lease schedules RegisterSpi(None) and
+            # Release outside all SDK locks. The permanent owner is already
+            # poisoned, so no new managed call can start in the meantime.
+            return True
         if join_active:
             # RegisterSpi(None) is the vendor's documented callback
             # registration API; retaining ``spi`` above also protects a

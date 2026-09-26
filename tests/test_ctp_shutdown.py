@@ -282,6 +282,17 @@ def _patch_native_factory(
     )
 
 
+def _startup_spi_fake(spi_factory_name: str) -> object:
+    if spi_factory_name == "_TraderSpi":
+        return SimpleNamespace(
+            _native_spi_source_id=object(),
+            _native_api_generation=None,
+            _native_client_epoch=None,
+            _native_api_source_id=None,
+        )
+    return object()
+
+
 @pytest.mark.parametrize(
     "install",
     [_install_live_md_session, _install_live_trader_session],
@@ -921,7 +932,7 @@ def test_nonblocking_start_marks_join_live_before_stop(
     api_factory_name: str,
     spi_factory_name: str,
 ) -> None:
-    spi = object()
+    spi = _startup_spi_fake(spi_factory_name)
     api = _BlockingNativeApi(spi)
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
     monkeypatch.setattr(
@@ -941,6 +952,10 @@ def test_nonblocking_start_marks_join_live_before_stop(
     client = client_factory("tcp://test", "9999", "account", "secret")
 
     client.start(block=False)
+    if spi_factory_name == "_TraderSpi":
+        assert spi._native_api_generation == client._native_api_generation
+        assert spi._native_client_epoch == client._native_client_epoch
+        assert spi._native_api_source_id == client._native_api_source_id
     assert api.join_started.wait(1.0)
     client.stop()
     api.allow_join_return.set()
@@ -975,7 +990,7 @@ def test_stop_during_init_releases_only_after_join_returns(
     api_factory_name: str,
     spi_factory_name: str,
 ) -> None:
-    spi = object()
+    spi = _startup_spi_fake(spi_factory_name)
     holder = {}
     api = _StopDuringInitApi(lambda: holder["client"].stop(), spi)
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
@@ -1016,7 +1031,7 @@ def test_init_failure_after_concurrent_stop_still_observes_join(
     api_factory_name: str,
     spi_factory_name: str,
 ) -> None:
-    spi = object()
+    spi = _startup_spi_fake(spi_factory_name)
     api = _InitRaisesAfterStopApi(spi)
     errors: list[BaseException] = []
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
@@ -1118,7 +1133,7 @@ def test_stop_during_first_register_spi_blocks_all_later_startup_calls(
     api_factory_name: str,
     spi_factory_name: str,
 ) -> None:
-    spi = object()
+    spi = _startup_spi_fake(spi_factory_name)
     api = _RegisterSpiBarrierApi()
     errors: list[BaseException] = []
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
@@ -1167,7 +1182,7 @@ def test_pre_init_start_failures_and_retry_do_not_accumulate_retired_sessions(
     failed_apis = [_FailBeforeInitApi(), _FailBeforeInitApi()]
     success_api = _ImmediateJoinApi()
     api_queue = [*failed_apis, success_api]
-    spi = object()
+    spi = _startup_spi_fake(spi_factory_name)
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
     _patch_native_factory(monkeypatch, api_factory_name, lambda _flow: api_queue.pop(0))
     monkeypatch.setattr(client_module, spi_factory_name, lambda *_args: spi)

@@ -3075,13 +3075,9 @@ def test_gateway_quote_v2_never_treats_placeholder_provenance_as_eligible(
     assert quality_flag in tick.quality_flags
 
 
-def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer(
-    monkeypatch,
-) -> None:
+def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer() -> None:
     """Exercise the source adapter -> remote payload -> parent SDK boundary."""
 
-    parent_root = Path(__file__).resolve().parents[3]
-    monkeypatch.syspath_prepend(str(parent_root))
     from bt_api_py._normalization import normalize_event
 
     adapter = object.__new__(CtpGatewayAdapter)
