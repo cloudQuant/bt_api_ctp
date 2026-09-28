@@ -179,9 +179,7 @@ class CtpMdSubscriber:
         """
         windows = list(self._disconnect_windows)
         if self._pending_disconnect is not None:
-            windows.append(
-                {**self._pending_disconnect, "end": None, "generation_after": None}
-            )
+            windows.append({**self._pending_disconnect, "end": None, "generation_after": None})
         return windows
 
     def failed_instruments(self) -> dict[str, int]:

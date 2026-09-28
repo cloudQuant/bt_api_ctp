@@ -82,9 +82,7 @@ class CtpInstrumentProvider:
             self._collect(records, specs, seen)
 
         if incomplete:
-            raise RuntimeError(
-                "ctp_instrument_query_incomplete:" + ",".join(incomplete)
-            )
+            raise RuntimeError("ctp_instrument_query_incomplete:" + ",".join(incomplete))
         return specs
 
     def _query_exchange(self, exchange: str) -> Any:
@@ -125,9 +123,7 @@ class CtpInstrumentProvider:
         stop = getattr(self._trader, "stop", None)
         if callable(stop):
             # stop() 会等原生 Join 返回，实测可卡住数分钟；先留痕再阻塞。
-            _logger.info(
-                "closing CTP trader session (stop() waits for the native Join to return)"
-            )
+            _logger.info("closing CTP trader session (stop() waits for the native Join to return)")
             stop()
         _logger.info("CTP trader session closed")
 

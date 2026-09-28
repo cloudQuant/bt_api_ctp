@@ -317,8 +317,7 @@ def _make_ctp_native_stop_receipt(
     if not join_required:
         with lock:
             released = (
-                client._last_stopped_native_api is api
-                and client._last_stop_native_released is True
+                client._last_stopped_native_api is api and client._last_stop_native_released is True
             )
         return CtpNativeStopReceipt(
             connection_generation=connection_generation,
@@ -582,9 +581,7 @@ class _CtpSettlementAuthorization:
 
 
 _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL = object()
-_CTP_MANAGED_SIMNOW_PROFILES = frozenset(
-    {"config_front_pair", "set1_group1", "set1_group2"}
-)
+_CTP_MANAGED_SIMNOW_PROFILES = frozenset({"config_front_pair", "set1_group1", "set1_group2"})
 _CTP_RESTRICTED_SIMNOW_PROFILES = _CTP_MANAGED_SIMNOW_PROFILES | frozenset(
     {
         "set2_7x24",
@@ -647,9 +644,7 @@ class _CtpRuntimeSimNowWriteAuthorization:
         self._operation = operation
         self._td_front = binding.td_front
         self._md_front = (
-            client._bound_md_front
-            if client._bound_md_front is not None
-            else binding.md_front
+            client._bound_md_front if client._bound_md_front is not None else binding.md_front
         )
         self._environment_profile = (
             client.ctp_env_profile
@@ -1595,9 +1590,7 @@ class _MdSpi(CThostFtdcMdSpi):
         pending = 0
         generation = None
         failure_reason = ""
-        response_error_id = (
-            None if pRspInfo is None else _native_int_field(pRspInfo, "ErrorID")
-        )
+        response_error_id = None if pRspInfo is None else _native_int_field(pRspInfo, "ErrorID")
         with self._c._state_lock:
             if not self._is_current_locked():
                 return
@@ -2383,11 +2376,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 failure_reason = "broker_id_mismatch"
             elif not user_id or user_id != self._c._bound_user_id:
                 failure_reason = "user_id_mismatch"
-            elif (
-                len(trading_day) != 8
-                or not trading_day.isascii()
-                or not trading_day.isdigit()
-            ):
+            elif len(trading_day) != 8 or not trading_day.isascii() or not trading_day.isdigit():
                 failure_reason = "trading_day_invalid"
             else:
                 try:
@@ -2955,9 +2944,7 @@ class TraderClient:
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             if self._execution_gate_proof is not None:
-                raise CtpExecutionGateError(
-                    "ctp_simnow_credential_binding_requires_disarmed_gate"
-                )
+                raise CtpExecutionGateError("ctp_simnow_credential_binding_requires_disarmed_gate")
             if binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES:
                 raise CtpExecutionGateError("ctp_simnow_bounded_profile_required")
             self._validate_runtime_simnow_credential_binding_locked(binding)
@@ -2991,14 +2978,10 @@ class TraderClient:
                 or (
                     binding.environment_profile == "config_front_pair"
                     and (
-                        self._bound_md_front is None
-                        or self.ctp_env_profile != "config_front_pair"
+                        self._bound_md_front is None or self.ctp_env_profile != "config_front_pair"
                     )
                 )
-                or (
-                    self._bound_md_front is not None
-                    and binding.md_front != self._bound_md_front
-                )
+                or (self._bound_md_front is not None and binding.md_front != self._bound_md_front)
                 or (
                     self.ctp_env_profile is not None
                     and binding.environment_profile != self.ctp_env_profile
@@ -3028,8 +3011,7 @@ class TraderClient:
             closure = getattr(context_refresh, "__closure__", None) or ()
             closure_values = dict(zip(getattr(code, "co_freevars", ()), closure))
             captured = {
-                name: getattr(cell, "cell_contents", None)
-                for name, cell in closure_values.items()
+                name: getattr(cell, "cell_contents", None) for name, cell in closure_values.items()
             }
             if (
                 captured.get("credential_binding_verifier")
@@ -3088,8 +3070,7 @@ class TraderClient:
                 now < _parse_utc_timestamp(payload.get("not_before"))
                 or now >= _parse_utc_timestamp(payload.get("expires_at"))
                 or not isinstance(revocation_snapshot, Mapping)
-                or revocation_snapshot.get("version")
-                != payload.get("revocation_snapshot_version")
+                or revocation_snapshot.get("version") != payload.get("revocation_snapshot_version")
                 or now >= _parse_utc_timestamp(revocation_snapshot.get("expires_at"))
             ):
                 raise ValueError("approval or revocation snapshot expired")
@@ -3147,9 +3128,7 @@ class TraderClient:
                 front_scope = {
                     "td_front": str(getattr(trader, "front", "") or "").strip(),
                     "md_front": str(getattr(md_client, "front", "") or "").strip(),
-                    "md_connection_generation": getattr(
-                        md_client, "connection_generation", None
-                    ),
+                    "md_connection_generation": getattr(md_client, "connection_generation", None),
                     "md_stream_generation": getattr(feed, "_md_stream_generation", None),
                 }
                 if (
@@ -3207,9 +3186,7 @@ class TraderClient:
                     "strategy_identity_sha256": payload["strategy_identity_sha256"],
                     "preflight_sha256": payload["preflight_sha256"],
                     "evidence_sha256": payload["evidence_sha256"],
-                    "md_connection_generation": front_scope[
-                        "md_connection_generation"
-                    ],
+                    "md_connection_generation": front_scope["md_connection_generation"],
                     "md_stream_generation": front_scope["md_stream_generation"],
                 }
             )
@@ -3218,17 +3195,12 @@ class TraderClient:
                 owner=binding.owner,
                 operation="configure_runtime_simnow_credential_binding",
             )
-            if any(
-                selected_pair_binding.get(name) != payload.get(name)
-                for name in binding_fields
-            ):
+            if any(selected_pair_binding.get(name) != payload.get(name) for name in binding_fields):
                 raise ValueError("selected front pair credential binding mismatch")
         except CtpExecutionGateError:
             raise
         except Exception as exc:
-            raise CtpExecutionGateError(
-                "ctp_simnow_credential_binding_rejected"
-            ) from exc
+            raise CtpExecutionGateError("ctp_simnow_credential_binding_rejected") from exc
 
     def _require_runtime_simnow_credential_binding_locked(
         self,
@@ -3257,25 +3229,31 @@ class TraderClient:
                 or len(managed_intent_id) > 256
                 or not managed_intent_id.isascii()
                 or any(not (char.isalnum() or char in "._:-") for char in managed_intent_id)
-                or (runtime_action_id is not None and (
-                    not isinstance(runtime_action_id, str)
-                    or not runtime_action_id
-                    or runtime_action_id != runtime_action_id.strip()
-                    or len(runtime_action_id) > 256
-                    or not runtime_action_id.isascii()
-                    or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
-                ))
-                or (managed_cancel_intent_id is not None and (
-                    not isinstance(managed_cancel_intent_id, str)
-                    or not managed_cancel_intent_id
-                    or managed_cancel_intent_id != managed_cancel_intent_id.strip()
-                    or len(managed_cancel_intent_id) > 256
-                    or not managed_cancel_intent_id.isascii()
-                    or any(
-                        not (char.isalnum() or char in "._:-")
-                        for char in managed_cancel_intent_id
+                or (
+                    runtime_action_id is not None
+                    and (
+                        not isinstance(runtime_action_id, str)
+                        or not runtime_action_id
+                        or runtime_action_id != runtime_action_id.strip()
+                        or len(runtime_action_id) > 256
+                        or not runtime_action_id.isascii()
+                        or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
                     )
-                ))
+                )
+                or (
+                    managed_cancel_intent_id is not None
+                    and (
+                        not isinstance(managed_cancel_intent_id, str)
+                        or not managed_cancel_intent_id
+                        or managed_cancel_intent_id != managed_cancel_intent_id.strip()
+                        or len(managed_cancel_intent_id) > 256
+                        or not managed_cancel_intent_id.isascii()
+                        or any(
+                            not (char.isalnum() or char in "._:-")
+                            for char in managed_cancel_intent_id
+                        )
+                    )
+                )
             ):
                 raise ValueError("managed CTP identity invalid")
             self._validate_runtime_simnow_credential_binding_locked(binding)
@@ -3290,8 +3268,7 @@ class TraderClient:
                 authorized = payload.get("authorized_instruments")
                 if (
                     payload.get("purpose") != APPROVAL_PURPOSE
-                    or payload.get("schema_version")
-                    != SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION
+                    or payload.get("schema_version") != SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION
                     or instrument not in authorized
                     or payload.get("primary_instrument") != instrument
                     or managed_cancel_intent_id is not None
@@ -3313,19 +3290,16 @@ class TraderClient:
                 ]
                 if (
                     payload.get("purpose") != RECOVERY_APPROVAL_PURPOSE
-                    or payload.get("schema_version")
-                    != SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION
+                    or payload.get("schema_version") != SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION
                     or len(matching) != 1
                     or matching[0].get("action_kind") != "cancel"
                     or matching[0].get("instrument_id") != instrument_id
                     or matching[0].get("exchange_id") != exchange_id
-                    or matching[0].get("account_fingerprint")
-                    != payload.get("account_fingerprint")
+                    or matching[0].get("account_fingerprint") != payload.get("account_fingerprint")
                     or matching[0].get("trading_day") != payload.get("trading_day")
                     or matching[0].get("connection_generation")
                     != payload.get("connection_generation")
-                    or matching[0].get("environment_profile")
-                    != payload.get("environment_profile")
+                    or matching[0].get("environment_profile") != payload.get("environment_profile")
                     or now >= _parse_utc_timestamp(matching[0].get("expires_at"))
                 ):
                     raise ValueError("recovery approval scope mismatch")
@@ -3334,9 +3308,7 @@ class TraderClient:
             raise
         except Exception as exc:
             self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
-            raise CtpExecutionGateError(
-                "ctp_simnow_credential_binding_rejected"
-            ) from exc
+            raise CtpExecutionGateError("ctp_simnow_credential_binding_rejected") from exc
 
     def _require_bound_identity_locked(self, *, require_active_front: bool = False) -> None:
         """Fail closed before a managed native write can use mutable identity."""
@@ -3450,9 +3422,7 @@ class TraderClient:
             ),
             "runtime_simnow_write_verifier_configured": bool(
                 self._runtime_simnow_credential_binding is not None
-                and callable(
-                    self._runtime_simnow_credential_binding.write_intent_verifier
-                )
+                and callable(self._runtime_simnow_credential_binding.write_intent_verifier)
             ),
             "proof_sha256": self._execution_gate_proof_sha256,
             "revocation_reason": self._execution_gate_revocation_reason,
@@ -3694,9 +3664,7 @@ class TraderClient:
                 runtime_action_id is not None or managed_cancel_intent_id is not None
             ):
                 raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
-            if operation == "cancel" and (
-                not runtime_action_id or not managed_cancel_intent_id
-            ):
+            if operation == "cancel" and (not runtime_action_id or not managed_cancel_intent_id):
                 raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
             installed = self._execution_gate_capability
             if (
@@ -4287,9 +4255,7 @@ class TraderClient:
             if self._native_api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             if type(request_id) is not int or request_id <= 0:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_order_insert_request_id_invalid"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_invalid")
             try:
                 field_request_id = getattr(field, "RequestID", None)
             except Exception:
@@ -4332,10 +4298,10 @@ class TraderClient:
                 raise CtpExecutionGateError(
                     "ctp_execution_gate_order_insert_request_identity_reused"
                 )
-            if any(known_request_id == request_id for known_request_id, _ in self._order_insert_history):
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_order_insert_request_id_reused"
-                )
+            if any(
+                known_request_id == request_id for known_request_id, _ in self._order_insert_history
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
             self._consume_runtime_simnow_write_authorization_locked(
                 simnow_authorization,
                 capability=execution_capability,
@@ -4453,14 +4419,10 @@ class TraderClient:
                     candidates = [key for key in candidates if key[1] == identity.order_ref]
             else:
                 candidates = [
-                    key
-                    for key in self._order_insert_history
-                    if key[1] == identity.order_ref
+                    key for key in self._order_insert_history if key[1] == identity.order_ref
                 ]
                 if identity.field_request_id not in (None, 0):
-                    candidates = [
-                        key for key in candidates if key[0] == identity.field_request_id
-                    ]
+                    candidates = [key for key in candidates if key[0] == identity.field_request_id]
                 exact_candidates = [
                     key for key in candidates if self._order_insert_identities[key] == identity
                 ]
@@ -4609,9 +4571,7 @@ class TraderClient:
 
         with self._query_state_lock:
             if type(request_id) is not int or request_id <= 0:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_cancel_request_id_invalid"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_invalid")
             simnow_authorization = self._require_execution_write_locked(
                 execution_capability,
                 getattr(field, "InstrumentID", ""),
@@ -4629,7 +4589,9 @@ class TraderClient:
             key = (request_id, identity.order_action_ref)
             if key in self._order_action_history:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_request_identity_reused")
-            if any(known_request_id == request_id for known_request_id, _ in self._order_action_history):
+            if any(
+                known_request_id == request_id for known_request_id, _ in self._order_action_history
+            ):
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_reused")
             now = datetime.now(timezone.utc)
             order_identity_present = bool(
@@ -4651,9 +4613,7 @@ class TraderClient:
             else:
                 initial_reason = "awaiting_native_callback"
             if initial_reason != "awaiting_native_callback":
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_cancel_request_invalid"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_invalid")
             self._consume_runtime_simnow_write_authorization_locked(
                 simnow_authorization,
                 capability=execution_capability,
@@ -6381,9 +6341,7 @@ class TraderClient:
                 "event": event_type,
                 "request_id": request_id,
                 "error_id": getattr(rsp_info, "ErrorID", 0) if rsp_info is not None else 0,
-                "error_msg": (
-                    getattr(rsp_info, "ErrorMsg", "") if rsp_info is not None else ""
-                ),
+                "error_msg": (getattr(rsp_info, "ErrorMsg", "") if rsp_info is not None else ""),
                 "field": _snapshot_ctp_field(field),
             }
             self._error_events.put(
@@ -6472,6 +6430,7 @@ class TraderClient:
             lock=self._query_state_lock,
             api_attribute="_native_api",
         )
+
     @property
     def is_ready(self):
         if self.auto_settlement_confirm:

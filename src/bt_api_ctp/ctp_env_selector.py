@@ -50,19 +50,21 @@ _REGISTERED_BROKER_SIM_FRONTS = {
         "tcp://112.65.19.116:32213",
     ),
 }
-_SIMNOW_PROFILE_FRONTS = MappingProxyType({
-    "set1_group1": _SET1_DEFAULTS["1"],
-    "set1_group1_vpn": _SET1_GROUP1_VPN,
-    "set1_group2": _SET1_DEFAULTS["2"],
-    "set2_7x24": _SET2_DEFAULT,
-    # This is a separate, exact profile rather than a replacement for the
-    # historical ``set2_7x24`` pair.  The suffix identifies the frozen port
-    # family without deriving a route from VPN geography.
-    "set2_7x24_4000x": _SET2_7X24_4000X,
-    # Retain the prior public spelling for callers that already persisted it.
-    # New Iteration 22 paths use the more precise ``set2_7x24_4000x`` name.
-    "set2_7x24_vpn": _SET2_7X24_4000X,
-})
+_SIMNOW_PROFILE_FRONTS = MappingProxyType(
+    {
+        "set1_group1": _SET1_DEFAULTS["1"],
+        "set1_group1_vpn": _SET1_GROUP1_VPN,
+        "set1_group2": _SET1_DEFAULTS["2"],
+        "set2_7x24": _SET2_DEFAULT,
+        # This is a separate, exact profile rather than a replacement for the
+        # historical ``set2_7x24`` pair.  The suffix identifies the frozen port
+        # family without deriving a route from VPN geography.
+        "set2_7x24_4000x": _SET2_7X24_4000X,
+        # Retain the prior public spelling for callers that already persisted it.
+        # New Iteration 22 paths use the more precise ``set2_7x24_4000x`` name.
+        "set2_7x24_vpn": _SET2_7X24_4000X,
+    }
+)
 _OFFICIAL_SIMNOW_TD_FRONTS = frozenset(
     td_front for td_front, _md_front in _SIMNOW_PROFILE_FRONTS.values()
 )
@@ -441,10 +443,14 @@ def verify_registered_broker_sim_profile(td_front: str, md_front: str, profile: 
     """Verify a claimed registered-sim profile uses its frozen endpoint pair."""
     name = str(profile or "").strip().lower()
     expected = _REGISTERED_BROKER_SIM_FRONTS.get(name)
-    return expected is not None and (
-        str(td_front or "").strip(),
-        str(md_front or "").strip(),
-    ) == expected
+    return (
+        expected is not None
+        and (
+            str(td_front or "").strip(),
+            str(md_front or "").strip(),
+        )
+        == expected
+    )
 
 
 def registered_broker_sim_profile_for_td_front(td_front: str) -> str:

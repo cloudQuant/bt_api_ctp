@@ -259,9 +259,7 @@ def build_engine(config: dict[str, Any], *, env: dict[str, str] | None = None):
     _logger.info("CTP trader login: front=%s broker=%s user=%s", td_front, broker_id, user_id)
     if trader.wait_ready(timeout=login_timeout_sec) is not True:
         trader.stop()
-        _logger.error(
-            "CTP trader login timeout after %ss (front=%s)", login_timeout_sec, td_front
-        )
+        _logger.error("CTP trader login timeout after %ss (front=%s)", login_timeout_sec, td_front)
         raise RuntimeError("ctp_trader_login_timeout")
     _logger.info("CTP trader login OK (front=%s)", td_front)
 
@@ -276,9 +274,7 @@ def build_engine(config: dict[str, Any], *, env: dict[str, str] | None = None):
     # market per process is slow and can be rate-limited by the counter.
     shard = collection_config.shard
     provider_exchanges = (
-        tuple(shard.exchanges)
-        if shard.strategy == "by_exchange" and shard.exchanges
-        else EXCHANGES
+        tuple(shard.exchanges) if shard.strategy == "by_exchange" and shard.exchanges else EXCHANGES
     )
     provider = CtpInstrumentProvider(trader, exchanges=provider_exchanges)
     return TickCollectionEngine(
