@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -403,7 +404,7 @@ class TestCtpOrderThreadingRegression:
         assert seen_order_refs == ["101"]
 
     def test_trader_client_query_orders_uses_req_qry_order(self):
-        from bt_api_ctp.ctp.client import TraderClient
+        from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 
         class MockOrderField:
             InstrumentID = "IF2506"
@@ -426,9 +427,25 @@ class TestCtpOrderThreadingRegression:
         client = TraderClient("tcp://test", "9999", "demo", "secret")
         client._connected = True
         client._authentication_state = "authenticated"
-        client._login_state = "logged_in"
+        client._login_state = "logging_in"
+        client._connection_generation = 1
+        client._login_request_id = 1
+        client._login_connection_generation = 1
         client._query_interval = 0
         client._api = FakeApi(client)
+        _TraderSpi(client).OnRspUserLogin(
+            SimpleNamespace(
+                BrokerID=client._bound_broker_id,
+                UserID=client._bound_user_id,
+                TradingDay="20260924",
+                FrontID=0,
+                SessionID=0,
+                MaxOrderRef="",
+            ),
+            SimpleNamespace(ErrorID=0, ErrorMsg=""),
+            1,
+            True,
+        )
 
         rows = client.query_orders(instrument_id="IF2506", exchange_id="CFFEX", timeout=0.01)
 

@@ -43,14 +43,19 @@ import time
 import weakref
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Callable
+from urllib.parse import urlsplit
 
+from bt_api_ctp.ctp_env_selector import is_official_simnow_td_front
 from bt_api_ctp.instrument import normalize_ctp_instrument
+from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
     QueryResult,
     _attach_query_source,
@@ -59,6 +64,13 @@ from bt_api_ctp.query import (
     _query_records_digest,
     _QuerySessionScope,
 )
+
+if TYPE_CHECKING:
+    from bt_api_py._ctp_credential_binding import CtpCredentialBindingVerifier
+    from bt_api_py._ctp_execution_authorization import (
+        CtpExecutionApproval,
+        CtpExecutionApprovalContext,
+    )
 
 from . import _ctp_base
 from ._ctp_base import (
@@ -92,6 +104,8 @@ from .ctp_structs_query import (
 from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
 _logger = logging.getLogger(__name__)
+_QUERY_FILTER_UNSET = object()
+_TRADER_LOGIN_IDENTITY_SEAL = object()
 
 CTP_REQUEST_COUNT_KEYS = (
     "authenticate",
@@ -126,9 +140,43 @@ CTP_REQUEST_COUNT_KEYS = (
 # while the vendor Join thread can still be alive.  There is no documented
 # asynchronous CTP shutdown primitive that can safely replace this deferred
 # lifetime on the audited macOS framework.  Entries must nevertheless be
-# removed once Join returns so reconnects cannot retain completed sessions.
+# removed after Join returns and Release succeeds so reconnects cannot retain
+# completed sessions.
 _RETIRED_CTP_NATIVE_SESSIONS_LOCK = threading.Lock()
 _RETIRED_CTP_NATIVE_SESSIONS: list[tuple[Any, Any, threading.Thread | None]] = []
+_CTP_NATIVE_SESSIONS_RELEASING: set[int] = set()
+_CTP_NATIVE_JOIN_COMPLETED_APIS: dict[int, Any] = {}
+_MAX_CTP_STOP_WAIT_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class CtpNativeStopReceipt:
+    """Bounded observation of one native CTP API shutdown.
+
+    ``native_released`` is true only after the native ``Release()`` call
+    returned normally.  If native ``Join()`` was outstanding when stop began,
+    ``join_completed`` is true only after that exact call returned normally.
+    A missing Python observer thread is represented by ``thread_alive=None``;
+    it is never treated as proof of shutdown.
+    """
+
+    connection_generation: int
+    join_required: bool
+    join_completed: bool
+    native_released: bool
+    thread_alive: bool | None
+    timed_out: bool
+
+    @property
+    def complete(self) -> bool:
+        """Whether native shutdown is positively complete."""
+
+        return (
+            self.native_released is True
+            and (self.join_required is False or self.join_completed is True)
+            and self.thread_alive is False
+            and self.timed_out is False
+        )
 
 
 def _retain_live_ctp_native_session(
@@ -158,27 +206,197 @@ def _set_retired_ctp_native_session_join_thread(api: Any, join_thread: threading
 def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
     """Release one retained session only after its native ``Join`` returned.
 
-    The entry is removed while holding the registry lock so concurrent Join
-    observers cannot issue a second ``Release``.  Its local tuple keeps the
-    API and SPI strongly referenced until the release call has completed.
+    A separate in-progress marker prevents concurrent observers from issuing
+    duplicate ``Release`` calls. The retired entry remains until Release
+    returns successfully, keeping the API and SPI strongly referenced.
     """
 
-    retained: tuple[Any, Any, threading.Thread | None] | None = None
+    api_key = id(api)
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
-        for index, entry in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
-            if entry[0] is api:
-                retained = _RETIRED_CTP_NATIVE_SESSIONS.pop(index)
-                break
-    if retained is None:
-        return False
+        if not any(entry[0] is api for entry in _RETIRED_CTP_NATIVE_SESSIONS):
+            return False
+        if api_key in _CTP_NATIVE_SESSIONS_RELEASING:
+            return False
+        _CTP_NATIVE_SESSIONS_RELEASING.add(api_key)
 
     # Join has returned, so the vendor callback thread is no longer live and
     # Release is safe on the audited macOS framework.  Do not call
     # RegisterSpi(None) again: stop() already made the documented detach
-    # attempt before the session entered this registry.
-    with suppress(Exception):
+    # attempt before the session entered this registry. Keep the retired
+    # session registered if Release fails so a bounded receipt cannot mistake
+    # a failed release attempt for completed shutdown.
+    released = False
+    try:
         api.Release()
-    return True
+        released = True
+    except Exception:
+        _logger.exception("CTP native API Release failed after Join returned")
+    finally:
+        with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+            _CTP_NATIVE_SESSIONS_RELEASING.discard(api_key)
+            if released:
+                for index, entry in enumerate(_RETIRED_CTP_NATIVE_SESSIONS):
+                    if entry[0] is api:
+                        _RETIRED_CTP_NATIVE_SESSIONS.pop(index)
+                        break
+                _CTP_NATIVE_JOIN_COMPLETED_APIS.pop(api_key, None)
+    return released
+
+
+def _retired_ctp_native_session_snapshot(
+    api: Any,
+) -> tuple[Any, Any, threading.Thread | None] | None:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return next(
+            (entry for entry in _RETIRED_CTP_NATIVE_SESSIONS if entry[0] is api),
+            None,
+        )
+
+
+def _ctp_native_join_completed(api: Any) -> bool:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        return _CTP_NATIVE_JOIN_COMPLETED_APIS.get(id(api)) is api
+
+
+def _record_ctp_native_join_completed(api: Any) -> None:
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        if any(entry[0] is api for entry in _RETIRED_CTP_NATIVE_SESSIONS):
+            _CTP_NATIVE_JOIN_COMPLETED_APIS[id(api)] = api
+
+
+def _make_ctp_native_stop_receipt(
+    client: Any,
+    timeout: float,
+    *,
+    lock: Any,
+    api_attribute: str,
+) -> CtpNativeStopReceipt:
+    """Stop one SDK client and wait a bounded time for its exact native API."""
+
+    if type(timeout) not in (int, float):
+        raise ValueError("invalid CTP native stop timeout")
+    try:
+        timeout_seconds = float(timeout)
+    except (OverflowError, ValueError):
+        raise ValueError("invalid CTP native stop timeout") from None
+    if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+        raise ValueError("invalid CTP native stop timeout")
+    wait_seconds = min(timeout_seconds, _MAX_CTP_STOP_WAIT_SECONDS)
+    with lock:
+        api = getattr(client, api_attribute)
+        thread = client._thread
+        connection_generation = int(client._connection_generation)
+        native_may_be_live = client._native_init_started or client._join_active
+        join_required = bool(
+            native_may_be_live
+            and (client._join_active or (thread is not None and thread.is_alive()))
+        )
+        if api is None:
+            api = client._last_stopped_native_api
+            connection_generation = client._last_stopped_connection_generation
+            join_required = client._last_stop_join_required
+            thread = None
+    if api is None:
+        return CtpNativeStopReceipt(
+            connection_generation=connection_generation,
+            join_required=False,
+            join_completed=True,
+            native_released=True,
+            thread_alive=False,
+            timed_out=False,
+        )
+
+    # Capture the identity and generation before stop clears the live fields.
+    # A repeated call after stop does not invoke stop again; it only observes
+    # the exact retired API retained by the native Join lifecycle.
+    with lock:
+        active_api = getattr(client, api_attribute)
+    if active_api is api:
+        client.stop()
+
+    if not join_required:
+        with lock:
+            released = (
+                client._last_stopped_native_api is api
+                and client._last_stop_native_released is True
+            )
+        return CtpNativeStopReceipt(
+            connection_generation=connection_generation,
+            join_required=False,
+            join_completed=True,
+            native_released=released,
+            thread_alive=False,
+            timed_out=False,
+        )
+
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        retained = _retired_ctp_native_session_snapshot(api)
+        if retained is None:
+            # The only normal removal path is after Join returned and Release
+            # succeeded. The immediate non-Join release path is handled above.
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=True,
+                native_released=True,
+                thread_alive=False,
+                timed_out=False,
+            )
+
+        if thread is None:
+            thread = retained[2]
+        thread_alive: bool | None = None
+        if thread is not None:
+            if thread is threading.current_thread():
+                thread_alive = True
+            else:
+                remaining = max(0.0, deadline - time.monotonic())
+                try:
+                    if remaining > 0:
+                        thread.join(remaining)
+                    thread_alive = thread.is_alive()
+                except (AttributeError, RuntimeError):
+                    # A stop may race the short interval between publishing an
+                    # observer and starting its Python thread. An unjoinable
+                    # observer is unknown/pending, never proof of completion.
+                    thread_alive = None
+        if thread_alive is False:
+            if _retired_ctp_native_session_snapshot(api) is None:
+                return CtpNativeStopReceipt(
+                    connection_generation=connection_generation,
+                    join_required=True,
+                    join_completed=True,
+                    native_released=True,
+                    thread_alive=False,
+                    timed_out=False,
+                )
+            # A terminated Join observer may have seen Join raise or Release
+            # fail. Consult explicit Join-return evidence and keep the receipt
+            # incomplete while the API remains retained.
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=_ctp_native_join_completed(api),
+                native_released=False,
+                thread_alive=False,
+                timed_out=False,
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=True,
+                join_completed=_ctp_native_join_completed(api),
+                native_released=False,
+                thread_alive=thread_alive,
+                timed_out=True,
+            )
+        # In block=True startup, Join runs on the caller's thread and there is
+        # no observer object to join. Poll only the exact retained API, with a
+        # short sleep bounded by the caller's deadline.
+        time.sleep(min(0.01, remaining))
 
 
 _CTP_EXECUTION_GATE_PROOF_FIELDS = (
@@ -363,6 +581,129 @@ class _CtpSettlementAuthorization:
         self._used = False
 
 
+_CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL = object()
+_CTP_MANAGED_SIMNOW_PROFILES = frozenset(
+    {"config_front_pair", "set1_group1", "set1_group2"}
+)
+_CTP_RESTRICTED_SIMNOW_PROFILES = _CTP_MANAGED_SIMNOW_PROFILES | frozenset(
+    {
+        "set2_7x24",
+        "set1_group1_vpn",
+        "set2_7x24_4000x",
+        "set2_7x24_vpn",
+        "set1",
+        "set2",
+    }
+)
+
+
+class _CtpRuntimeSimNowWriteAuthorization:
+    """One-native-call SimNow grant minted after the installed verifier passes.
+
+    The grant is intentionally private and carries only the exact session and
+    managed intent identity.  It is created and consumed while the client's
+    request lock is held, immediately before the typed native request.
+    """
+
+    __slots__ = (
+        "_seal",
+        "_client_ref",
+        "_capability",
+        "_operation",
+        "_td_front",
+        "_md_front",
+        "_environment_profile",
+        "_account_fingerprint",
+        "_trading_day",
+        "_connection_generation",
+        "_instrument_id",
+        "_exchange_id",
+        "_runtime_order_id",
+        "_managed_intent_id",
+        "_runtime_action_id",
+        "_managed_cancel_intent_id",
+        "_preflight_epoch",
+        "_used",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: object,
+        capability: object,
+        operation: str,
+        binding: CtpRuntimeSimNowCredentialBinding,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str,
+        managed_intent_id: str,
+        runtime_action_id: str | None,
+        managed_cancel_intent_id: str | None,
+        preflight_epoch: int,
+    ) -> None:
+        self._seal = _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL
+        self._client_ref = weakref.ref(client)
+        self._capability = capability
+        self._operation = operation
+        self._td_front = binding.td_front
+        self._md_front = (
+            client._bound_md_front
+            if client._bound_md_front is not None
+            else binding.md_front
+        )
+        self._environment_profile = (
+            client.ctp_env_profile
+            if client.ctp_env_profile is not None
+            else binding.environment_profile
+        )
+        self._account_fingerprint = f"acct_{client._account_fingerprint}"
+        self._trading_day = client._trading_day
+        self._connection_generation = client._connection_generation
+        self._instrument_id = instrument_id
+        self._exchange_id = exchange_id
+        self._runtime_order_id = runtime_order_id
+        self._managed_intent_id = managed_intent_id
+        self._runtime_action_id = runtime_action_id
+        self._managed_cancel_intent_id = managed_cancel_intent_id
+        self._preflight_epoch = preflight_epoch
+        self._used = False
+
+
+@dataclass(frozen=True)
+class CtpRuntimeSimNowCredentialBinding:
+    """Owner-bound, approved SimNow context used at the final native gate.
+
+    This value is only a verifier handle. It contains no key material and no
+    native execution capability, and it cannot arm the persistent execution
+    gate. The approval context must be one collected by ``BtApi`` with its
+    reviewed CTP credential-binding verifier. The exact selected TD/MD pair
+    must match both the active feed and the verifier's fresh credential HMAC;
+    an SDK front allowlist or TCP probe is not write authority. Native writes
+    additionally need an explicit ``write_intent_verifier``; it receives the
+    exact one-order or one-cancel scope and must check current order limits and
+    revocation state. Omitting that callback leaves writes closed.
+    """
+
+    owner: object = dataclass_field(repr=False, compare=False)
+    approval_context: CtpExecutionApprovalContext = dataclass_field(repr=False, compare=False)
+    approval: CtpExecutionApproval = dataclass_field(repr=False, compare=False)
+    credential_binding_verifier: CtpCredentialBindingVerifier = dataclass_field(
+        repr=False, compare=False
+    )
+    td_front: str = dataclass_field(repr=False)
+    md_front: str = dataclass_field(repr=False)
+    environment_profile: str
+    write_intent_verifier: Callable[[Mapping[str, Any]], object] | None = dataclass_field(
+        default=None, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        for name in ("td_front", "md_front", "environment_profile"):
+            value = getattr(self, name)
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError("invalid CTP SimNow credential binding")
+
+
 class _ManagedTraderApiView:
     """Dynamically expose the current native API through the managed gate."""
 
@@ -371,6 +712,12 @@ class _ManagedTraderApiView:
         # Req* callable before the SDK configures the gate; every invocation
         # must still observe the client's current API and gate state.
         self.__client_ref = weakref.ref(client)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_ManagedTraderApiView__client_ref":
+            object.__setattr__(self, name, value)
+            return
+        raise CtpExecutionGateError("ctp_execution_gate_native_api_view_read_only")
 
     def __getattr__(self, name: str) -> Any:
         client = self.__client_ref()
@@ -544,7 +891,9 @@ def _execution_gate_proof(value: Any) -> tuple[dict[str, Any], str]:
         if not isinstance(item, str) or not item or item != item.strip():
             raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
     account_fingerprint = proof["account_fingerprint"]
-    account_digest = account_fingerprint.removeprefix("acct_")
+    account_digest = (
+        account_fingerprint[5:] if account_fingerprint.startswith("acct_") else account_fingerprint
+    )
     if (
         account_fingerprint != account_fingerprint.lower()
         or not account_fingerprint.startswith("acct_")
@@ -849,6 +1198,176 @@ def _rsp_error(rsp_info: Any) -> tuple[int | None, str]:
     return error_id, str(getattr(rsp_info, "ErrorMsg", "") or "")
 
 
+def _native_text_field(field: Any, name: str) -> str:
+    """Read one detached textual identifier from a CTP field."""
+
+    try:
+        value = getattr(field, name, "") if field is not None else ""
+    except Exception:
+        return ""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _native_callback_flag(value: Any) -> bool | None:
+    """Normalize CTP/SWIG bool fields without accepting coercible strings."""
+
+    if type(value) is bool:
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    return None
+
+
+def _native_int_field(field: Any, name: str) -> int | None:
+    """Read one detached integer identifier from a CTP field."""
+
+    try:
+        value = getattr(field, name, 0) if field is not None else 0
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _parse_utc_timestamp(value: Any) -> datetime:
+    """Parse one canonical UTC timestamp from a reviewed CTP approval."""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError("approval timestamp invalid")
+    parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ValueError("approval timestamp not UTC")
+    return parsed
+
+
+@dataclass(frozen=True)
+class _OrderActionIdentity:
+    broker_id: str
+    investor_id: str
+    order_action_ref: str
+    order_ref: str
+    field_request_id: int | None
+    front_id: int | None
+    session_id: int | None
+    exchange_id: str
+    order_sys_id: str
+    action_flag: str
+    instrument_id: str
+
+
+def _order_action_identity(field: Any) -> _OrderActionIdentity:
+    return _OrderActionIdentity(
+        broker_id=_native_text_field(field, "BrokerID"),
+        investor_id=_native_text_field(field, "InvestorID"),
+        order_action_ref=_native_text_field(field, "OrderActionRef"),
+        order_ref=_native_text_field(field, "OrderRef"),
+        field_request_id=_native_int_field(field, "RequestID"),
+        front_id=_native_int_field(field, "FrontID"),
+        session_id=_native_int_field(field, "SessionID"),
+        exchange_id=_native_text_field(field, "ExchangeID"),
+        order_sys_id=_native_text_field(field, "OrderSysID"),
+        action_flag=_native_text_field(field, "ActionFlag"),
+        instrument_id=_native_text_field(field, "InstrumentID"),
+    )
+
+
+@dataclass(frozen=True)
+class _OrderInsertIdentity:
+    broker_id: str
+    investor_id: str
+    user_id: str
+    instrument_id: str
+    exchange_id: str
+    order_ref: str
+    field_request_id: int | None
+
+
+def _order_insert_identity(field: Any) -> _OrderInsertIdentity:
+    return _OrderInsertIdentity(
+        broker_id=_native_text_field(field, "BrokerID"),
+        investor_id=_native_text_field(field, "InvestorID"),
+        user_id=_native_text_field(field, "UserID"),
+        instrument_id=_native_text_field(field, "InstrumentID"),
+        exchange_id=_native_text_field(field, "ExchangeID"),
+        order_ref=_native_text_field(field, "OrderRef"),
+        field_request_id=_native_int_field(field, "RequestID"),
+    )
+
+
+@dataclass(frozen=True)
+class CtpOrderInsertEvidence:
+    """Immutable evidence from one native CTP order-insert callback.
+
+    ``accepted`` records a successful, exact ``OnRspOrderInsert`` response
+    only. It is not an exchange order acknowledgement or fill; callers must
+    use native order/trade readback for those facts. A local ReqOrderInsert
+    return code without a matching callback remains ``unknown``.
+    """
+
+    request_id: int
+    order_ref: str
+    status: str
+    account_fingerprint: str = dataclass_field(repr=False)
+    trading_day: str
+    connection_generation: int
+    instrument_id: str
+    exchange_id: str
+    evidence_source: str
+    callback_received: bool
+    evidence_received: bool
+    error_code: int | None
+    error_message: str
+    reason: str
+    submitted_at_utc: datetime
+    observed_at_utc: datetime | None
+    submit_code: int | None
+
+    @property
+    def is_known(self) -> bool:
+        """Whether an exact callback produced a non-UNKNOWN result."""
+
+        return self.evidence_received and self.status != "unknown"
+
+    def as_dict(self, *, include_error_message: bool = False) -> dict[str, Any]:
+        """Return a detached JSON-friendly snapshot with secrets redacted."""
+
+        result = {
+            "request_id": self.request_id,
+            "order_ref": self.order_ref,
+            "status": self.status,
+            "account_fingerprint": "<redacted>",
+            "trading_day": self.trading_day,
+            "connection_generation": self.connection_generation,
+            "instrument_id": self.instrument_id,
+            "exchange_id": self.exchange_id,
+            "evidence_source": self.evidence_source,
+            "callback_received": self.callback_received,
+            "evidence_received": self.evidence_received,
+            "error_code": self.error_code,
+            "error_message": self.error_message if include_error_message else "",
+            "reason": self.reason,
+            "submitted_at_utc": self.submitted_at_utc.isoformat(),
+            "observed_at_utc": (
+                self.observed_at_utc.isoformat() if self.observed_at_utc is not None else None
+            ),
+            "submit_code": self.submit_code,
+            "is_known": self.is_known,
+        }
+        return result
+
+
+@dataclass(frozen=True)
+class _TraderEventQueueEntry:
+    """Order/trade snapshot fenced to the API and connection that emitted it."""
+
+    snapshot: dict[str, Any]
+    native_api_generation: int
+    connection_generation: int
+
+
 @dataclass
 class _QueryAccumulator:
     request_type: str
@@ -871,6 +1390,8 @@ class _QueryAccumulator:
     trading_day: str = ""
     broker_id: str = ""
     investor_id: str = ""
+    request_filters: tuple[tuple[str, str], ...] = ()
+    explicit_request_filters: tuple[str, ...] = ()
     started_monotonic: float = 0.0
     completed_monotonic: float | None = None
     source_records_sha256: str | None = None
@@ -913,6 +1434,8 @@ class _QueryAccumulator:
                 trading_day=self.trading_day,
                 broker_id=self.broker_id,
                 investor_id=self.investor_id,
+                request_filters=self.request_filters,
+                explicit_request_filters=self.explicit_request_filters,
                 started_at_utc=self.started_at_utc,
                 completed_at_utc=self.completed_at_utc,
                 started_monotonic=self.started_monotonic,
@@ -925,6 +1448,47 @@ class _QueryAccumulator:
 # ===========================================================================
 #  MdClient - 行情客户端
 # ===========================================================================
+
+
+@dataclass(frozen=True)
+class MdIdentityObservation:
+    """Immutable identity evidence for one authenticated market-data session."""
+
+    front: str
+    broker_id: str
+    user_id: str
+    connection_generation: int
+    request_id: int
+    trading_day: str
+    authenticated: bool
+
+
+@dataclass(frozen=True)
+class _TraderLoginIdentityObservation:
+    """Native Trader login identity accepted for one request and generation."""
+
+    _seal: object
+    broker_id: str
+    user_id: str
+    trading_day: str
+    connection_generation: int
+    request_id: int
+
+
+@dataclass(frozen=True)
+class _MdLoginError:
+    """Sanitized login failure passed to the market-data error callback."""
+
+    ErrorID: int
+    ErrorMsg: str
+
+
+@dataclass(frozen=True)
+class _TraderLoginError:
+    """Sanitized Trader login identity failure passed to the error callback."""
+
+    ErrorID: int
+    ErrorMsg: str
 
 
 class _MdSpi(CThostFtdcMdSpi):
@@ -949,19 +1513,59 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connection_generation += 1
             self._c._connected = True
+            self._c._loggedin = False
+            self._c._active_md_identity = None
             generation = self._c._connection_generation
             front = self._c.front
+            self._c._pending_login_generation = generation
+            self._c._pending_login_request_id = generation
             field = CThostFtdcReqUserLoginField()
             field.BrokerID = self._c.broker_id
             field.UserID = self._c.user_id
             field.Password = self._c.password
             api = self._c._api
         # 连接代次是断线/重连的唯一权威标识，必须留痕，否则无人值守时断线不可见。
-        _logger.info(
-            "CTP market-data front connected (generation=%s, front=%s)", generation, front
-        )
+        _logger.info("CTP market-data front connected (generation=%s, front=%s)", generation, front)
         if api is not None:
-            api.ReqUserLogin(field, 1)
+            try:
+                result = api.ReqUserLogin(field, generation)
+            except Exception:
+                self._fail_login_submission(generation, -1, "login_request_exception")
+                return
+            if result is not None and result != 0:
+                error_id = result if type(result) is int else -1
+                self._fail_login_submission(generation, error_id, "login_request_rejected")
+
+    def _fail_login_submission(self, generation: int, error_id: int, reason: str) -> None:
+        with self._c._state_lock:
+            if (
+                not self._is_current_locked()
+                or self._c._connection_generation != generation
+                or (
+                    self._c._pending_login_generation != generation
+                    and not (
+                        self._c._active_md_identity is not None
+                        and self._c._active_md_identity.connection_generation == generation
+                    )
+                )
+            ):
+                return
+            self._c._connected = False
+            self._c._loggedin = False
+            self._c._active_md_identity = None
+            self._c._pending_login_generation = None
+            self._c._pending_login_request_id = None
+            error_callback = self._c.on_error
+        _logger.warning(
+            "CTP market-data login request failed "
+            "(generation=%s, request_id=%s, error_id=%s, reason=%s)",
+            generation,
+            generation,
+            error_id,
+            reason,
+        )
+        if error_callback is not None:
+            error_callback(_MdLoginError(error_id, reason))
 
     def OnFrontDisconnected(self, nReason):
         with self._c._state_lock:
@@ -969,6 +1573,9 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._connected = False
             self._c._loggedin = False
+            self._c._active_md_identity = None
+            self._c._pending_login_generation = None
+            self._c._pending_login_request_id = None
             generation = self._c._connection_generation
             callback = self._c.on_disconnect
         # 常见原因码：0x1001 网络读失败、0x2001 接收心跳超时、0x2003 收到错误报文。
@@ -987,21 +1594,96 @@ class _MdSpi(CThostFtdcMdSpi):
         trading_day = ""
         pending = 0
         generation = None
+        failure_reason = ""
+        response_error_id = (
+            None if pRspInfo is None else _native_int_field(pRspInfo, "ErrorID")
+        )
         with self._c._state_lock:
             if not self._is_current_locked():
                 return
             generation = self._c._connection_generation
-            if pRspInfo and pRspInfo.ErrorID == 0:
-                self._c._loggedin = True
-                login_ok = True
-                trading_day = str(getattr(pRspUserLogin, "TradingDay", "") or "")
-                pending = len(self._c._pending_instruments)
-                if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
-                    subscribe = (self._c._api, list(self._c._pending_instruments))
-                callback = self._c.on_login
-            else:
+            expected_generation = self._c._pending_login_generation
+            expected_request_id = self._c._pending_login_request_id
+            if (
+                not self._c._connected
+                or type(generation) is not int
+                or generation <= 0
+                or type(expected_generation) is not int
+                or expected_generation != generation
+                or type(expected_request_id) is not int
+                or expected_request_id != generation
+                or expected_request_id is None
+                or type(nRequestID) is not int
+                or nRequestID != expected_request_id
+            ):
+                return
+            if bIsLast is not True:
+                # CTP response callbacks can be non-terminal. Do not publish
+                # login state or trigger subscriptions until the final packet.
+                return
+            if response_error_id != 0:
+                self._c._loggedin = False
+                self._c._active_md_identity = None
+                self._c._pending_login_generation = None
+                self._c._pending_login_request_id = None
                 error_callback = self._c.on_error
-                error_info = pRspInfo
+                error_info = _MdLoginError(
+                    ErrorID=(response_error_id if response_error_id not in (None, 0) else -1),
+                    ErrorMsg="provider_login_rejected",
+                )
+            else:
+                broker_id = _native_text_field(pRspUserLogin, "BrokerID")
+                user_id = _native_text_field(pRspUserLogin, "UserID")
+                trading_day = _native_text_field(pRspUserLogin, "TradingDay")
+                if broker_id != self._c._bound_broker_id:
+                    failure_reason = "broker_id_mismatch"
+                elif user_id != self._c._bound_user_id:
+                    failure_reason = "user_id_mismatch"
+                elif not trading_day:
+                    failure_reason = "trading_day_missing"
+                elif (
+                    len(trading_day) != 8 or not trading_day.isascii() or not trading_day.isdigit()
+                ):
+                    failure_reason = "trading_day_invalid"
+                else:
+                    try:
+                        datetime.strptime(trading_day, "%Y%m%d")
+                    except ValueError:
+                        failure_reason = "trading_day_invalid"
+
+                self._c._pending_login_generation = None
+                self._c._pending_login_request_id = None
+                if not failure_reason:
+                    self._c._loggedin = True
+                    self._c._active_md_identity = MdIdentityObservation(
+                        front=self._c._bound_front,
+                        broker_id=self._c._bound_broker_id,
+                        user_id=self._c._bound_user_id,
+                        connection_generation=generation,
+                        request_id=expected_request_id,
+                        trading_day=trading_day,
+                        authenticated=True,
+                    )
+                    login_ok = True
+                    pending = len(self._c._pending_instruments)
+                    if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
+                        subscribe = (self._c._api, list(self._c._pending_instruments))
+                    callback = self._c.on_login
+                else:
+                    self._c._loggedin = False
+                    self._c._active_md_identity = None
+                    _logger.warning(
+                        "CTP market-data login identity rejected "
+                        "(generation=%s, request_id=%s, reason=%s)",
+                        generation,
+                        expected_request_id,
+                        failure_reason,
+                    )
+                    error_callback = self._c.on_error
+                    error_info = _MdLoginError(
+                        ErrorID=-1,
+                        ErrorMsg=f"login_identity_rejected:{failure_reason}",
+                    )
         if login_ok:
             _logger.info(
                 "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d)",
@@ -1011,10 +1693,12 @@ class _MdSpi(CThostFtdcMdSpi):
             )
         else:
             _logger.warning(
-                "CTP market-data login failed (generation=%s, error_id=%s, error_msg=%s)",
+                "CTP market-data login failed (generation=%s, request_id=%s, "
+                "error_id=%s, error_msg=[redacted], identity_reason=%s)",
                 generation,
-                getattr(pRspInfo, "ErrorID", None),
-                getattr(pRspInfo, "ErrorMsg", ""),
+                nRequestID,
+                response_error_id,
+                failure_reason,
             )
         if subscribe is not None and subscribe[0] is not None:
             subscribe[0].SubscribeMarketData(subscribe[1])
@@ -1059,9 +1743,9 @@ class MdClient:
     """
 
     def __init__(self, front, broker_id, user_id, password):
-        self.front = front
-        self.broker_id = broker_id
-        self.user_id = user_id
+        self._bound_front = str(front or "")
+        self._bound_broker_id = str(broker_id or "")
+        self._bound_user_id = str(user_id or "")
         self.password = password
 
         self.on_tick = None  # callback(CThostFtdcDepthMarketDataField)
@@ -1079,6 +1763,9 @@ class MdClient:
         # False = 调用方自行异步分批重订阅，避免阻塞 CTP 原生回调线程。
         self.auto_resubscribe_on_login = True
         self._connection_generation = 0
+        self._pending_login_generation: int | None = None
+        self._pending_login_request_id: int | None = None
+        self._active_md_identity: MdIdentityObservation | None = None
         self._api = None
         self._spi = None
         self._thread = None
@@ -1088,6 +1775,33 @@ class MdClient:
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
         self._state_lock = threading.RLock()
+        self._last_stopped_native_api = None
+        self._last_stopped_connection_generation = 0
+        self._last_stop_join_required = False
+        self._last_stop_native_released: bool | None = None
+
+    @property
+    def front(self) -> str:
+        """The immutable CTP market-data front supplied at construction."""
+        return self._bound_front
+
+    @property
+    def broker_id(self) -> str:
+        """The immutable broker identity supplied at construction."""
+        return self._bound_broker_id
+
+    @property
+    def user_id(self) -> str:
+        """The immutable user identity supplied at construction."""
+        return self._bound_user_id
+
+    @property
+    def active_md_identity(self) -> MdIdentityObservation | None:
+        """Return the immutable authenticated identity for the active MD session."""
+        with self._state_lock:
+            if not self._connected or not self._loggedin:
+                return None
+            return self._active_md_identity
 
     def _reserve_start_generation(self) -> int:
         """Reserve one startup generation before creating the native API."""
@@ -1178,6 +1892,9 @@ class MdClient:
             self._join_active = False
             self._native_init_started = False
             self._starting_generation = None
+            self._active_md_identity = None
+            self._pending_login_generation = None
+            self._pending_login_request_id = None
             self._lifecycle_generation += 1
 
         if observe_join:
@@ -1204,6 +1921,7 @@ class MdClient:
                         self._native_init_started = False
                     if self._thread is threading.current_thread():
                         self._thread = None
+                _record_ctp_native_join_completed(api)
                 _release_retired_ctp_native_session_after_join(api)
 
     def _start_join_observer(self, api: Any) -> bool:
@@ -1228,9 +1946,7 @@ class MdClient:
         if api is not None:
             api.SubscribeMarketData(pending_instruments)
 
-    def subscribe_batched(
-        self, instruments, *, batch_size=100, interval_sec=0.1, should_stop=None
-    ):
+    def subscribe_batched(self, instruments, *, batch_size=100, interval_sec=0.1, should_stop=None):
         """分批订阅合约列表（可在 start 前或后调用）
 
         与 :meth:`subscribe` 的差异：
@@ -1403,6 +2119,9 @@ class MdClient:
             self._starting_generation = None
             self._loggedin = False
             self._connected = False
+            self._active_md_identity = None
+            self._pending_login_generation = None
+            self._pending_login_request_id = None
             api = self._api
             spi = self._spi
             join_thread = self._thread
@@ -1412,6 +2131,10 @@ class MdClient:
             )
             if api is None:
                 return
+            self._last_stopped_native_api = api
+            self._last_stopped_connection_generation = self._connection_generation
+            self._last_stop_join_required = join_active
+            self._last_stop_native_released = False if join_active else None
             if join_active:
                 _retain_live_ctp_native_session(api, spi, join_thread)
             self._api = None
@@ -1428,9 +2151,29 @@ class MdClient:
                 api.RegisterSpi(None)
             return
 
+        released = False
         with suppress(Exception):
             api.RegisterSpi(None)
             api.Release()
+            released = True
+        with self._state_lock:
+            if self._last_stopped_native_api is api:
+                self._last_stop_native_released = released
+
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        """Stop this market-data session and observe bounded native shutdown.
+
+        ``timeout`` is in seconds and is capped at 30 seconds. A pending native
+        Join or a failed Release returns an incomplete immutable receipt; the
+        method never treats cleared client fields as shutdown evidence.
+        """
+
+        return _make_ctp_native_stop_receipt(
+            self,
+            timeout,
+            lock=self._state_lock,
+            api_attribute="_api",
+        )
 
     @property
     def is_ready(self):
@@ -1472,7 +2215,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         if self._native_api is None:
             # Offline unit tests construct an unbound SPI directly.
             return True
-        return self._c._spi is self and self._c._api is self._native_api
+        return self._c._spi is self and self._c._native_api is self._native_api
 
     def _is_current(self) -> bool:
         with self._c._query_state_lock:
@@ -1494,7 +2237,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
             self._c._authentication_request_id = request_id
             self._c._authentication_connection_generation = generation
             self._c._record_request("authenticate")
-            api = self._c._api
+            api = self._c._native_api
         try:
             ret = api.ReqAuthenticate(field, request_id)
         except Exception as exc:
@@ -1544,11 +2287,14 @@ class _TraderSpi(CThostFtdcTraderSpi):
             if not accepted:
                 self._c._authentication_late_callback_count += 1
                 return
+            if _native_callback_flag(bIsLast) is not True:
+                return
             self._c._authentication_request_id = None
             self._c._authentication_connection_generation = None
             error_id, _ = _rsp_error(pRspInfo)
             if error_id not in (None, 0):
                 self._c._authentication_state = "failed"
+                self._c._login_identity_observation = None
                 self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
                 error_callback = self._c.on_error
             else:
@@ -1560,10 +2306,12 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 request_id = self._c._next_request_id()
                 generation = self._c._connection_generation
                 self._c._login_state = "logging_in"
+                self._c._login_identity_observation = None
+                self._c._trading_day = ""
                 self._c._login_request_id = request_id
                 self._c._login_connection_generation = generation
                 self._c._record_request("login")
-                login_submission = (self._c._api, field, request_id, generation)
+                login_submission = (self._c._native_api, field, request_id, generation)
         if error_callback is not None:
             error_callback(pRspInfo)
             return
@@ -1580,6 +2328,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     and self._c._connection_generation == generation
                 ):
                     self._c._login_state = "failed"
+                    self._c._login_identity_observation = None
+                    self._c._trading_day = ""
                     self._c._last_session_error = {
                         "error": "login_submit_failed",
                         "detail": (
@@ -1595,6 +2345,8 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     and self._c._connection_generation == generation
                 ):
                     self._c._login_state = "failed"
+                    self._c._login_identity_observation = None
+                    self._c._trading_day = ""
                     self._c._last_session_error = {
                         "error": "login_submit_rejected",
                         "submit_code": ret,
@@ -1614,15 +2366,48 @@ class _TraderSpi(CThostFtdcTraderSpi):
             if not accepted:
                 self._c._login_late_callback_count += 1
                 return
+            if _native_callback_flag(bIsLast) is not True:
+                return
             generation = self._c._connection_generation
+            request_id = int(nRequestID)
             self._c._login_request_id = None
             self._c._login_connection_generation = None
             error_id, _ = _rsp_error(pRspInfo)
-            if error_id in (None, 0):
+            broker_id = _native_text_field(pRspUserLogin, "BrokerID").strip()
+            user_id = _native_text_field(pRspUserLogin, "UserID").strip()
+            trading_day = _native_text_field(pRspUserLogin, "TradingDay").strip()
+            failure_reason = ""
+            if error_id not in (None, 0):
+                failure_reason = "provider_login_rejected"
+            elif not broker_id or broker_id != self._c._bound_broker_id:
+                failure_reason = "broker_id_mismatch"
+            elif not user_id or user_id != self._c._bound_user_id:
+                failure_reason = "user_id_mismatch"
+            elif (
+                len(trading_day) != 8
+                or not trading_day.isascii()
+                or not trading_day.isdigit()
+            ):
+                failure_reason = "trading_day_invalid"
+            else:
+                try:
+                    datetime.strptime(trading_day, "%Y%m%d")
+                except ValueError:
+                    failure_reason = "trading_day_invalid"
+
+            if not failure_reason:
                 self._c._login_state = "logged_in"
-                self._c._front_id = pRspUserLogin.FrontID
-                self._c._session_id = pRspUserLogin.SessionID
-                self._c._trading_day = str(getattr(pRspUserLogin, "TradingDay", "") or "")
+                self._c._front_id = getattr(pRspUserLogin, "FrontID", 0)
+                self._c._session_id = getattr(pRspUserLogin, "SessionID", 0)
+                self._c._trading_day = trading_day
+                self._c._login_identity_observation = _TraderLoginIdentityObservation(
+                    _seal=_TRADER_LOGIN_IDENTITY_SEAL,
+                    broker_id=broker_id,
+                    user_id=user_id,
+                    trading_day=trading_day,
+                    connection_generation=generation,
+                    request_id=request_id,
+                )
                 with suppress(TypeError, ValueError):
                     self._c._max_order_ref = max(
                         self._c._max_order_ref,
@@ -1642,8 +2427,16 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 login_callback = self._c.on_login
             else:
                 self._c._login_state = "failed"
-                self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
+                self._c._login_identity_observation = None
+                self._c._trading_day = ""
+                self._c._ready = False
+                self._c._last_session_error = {
+                    "error": "login_identity_rejected",
+                    "reason": failure_reason,
+                }
                 error_callback = self._c.on_error
+                if error_callback is not None and error_id == 0:
+                    pRspInfo = _TraderLoginError(ErrorID=-1, ErrorMsg=failure_reason)
         if login_callback is not None:
             login_callback(pRspUserLogin)
         if error_callback is not None:
@@ -1765,35 +2558,93 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     @_fence_trader_spi_callback
     def OnRtnOrder(self, pOrder):
-        if not self._is_current():
-            return
-        self._c._push_order_event(pOrder)
+        self._c._push_order_event(
+            pOrder,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
 
     @_fence_trader_spi_callback
     def OnRtnTrade(self, pTrade):
-        if not self._is_current():
-            return
-        self._c._push_trade_event(pTrade)
+        self._c._push_trade_event(
+            pTrade,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
 
     @_fence_trader_spi_callback
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
         if not self._is_current():
             return
+        self._c._handle_order_insert_response(
+            pInputOrder,
+            pRspInfo,
+            nRequestID,
+            bIsLast,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
         self._c._push_error_event(
             event_type="order_insert_response",
             rsp_info=pRspInfo,
             field=pInputOrder,
             request_id=nRequestID,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
+
+    @_fence_trader_spi_callback
+    def OnRspOrderAction(self, pInputOrderAction, pRspInfo, nRequestID, bIsLast):
+        self._c._handle_order_action_response(
+            pInputOrderAction,
+            pRspInfo,
+            nRequestID,
+            bIsLast,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
+        self._c._push_error_event(
+            event_type="order_action_response",
+            rsp_info=pRspInfo,
+            field=pInputOrderAction,
+            request_id=nRequestID,
+            origin_api=self._native_api,
+            origin_spi=self,
         )
 
     @_fence_trader_spi_callback
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
         if not self._is_current():
             return
+        self._c._handle_order_insert_error(
+            pInputOrder,
+            pRspInfo,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
         self._c._push_error_event(
             event_type="order_insert_error",
             rsp_info=pRspInfo,
             field=pInputOrder,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
+
+    @_fence_trader_spi_callback
+    def OnErrRtnOrderAction(self, pOrderAction, pRspInfo):
+        self._c._handle_order_action_error(
+            pOrderAction,
+            pRspInfo,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
+        self._c._push_error_event(
+            event_type="order_action_error",
+            rsp_info=pRspInfo,
+            field=pOrderAction,
+            request_id=_native_int_field(pOrderAction, "RequestID"),
+            origin_api=self._native_api,
+            origin_spi=self,
         )
 
     @_fence_trader_spi_callback
@@ -1805,7 +2656,34 @@ class _TraderSpi(CThostFtdcTraderSpi):
             event_type="response_error",
             rsp_info=pRspInfo,
             request_id=nRequestID,
+            origin_api=self._native_api,
+            origin_spi=self,
         )
+
+
+def _validate_explicit_ctp_front(front: Any) -> None:
+    """Validate one explicitly configured CTP TCP endpoint without probing it."""
+
+    if type(front) is not str or not front or front != front.strip():
+        raise ValueError("invalid configured CTP front")
+    try:
+        parsed = urlsplit(front)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("invalid configured CTP front") from exc
+    if (
+        parsed.scheme != "tcp"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or port is None
+        or not 1 <= port <= 65535
+        or any(char.isspace() or ord(char) < 32 for char in front)
+    ):
+        raise ValueError("invalid configured CTP front")
 
 
 class TraderClient:
@@ -1829,16 +2707,34 @@ class TraderClient:
         app_id="simnow_client_test",
         auth_code="0000000000000000",
         auto_settlement_confirm=False,
+        *,
+        md_front: str | None = None,
+        ctp_env_profile: str | None = None,
     ):
+        if (md_front is None) != (ctp_env_profile is None):
+            raise ValueError("explicit CTP front pair and profile must be supplied together")
+        if ctp_env_profile is not None:
+            if (
+                type(ctp_env_profile) is not str
+                or not ctp_env_profile
+                or ctp_env_profile != ctp_env_profile.strip()
+            ):
+                raise ValueError("invalid CTP environment profile")
+            _validate_explicit_ctp_front(front)
+            _validate_explicit_ctp_front(md_front)
+
         # Keep the identity and TD front that created this client separate
         # from the historically public compatibility attributes below.  A
         # caller can mutate ``broker_id``/``user_id``/``front`` on a Python
         # object, but that must not retarget a session whose preflight proof
         # was bound to the original account and native front.
         self._bound_front = str(front or "").strip()
+        self.__bound_md_front = md_front
+        self.__bound_ctp_env_profile = ctp_env_profile
         self._bound_broker_id = str(broker_id or "").strip()
         self._bound_user_id = str(user_id or "").strip()
         self.front = front
+        self.md_front = md_front
         self.broker_id = broker_id
         self.user_id = user_id
         self.password = password
@@ -1869,7 +2765,9 @@ class TraderClient:
         self._api = None
         self._session_native_api = None
         self._session_native_front: str | None = None
+        self._front_connected_front: str | None = None
         self._spi = None
+        self._native_api_generation = 0
         self._thread = None
         self._join_active = False
         self._native_init_started = False
@@ -1891,6 +2789,7 @@ class TraderClient:
         self._login_request_id: int | None = None
         self._login_connection_generation: int | None = None
         self._login_late_callback_count = 0
+        self._login_identity_observation: _TraderLoginIdentityObservation | None = None
         self._query_done = threading.Event()
         self._last_account = None
         self._last_positions = []
@@ -1901,11 +2800,21 @@ class TraderClient:
         self._query_lock = threading.Lock()
         self._query_state_lock = threading.RLock()
         self._query_history: dict[int, _QueryAccumulator] = {}
+        self._order_insert_history: dict[tuple[int, str], CtpOrderInsertEvidence] = {}
+        self._order_insert_identities: dict[tuple[int, str], _OrderInsertIdentity] = {}
+        self._order_insert_late_callback_count = 0
+        self._order_action_history: dict[tuple[int, str], CtpOrderActionEvidence] = {}
+        self._order_action_identities: dict[tuple[int, str], _OrderActionIdentity] = {}
+        self._order_action_late_callback_count = 0
         # Every typed query source and session scope from this client share an
         # opaque issuer.  Equal account strings from a different object or a
         # hand-built mapping can therefore never certify the same query.
         self._query_evidence_issuer = object()
         self._orphan_query_callbacks: list[dict[str, Any]] = []
+        self._last_stopped_native_api = None
+        self._last_stopped_connection_generation = 0
+        self._last_stop_join_required = False
+        self._last_stop_native_released: bool | None = None
         self._request_counts: dict[str, int] = empty_ctp_request_counts()
         self._execution_gate_capability: object | None = None
         self._execution_gate_proof: dict[str, Any] | None = None
@@ -1915,6 +2824,7 @@ class TraderClient:
         self._execution_gate_cycle_id: str | None = None
         self._execution_gate_revocation_reason: str | None = None
         self._execution_gate_native_api = None
+        self._runtime_simnow_credential_binding: CtpRuntimeSimNowCredentialBinding | None = None
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -1934,27 +2844,56 @@ class TraderClient:
         self._error_events = queue.Queue()
 
     @property
+    def _bound_md_front(self) -> str | None:
+        """Return the constructor-bound MD front without a public setter."""
+
+        return self.__bound_md_front
+
+    @property
+    def ctp_env_profile(self) -> str | None:
+        """Return the constructor-bound environment label without a setter."""
+
+        return self.__bound_ctp_env_profile
+
+    @property
     def _api(self) -> Any:
+        """Return the public request-gated view, never the native handle."""
+
+        if self._native_api is None:
+            return None
+        return self._api_view
+
+    @property
+    def _native_api(self) -> Any:
+        """Return the backing CTP object to internal gated implementation only."""
+
         return getattr(self, "_TraderClient__native_api", None)
 
     @_api.setter
     def _api(self, value: Any) -> None:
-        current = getattr(self, "_TraderClient__native_api", None)
-        if current is value:
+        if value is getattr(self, "_api_view", None):
             return
         lock = getattr(self, "_query_state_lock", None)
         if lock is None:
             self.__native_api = value
             return
         with lock:
+            current = getattr(self, "_TraderClient__native_api", None)
+            if current is value:
+                return
             if getattr(self, "_execution_gate_capability", None) is not None:
                 self._revoke_execution_gate_locked("ctp_execution_gate_native_api_changed")
             if hasattr(self, "_execution_preflight_epoch"):
                 self._execution_preflight_epoch += 1
+            if current is not None:
+                self._login_identity_observation = None
             self._session_native_api = None
             self._session_native_front = None
+            self._front_connected_front = None
             # Any callbacks from the previous SPI become stale immediately.
             self._spi = None
+            self._native_api_generation += 1
+            self._drain_trader_event_queues_locked()
             self.__native_api = value
 
     def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
@@ -1970,12 +2909,434 @@ class TraderClient:
         ).hexdigest()[:16]
         if (
             str(self.front or "").strip() != self._bound_front
+            or self.md_front != self._bound_md_front
             or str(self.broker_id or "").strip() != self._bound_broker_id
             or str(self.user_id or "").strip() != self._bound_user_id
             or current_fingerprint != self._account_fingerprint
         ):
             return False
         return not require_active_front or self._session_native_front == self._bound_front
+
+    def _is_simnow_write_restricted_locked(self) -> bool:
+        return (
+            is_official_simnow_td_front(getattr(self, "_bound_front", ""))
+            or self.ctp_env_profile == "config_front_pair"
+            or self._runtime_simnow_credential_binding is not None
+        )
+
+    def _reject_official_simnow_write_locked(self) -> None:
+        """Reject generic writes for official or runtime-classified SimNow."""
+
+        if self._is_simnow_write_restricted_locked():
+            raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+
+    def configure_runtime_simnow_credential_binding(
+        self,
+        capability: object,
+        binding: CtpRuntimeSimNowCredentialBinding,
+    ) -> dict[str, Any]:
+        """Install a reviewed, owner-bound SimNow verifier handle.
+
+        This method does not issue a capability or arm orders. It accepts only
+        the capability already installed by the SDK owner, and only for the
+        exact runtime-selected TD/MD pair. The signed approval and credential
+        binding authenticate that pair; no SDK endpoint allowlist or TCP
+        reachability result grants write authority. The environment profile
+        must still be supported by the independent approval contract. The
+        gate stays disarmed and the binding is refreshed at the native gate.
+        """
+
+        if type(binding) is not CtpRuntimeSimNowCredentialBinding:
+            raise CtpExecutionGateError("ctp_simnow_credential_binding_required")
+        with self._query_state_lock:
+            if (
+                not _is_ctp_core_execution_authority(capability)
+                or capability is not self._execution_gate_capability
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            if self._execution_gate_proof is not None:
+                raise CtpExecutionGateError(
+                    "ctp_simnow_credential_binding_requires_disarmed_gate"
+                )
+            if binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES:
+                raise CtpExecutionGateError("ctp_simnow_bounded_profile_required")
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            self._runtime_simnow_credential_binding = binding
+            return {
+                "configured": True,
+                "environment_profile": binding.environment_profile,
+                "connection_generation": self._connection_generation,
+            }
+
+    def _validate_runtime_simnow_credential_binding_locked(
+        self,
+        binding: CtpRuntimeSimNowCredentialBinding,
+    ) -> None:
+        """Refresh the SDK-sealed approval context and bind it to this client."""
+
+        try:
+            from bt_api_py import CtpExecutionApprovalContext
+            from bt_api_py._ctp_credential_binding import _is_verifier, _new_scope
+            from bt_api_py._ctp_execution_authorization import (
+                _CAPABILITY_SEAL,
+                SIMNOW_APPROVAL_SCHEMA_VERSION,
+                SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                _refresh_runtime_context,
+            )
+
+            if (
+                binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES
+                or binding.td_front != self._bound_front
+                or (
+                    binding.environment_profile == "config_front_pair"
+                    and (
+                        self._bound_md_front is None
+                        or self.ctp_env_profile != "config_front_pair"
+                    )
+                )
+                or (
+                    self._bound_md_front is not None
+                    and binding.md_front != self._bound_md_front
+                )
+                or (
+                    self.ctp_env_profile is not None
+                    and binding.environment_profile != self.ctp_env_profile
+                )
+                or _is_verifier(binding.credential_binding_verifier, owner=binding.owner)
+                is not True
+                or type(binding.approval_context) is not CtpExecutionApprovalContext
+                or getattr(binding.approval_context, "_owner", None) is not binding.owner
+            ):
+                raise ValueError("binding identity rejected")
+            approval = binding.approval
+            if (
+                type(approval).__module__ != "bt_api_py._ctp_execution_authorization"
+                or type(approval).__name__ != "CtpExecutionApproval"
+                or getattr(approval, "_seal", None) is not _CAPABILITY_SEAL
+                or getattr(approval, "schema_version", None)
+                not in {
+                    SIMNOW_APPROVAL_SCHEMA_VERSION,
+                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                }
+            ):
+                raise ValueError("approval type rejected")
+
+            context_refresh = getattr(binding.approval_context, "_refresh", None)
+            code = getattr(context_refresh, "__code__", None)
+            closure = getattr(context_refresh, "__closure__", None) or ()
+            closure_values = dict(zip(getattr(code, "co_freevars", ()), closure))
+            captured = {
+                name: getattr(cell, "cell_contents", None)
+                for name, cell in closure_values.items()
+            }
+            if (
+                captured.get("credential_binding_verifier")
+                is not binding.credential_binding_verifier
+                or captured.get("self") is not binding.owner
+            ):
+                raise ValueError("approval verifier owner mismatch")
+            refreshed = _refresh_runtime_context(binding.approval_context, binding.owner)
+            current = refreshed.as_dict()
+            payload = approval.payload
+            if not isinstance(payload, Mapping):
+                raise ValueError("approval payload rejected")
+
+            # This verifies the current key/config/front HMAC through the
+            # context's owner-bound refresh closure, then pins its result to
+            # the already signature-verified approval. No HMAC key or
+            # credential value crosses the SDK boundary.
+            binding_fields = (
+                "credential_binding_key_id",
+                "credential_binding_hmac_sha256",
+            )
+            if any(
+                not isinstance(current.get(name), str)
+                or not current.get(name)
+                or current.get(name) != payload.get(name)
+                for name in binding_fields
+            ):
+                raise ValueError("credential binding changed")
+
+            context_fields = (
+                "account_fingerprint",
+                "trading_day",
+                "connection_generation",
+                "environment_profile",
+                "strategy_identity_sha256",
+                "execution_cycle_id",
+                "configuration_sha256",
+                "backtrader_sha256",
+                "bt_api_py_sha256",
+                "bt_api_ctp_sha256",
+                "bt_api_base_sha256",
+                "native_sha256",
+                "dependency_hashes_sha256",
+                "preflight_sha256",
+                "evidence_sha256",
+            )
+            if any(current.get(name) != payload.get(name) for name in context_fields):
+                raise ValueError("approval scope changed")
+
+            # The signature/revocation list were checked when the approval
+            # was installed. This client has no fresh deployment trust root,
+            # but it still rejects expired approval and revocation windows.
+            now = datetime.now(timezone.utc)
+            revocation_snapshot = getattr(approval, "revocation_snapshot", None)
+            if (
+                now < _parse_utc_timestamp(payload.get("not_before"))
+                or now >= _parse_utc_timestamp(payload.get("expires_at"))
+                or not isinstance(revocation_snapshot, Mapping)
+                or revocation_snapshot.get("version")
+                != payload.get("revocation_snapshot_version")
+                or now >= _parse_utc_timestamp(revocation_snapshot.get("expires_at"))
+            ):
+                raise ValueError("approval or revocation snapshot expired")
+
+            expected_account = f"acct_{self._account_fingerprint}"
+            if (
+                current.get("environment_profile") != binding.environment_profile
+                or current.get("account_fingerprint") != expected_account
+                or current.get("trading_day") != self._trading_day
+                or current.get("connection_generation") != self._connection_generation
+                or self.auto_settlement_confirm is not False
+                or self._connected is not True
+                or self._session_native_api is None
+                or self._session_native_api is not self._native_api
+                or self._current_login_identity_locked() is None
+                or self._bound_identity_is_current(require_active_front=True) is not True
+                or self._front_connected_front != binding.td_front
+            ):
+                raise ValueError("live CTP identity changed")
+
+            feeds = getattr(binding.owner, "exchange_feeds", None)
+            if not isinstance(feeds, Mapping):
+                raise ValueError("approval owner feed unavailable")
+            matched_feeds = []
+            for name, feed in feeds.items():
+                if str(name).partition("___")[0].upper() != "CTP":
+                    continue
+                native_trader = getattr(feed, "_trader", None)
+                if native_trader is None:
+                    native_trader = getattr(feed, "trader_client", None)
+                if native_trader is self:
+                    matched_feeds.append((str(name), feed))
+            if len(matched_feeds) != 1:
+                raise ValueError("approval owner is not bound to this trader")
+            exchange_name, feed = matched_feeds[0]
+            test_verifier = bool(
+                getattr(
+                    binding.credential_binding_verifier,
+                    "_is_controlled_test_verifier",
+                    False,
+                )
+            )
+            if captured.get("exchange_name") != exchange_name and not test_verifier:
+                raise ValueError("approval context is bound to a different CTP feed")
+
+            # Bind both configured fronts to the currently active feed pair.
+            # The SDK address registry is not the authority for custom fronts;
+            # the owner-bound verifier below authenticates the exact pair and
+            # its environment/configuration at this native client boundary.
+            if test_verifier:
+                trader = getattr(feed, "_trader", None)
+                if trader is None:
+                    trader = getattr(feed, "trader_client", None)
+                md_client = getattr(feed, "_md_client", None)
+                front_scope = {
+                    "td_front": str(getattr(trader, "front", "") or "").strip(),
+                    "md_front": str(getattr(md_client, "front", "") or "").strip(),
+                    "md_connection_generation": getattr(
+                        md_client, "connection_generation", None
+                    ),
+                    "md_stream_generation": getattr(feed, "_md_stream_generation", None),
+                }
+                if (
+                    front_scope["td_front"]
+                    != str(getattr(trader, "_bound_front", "") or "").strip()
+                    or front_scope["td_front"]
+                    != str(getattr(feed, "_execution_bound_td_front", "") or "").strip()
+                    or front_scope["md_front"]
+                    != str(getattr(feed, "_execution_bound_md_front", "") or "").strip()
+                ):
+                    raise ValueError("test front scope mismatch")
+            else:
+                front_reader = getattr(binding.owner, "_ctp_credential_binding_fronts", None)
+                if not callable(front_reader):
+                    raise ValueError("runtime front proof unavailable")
+                front_scope = front_reader(
+                    exchange_name,
+                    feed,
+                    current,
+                    binding.credential_binding_verifier,
+                    operation="configure_runtime_simnow_credential_binding",
+                )
+            if (
+                not isinstance(front_scope, Mapping)
+                or front_scope.get("td_front") != binding.td_front
+                or front_scope.get("md_front") != binding.md_front
+                or binding.td_front != self._bound_front
+            ):
+                raise ValueError("runtime-selected front pair mismatch")
+
+            front_binding_scope = _new_scope(
+                {
+                    "account_fingerprint": current["account_fingerprint"],
+                    "trading_day": current["trading_day"],
+                    "connection_generation": current["connection_generation"],
+                    "environment_profile": current["environment_profile"],
+                    "td_front": binding.td_front,
+                    "md_front": binding.md_front,
+                    "td_front_sha256": hashlib.sha256(
+                        binding.td_front.encode("utf-8", "strict")
+                    ).hexdigest(),
+                    "md_front_sha256": hashlib.sha256(
+                        binding.md_front.encode("utf-8", "strict")
+                    ).hexdigest(),
+                    "backtrader_sha256": payload["backtrader_sha256"],
+                    "backtrader_runtime_sha256": (
+                        binding.credential_binding_verifier.package_sha256
+                    ),
+                    "bt_api_py_sha256": payload["bt_api_py_sha256"],
+                    "bt_api_ctp_sha256": payload["bt_api_ctp_sha256"],
+                    "bt_api_base_sha256": payload["bt_api_base_sha256"],
+                    "native_sha256": payload["native_sha256"],
+                    "dependency_hashes_sha256": payload["dependency_hashes_sha256"],
+                    "configuration_sha256": payload["configuration_sha256"],
+                    "strategy_identity_sha256": payload["strategy_identity_sha256"],
+                    "preflight_sha256": payload["preflight_sha256"],
+                    "evidence_sha256": payload["evidence_sha256"],
+                    "md_connection_generation": front_scope[
+                        "md_connection_generation"
+                    ],
+                    "md_stream_generation": front_scope["md_stream_generation"],
+                }
+            )
+            selected_pair_binding = binding.credential_binding_verifier.refresh(
+                front_binding_scope,
+                owner=binding.owner,
+                operation="configure_runtime_simnow_credential_binding",
+            )
+            if any(
+                selected_pair_binding.get(name) != payload.get(name)
+                for name in binding_fields
+            ):
+                raise ValueError("selected front pair credential binding mismatch")
+        except CtpExecutionGateError:
+            raise
+        except Exception as exc:
+            raise CtpExecutionGateError(
+                "ctp_simnow_credential_binding_rejected"
+            ) from exc
+
+    def _require_runtime_simnow_credential_binding_locked(
+        self,
+        *,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
+    ) -> None:
+        """Revalidate SimNow approval scope/HMAC at the last Python boundary."""
+
+        binding = self._runtime_simnow_credential_binding
+        if binding is None:
+            raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+        try:
+            if (
+                not isinstance(runtime_order_id, str)
+                or not runtime_order_id.startswith("bt-managed-v1:")
+                or len(runtime_order_id) != len("bt-managed-v1:") + 64
+                or any(char not in "0123456789abcdef" for char in runtime_order_id[14:])
+                or not isinstance(managed_intent_id, str)
+                or not managed_intent_id
+                or managed_intent_id != managed_intent_id.strip()
+                or len(managed_intent_id) > 256
+                or not managed_intent_id.isascii()
+                or any(not (char.isalnum() or char in "._:-") for char in managed_intent_id)
+                or (runtime_action_id is not None and (
+                    not isinstance(runtime_action_id, str)
+                    or not runtime_action_id
+                    or runtime_action_id != runtime_action_id.strip()
+                    or len(runtime_action_id) > 256
+                    or not runtime_action_id.isascii()
+                    or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
+                ))
+                or (managed_cancel_intent_id is not None and (
+                    not isinstance(managed_cancel_intent_id, str)
+                    or not managed_cancel_intent_id
+                    or managed_cancel_intent_id != managed_cancel_intent_id.strip()
+                    or len(managed_cancel_intent_id) > 256
+                    or not managed_cancel_intent_id.isascii()
+                    or any(
+                        not (char.isalnum() or char in "._:-")
+                        for char in managed_cancel_intent_id
+                    )
+                ))
+            ):
+                raise ValueError("managed CTP identity invalid")
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            payload = binding.approval.payload
+            if runtime_action_id is None:
+                from bt_api_py._ctp_execution_authorization import (
+                    APPROVAL_PURPOSE,
+                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                )
+
+                instrument = {"instrument_id": instrument_id, "exchange_id": exchange_id}
+                authorized = payload.get("authorized_instruments")
+                if (
+                    payload.get("purpose") != APPROVAL_PURPOSE
+                    or payload.get("schema_version")
+                    != SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION
+                    or instrument not in authorized
+                    or payload.get("primary_instrument") != instrument
+                    or managed_cancel_intent_id is not None
+                ):
+                    raise ValueError("entry approval scope mismatch")
+            else:
+                from bt_api_py._ctp_execution_authorization import (
+                    RECOVERY_APPROVAL_PURPOSE,
+                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                )
+
+                now = datetime.now(timezone.utc)
+                actions = payload.get("recovery_actions")
+                matching = [
+                    action
+                    for action in actions or ()
+                    if isinstance(action, Mapping)
+                    and action.get("action_id") == managed_cancel_intent_id
+                ]
+                if (
+                    payload.get("purpose") != RECOVERY_APPROVAL_PURPOSE
+                    or payload.get("schema_version")
+                    != SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION
+                    or len(matching) != 1
+                    or matching[0].get("action_kind") != "cancel"
+                    or matching[0].get("instrument_id") != instrument_id
+                    or matching[0].get("exchange_id") != exchange_id
+                    or matching[0].get("account_fingerprint")
+                    != payload.get("account_fingerprint")
+                    or matching[0].get("trading_day") != payload.get("trading_day")
+                    or matching[0].get("connection_generation")
+                    != payload.get("connection_generation")
+                    or matching[0].get("environment_profile")
+                    != payload.get("environment_profile")
+                    or now >= _parse_utc_timestamp(matching[0].get("expires_at"))
+                ):
+                    raise ValueError("recovery approval scope mismatch")
+        except CtpExecutionGateError:
+            self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
+            raise
+        except Exception as exc:
+            self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
+            raise CtpExecutionGateError(
+                "ctp_simnow_credential_binding_rejected"
+            ) from exc
 
     def _require_bound_identity_locked(self, *, require_active_front: bool = False) -> None:
         """Fail closed before a managed native write can use mutable identity."""
@@ -2031,7 +3392,7 @@ class TraderClient:
                 # IDs, generation fencing and the one-query-at-a-time lock
                 # cannot be bypassed through a cached native Req* handle.
                 raise CtpExecutionGateError("ctp_execution_gate_raw_request_blocked")
-            api = self._api
+            api = self._native_api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             target = getattr(api, name)
@@ -2041,7 +3402,7 @@ class TraderClient:
         """Resolve a non-request native attribute without storing it in the view."""
 
         with self._query_state_lock:
-            api = self._api
+            api = self._native_api
             if api is None:
                 raise AttributeError(name)
             return getattr(api, name)
@@ -2061,7 +3422,7 @@ class TraderClient:
             # session into a managed execution session later.
             raise CtpExecutionGateError("ctp_execution_gate_native_lifecycle_blocked")
         with self._query_state_lock:
-            api = self._api
+            api = self._native_api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             target = getattr(api, name)
@@ -2084,6 +3445,15 @@ class TraderClient:
                 list(proof["authorized_instruments"]) if _is_execution_gate_bundle(proof) else None
             ),
             "environment_profile": self._execution_gate_environment_profile,
+            "runtime_simnow_credential_binding_configured": (
+                self._runtime_simnow_credential_binding is not None
+            ),
+            "runtime_simnow_write_verifier_configured": bool(
+                self._runtime_simnow_credential_binding is not None
+                and callable(
+                    self._runtime_simnow_credential_binding.write_intent_verifier
+                )
+            ),
             "proof_sha256": self._execution_gate_proof_sha256,
             "revocation_reason": self._execution_gate_revocation_reason,
         }
@@ -2132,6 +3502,7 @@ class TraderClient:
         """
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if not _is_ctp_core_execution_authority(capability):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_required")
             if capability is not self._execution_gate_capability:
@@ -2139,6 +3510,8 @@ class TraderClient:
             self._require_bound_identity_locked(require_active_front=True)
             normalized, _proof_sha256 = _execution_gate_proof(proof)
             profile = str(environment_profile or "").strip()
+            if profile in _CTP_RESTRICTED_SIMNOW_PROFILES:
+                raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
             if self.auto_settlement_confirm is not False:
                 raise CtpExecutionGateError("ctp_execution_gate_auto_settlement_confirm_enabled")
             if not self.is_trading_ready:
@@ -2150,8 +3523,8 @@ class TraderClient:
                 or normalized["connection_generation"] != self._connection_generation
                 or normalized["account_fingerprint"] != f"acct_{self._account_fingerprint}"
                 or normalized["trading_day"] != self._trading_day
-                or self._api is None
-                or self._api is not self._session_native_api
+                or self._native_api is None
+                or self._native_api is not self._session_native_api
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_authorization_context_mismatch")
             if (
@@ -2186,12 +3559,15 @@ class TraderClient:
         """Create one independent, account/day/generation-bound write grant."""
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if not _is_ctp_core_execution_authority(capability):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_required")
             if capability is not self._execution_gate_capability:
                 raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
             self._require_bound_identity_locked(require_active_front=True)
             profile = str(environment_profile or "").strip()
+            if profile in _CTP_RESTRICTED_SIMNOW_PROFILES:
+                raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
             if self.auto_settlement_confirm is not False:
                 raise CtpExecutionGateError("ctp_execution_gate_auto_settlement_confirm_enabled")
             if (
@@ -2201,8 +3577,8 @@ class TraderClient:
                 or not self.is_read_only_ready
                 or self._connection_generation <= 0
                 or not self._trading_day
-                or self._api is None
-                or self._api is not self._session_native_api
+                or self._native_api is None
+                or self._native_api is not self._session_native_api
                 or scope != "settlement_confirmation"
                 or type(budget) is not int
                 or budget != 1
@@ -2278,6 +3654,7 @@ class TraderClient:
         self._execution_gate_strategy_identity_sha256 = None
         self._execution_gate_cycle_id = None
         self._execution_gate_native_api = None
+        self._runtime_simnow_credential_binding = None
         self._execution_gate_revocation_reason = _execution_gate_reason(reason)
 
     def _require_execution_write_locked(
@@ -2285,7 +3662,73 @@ class TraderClient:
         capability: object | None,
         instrument: Any,
         exchange_id: Any = None,
-    ) -> None:
+        *,
+        operation: str | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
+    ) -> _CtpRuntimeSimNowWriteAuthorization | None:
+        if self._is_simnow_write_restricted_locked():
+            self._require_runtime_simnow_credential_binding_locked(
+                instrument_id=str(instrument or ""),
+                exchange_id=str(exchange_id or ""),
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+            )
+            # Official fronts and every owner-classified SimNow runtime never
+            # use the general CTP arm token. A managed insert/cancel instead
+            # receives a one-call token from the owner-bound approval verifier.
+            # TCP reachability and a front string alone cannot create this
+            # binding or authorize the native request.
+            binding = self._runtime_simnow_credential_binding
+            if binding is None:
+                raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+            if binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES:
+                raise CtpExecutionGateError("ctp_simnow_bounded_profile_required")
+            if operation not in {"insert", "cancel"}:
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_required")
+            if operation == "insert" and (
+                runtime_action_id is not None or managed_cancel_intent_id is not None
+            ):
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
+            if operation == "cancel" and (
+                not runtime_action_id or not managed_cancel_intent_id
+            ):
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
+            installed = self._execution_gate_capability
+            if (
+                not _is_ctp_core_execution_authority(capability)
+                or installed is None
+                or capability is not installed
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            self._require_bound_identity_locked(require_active_front=True)
+            if (
+                self.auto_settlement_confirm is not False
+                or not self.is_trading_ready
+                or self._native_api is None
+                or self._native_api is not self._session_native_api
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_session_not_trading_ready")
+            canonical_instrument = canonical_ctp_instrument(instrument, exchange_id)
+            if not canonical_instrument:
+                raise CtpExecutionGateError("ctp_execution_gate_instrument_mismatch")
+            return _CtpRuntimeSimNowWriteAuthorization(
+                client=self,
+                capability=capability,
+                operation=operation,
+                binding=binding,
+                instrument_id=str(instrument or ""),
+                exchange_id=str(exchange_id or ""),
+                runtime_order_id=str(runtime_order_id or ""),
+                managed_intent_id=str(managed_intent_id or ""),
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+                preflight_epoch=self._execution_preflight_epoch,
+            )
         installed = self._execution_gate_capability
         if installed is None:
             raise CtpExecutionGateError("ctp_execution_gate_capability_required")
@@ -2297,9 +3740,9 @@ class TraderClient:
             raise CtpExecutionGateError("ctp_execution_gate_unarmed")
         mismatches = (
             (
-                self._api is None
-                or self._api is not self._execution_gate_native_api
-                or self._api is not self._session_native_api,
+                self._native_api is None
+                or self._native_api is not self._execution_gate_native_api
+                or self._native_api is not self._session_native_api,
                 "ctp_execution_gate_native_api_mismatch",
             ),
             (
@@ -2334,16 +3777,197 @@ class TraderClient:
                 self._revoke_execution_gate_locked(code)
                 raise CtpExecutionGateError(code)
 
+    def _consume_runtime_simnow_write_authorization_locked(
+        self,
+        authorization: _CtpRuntimeSimNowWriteAuthorization | None,
+        *,
+        capability: object,
+        operation: str,
+        native_field: Any,
+        request_id: int,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str | None,
+        managed_intent_id: str | None,
+        runtime_action_id: str | None,
+        managed_cancel_intent_id: str | None,
+    ) -> None:
+        """Consume a SimNow grant at the final typed native request boundary."""
+
+        if not self._is_simnow_write_restricted_locked():
+            if authorization is not None:
+                raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+            return
+        if (
+            type(authorization) is not _CtpRuntimeSimNowWriteAuthorization
+            or authorization._seal is not _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL
+            or authorization._client_ref() is not self
+            or authorization._capability is not capability
+            or authorization._used
+        ):
+            raise CtpExecutionGateError("ctp_simnow_write_authorization_required")
+        binding = self._runtime_simnow_credential_binding
+        if (
+            binding is None
+            or authorization._preflight_epoch != self._execution_preflight_epoch
+            or authorization._operation != operation
+            or authorization._td_front != self._bound_front
+            or authorization._td_front != binding.td_front
+            or authorization._md_front != binding.md_front
+            or authorization._environment_profile != binding.environment_profile
+            or binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES
+            or authorization._account_fingerprint != f"acct_{self._account_fingerprint}"
+            or authorization._trading_day != self._trading_day
+            or authorization._connection_generation != self._connection_generation
+            or authorization._instrument_id != instrument_id
+            or authorization._exchange_id != exchange_id
+            or authorization._runtime_order_id != (runtime_order_id or "")
+            or authorization._managed_intent_id != (managed_intent_id or "")
+            or authorization._runtime_action_id != runtime_action_id
+            or authorization._managed_cancel_intent_id != managed_cancel_intent_id
+            or capability is not self._execution_gate_capability
+            or not self._bound_identity_is_current(require_active_front=True)
+            or not self.is_trading_ready
+            or self.auto_settlement_confirm is not False
+            or self._native_api is None
+            or self._native_api is not self._session_native_api
+        ):
+            authorization._used = True
+            self._revoke_execution_gate_locked("ctp_simnow_write_authorization_scope_mismatch")
+            raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+        verifier = binding.write_intent_verifier
+        if not callable(verifier):
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_required")
+
+        try:
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            if operation == "insert":
+                identity = _order_insert_identity(native_field)
+                raw_volume = getattr(native_field, "VolumeTotalOriginal", None)
+                if isinstance(raw_volume, bool) or type(raw_volume) is not int or raw_volume <= 0:
+                    raise ValueError("native order volume invalid")
+                try:
+                    price = Decimal(str(getattr(native_field, "LimitPrice", "")))
+                except (InvalidOperation, TypeError, ValueError):
+                    raise ValueError("native limit price invalid") from None
+                if not price.is_finite() or price <= 0:
+                    raise ValueError("native limit price invalid")
+                direction = _native_text_field(native_field, "Direction")
+                offset = _native_text_field(native_field, "CombOffsetFlag")
+                hedge = _native_text_field(native_field, "CombHedgeFlag")
+                order_price_type = _native_text_field(native_field, "OrderPriceType")
+                time_condition = _native_text_field(native_field, "TimeCondition")
+                volume_condition = _native_text_field(native_field, "VolumeCondition")
+                if (
+                    direction not in {"0", "1"}
+                    or offset not in {"0", "1", "2", "3", "4", "5", "6"}
+                    or hedge not in {"1", "2", "3", "5", "6", "7"}
+                    or order_price_type != "2"
+                    or time_condition != "3"
+                    or volume_condition != "1"
+                    or identity.instrument_id != instrument_id
+                    or identity.exchange_id != exchange_id
+                    or identity.field_request_id != request_id
+                ):
+                    raise ValueError("native order fields invalid")
+                operation_scope: dict[str, Any] = {
+                    "order_ref": identity.order_ref,
+                    "direction": direction,
+                    "offset_flag": offset,
+                    "hedge_flag": hedge,
+                    "volume_total_original": raw_volume,
+                    "limit_price": format(price.normalize(), "f"),
+                    "order_price_type": order_price_type,
+                    "time_condition": time_condition,
+                    "volume_condition": volume_condition,
+                }
+            else:
+                identity = _order_action_identity(native_field)
+                if (
+                    identity.action_flag != "0"
+                    or not identity.order_action_ref
+                    or not (
+                        (identity.order_ref and identity.front_id and identity.session_id)
+                        or (identity.order_sys_id and identity.exchange_id)
+                    )
+                ):
+                    raise ValueError("native cancel target invalid")
+                operation_scope = {
+                    "order_action_ref": identity.order_action_ref,
+                    "action_flag": identity.action_flag,
+                    "target_order_ref": identity.order_ref,
+                    "target_front_id": identity.front_id or 0,
+                    "target_session_id": identity.session_id or 0,
+                    "target_order_sys_id": identity.order_sys_id,
+                }
+            scope = MappingProxyType(
+                {
+                    "schema_version": "ctp-simnow-managed-write-v1",
+                    "operation": operation,
+                    "td_front": authorization._td_front,
+                    "md_front": authorization._md_front,
+                    "environment_profile": authorization._environment_profile,
+                    "account_fingerprint": authorization._account_fingerprint,
+                    "trading_day": authorization._trading_day,
+                    "connection_generation": authorization._connection_generation,
+                    "instrument_id": authorization._instrument_id,
+                    "exchange_id": authorization._exchange_id,
+                    "runtime_order_id": authorization._runtime_order_id,
+                    "managed_intent_id": authorization._managed_intent_id,
+                    "runtime_action_id": authorization._runtime_action_id,
+                    "managed_cancel_intent_id": authorization._managed_cancel_intent_id,
+                    "request_id": request_id,
+                    "approval_id": str(binding.approval.approval_id),
+                    "approval_nonce": str(binding.approval.nonce),
+                    "approval_payload_sha256": str(binding.approval.payload_sha256),
+                    **operation_scope,
+                }
+            )
+            approved = verifier(scope)
+        except CtpExecutionGateError:
+            authorization._used = True
+            raise
+        except Exception as exc:
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_rejected") from exc
+        if approved is not True:
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_rejected")
+        try:
+            # The risk callback is trusted application code but may take time.
+            # Refresh the signed environment/account/front binding once more
+            # after it returns, immediately before native dispatch.
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+        except CtpExecutionGateError:
+            authorization._used = True
+            raise
+        authorization._used = True
+
     def require_execution_write(
         self,
         capability: object | None,
         instrument: Any,
         exchange_id: Any = None,
+        *,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
     ) -> None:
         """Reject a managed order write before request IDs or native calls change."""
 
         with self._query_state_lock:
-            self._require_execution_write_locked(capability, instrument, exchange_id)
+            self._require_execution_write_locked(
+                capability,
+                instrument,
+                exchange_id,
+                operation="insert",
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+            )
 
     def arm_execution_gate(
         self,
@@ -2362,6 +3986,7 @@ class TraderClient:
         """
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if (
                 not _is_ctp_core_execution_authority(capability)
                 or capability is not self._execution_gate_capability
@@ -2397,7 +4022,7 @@ class TraderClient:
                     raise CtpExecutionGateError("ctp_execution_gate_account_fingerprint_mismatch")
                 if normalized["trading_day"] != self._trading_day:
                     raise CtpExecutionGateError("ctp_execution_gate_trading_day_mismatch")
-                if self._api is None or self._api is not self._session_native_api:
+                if self._native_api is None or self._native_api is not self._session_native_api:
                     raise CtpExecutionGateError("ctp_execution_gate_native_api_mismatch")
                 if not self.is_trading_ready:
                     raise CtpExecutionGateError("ctp_execution_gate_session_not_trading_ready")
@@ -2414,7 +4039,7 @@ class TraderClient:
             self._execution_gate_environment_profile = profile
             self._execution_gate_strategy_identity_sha256 = authorization._strategy_identity_sha256
             self._execution_gate_cycle_id = authorization._execution_cycle_id
-            self._execution_gate_native_api = self._api
+            self._execution_gate_native_api = self._native_api
             self._execution_gate_revocation_reason = None
             return self._execution_gate_state_locked()
 
@@ -2487,6 +4112,7 @@ class TraderClient:
 
         # ---- Phase 1: identity/environment proof, capability, idempotency ----
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             self._require_bound_identity_locked(require_active_front=True)
             profile = registered_broker_sim_profile_for_td_front(self._bound_front)
             if not profile:
@@ -2496,9 +4122,7 @@ class TraderClient:
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
             if self.auto_settlement_confirm is not False:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_auto_settlement_confirm_enabled"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_auto_settlement_confirm_enabled")
 
             instrument = canonical_ctp_instrument(instrument_id, exchange_id)
             if not instrument:
@@ -2534,13 +4158,9 @@ class TraderClient:
                 _settlement_environment_verified=True,
             )
             if confirmed:
-                self.verify_settlement_confirmation(
-                    timeout=max(float(settlement_timeout), 0.0)
-                )
+                self.verify_settlement_confirmation(timeout=max(float(settlement_timeout), 0.0))
             if not self.is_trading_ready:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_settlement_not_confirmed"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_settlement_not_confirmed")
 
         # ---- Phase 3: one-shot execution authorization + arm ----
         with self._query_state_lock:
@@ -2548,9 +4168,7 @@ class TraderClient:
             if registered_broker_sim_profile_for_td_front(self._bound_front) != profile:
                 raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
             if not self.is_trading_ready:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_session_not_trading_ready"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_session_not_trading_ready")
 
             preflight = _require_hash(preflight_sha256, "ctp_execution_gate_invalid_proof")
             strategy_identity = _require_hash(
@@ -2559,9 +4177,7 @@ class TraderClient:
             )
             cycle_id = str(execution_cycle_id or "").strip()
             if not cycle_id or cycle_id != execution_cycle_id or len(cycle_id) > 128:
-                raise CtpExecutionGateError(
-                    "ctp_execution_gate_authorization_identity_invalid"
-                )
+                raise CtpExecutionGateError("ctp_execution_gate_authorization_identity_invalid")
 
             native_digest = self._registered_sim_file_digest(
                 "bt_api_ctp.ctp._ctp", "ctp_execution_gate_sim_measurement_unavailable"
@@ -2647,20 +4263,330 @@ class TraderClient:
         request_id: int,
         *,
         execution_capability: object | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
     ) -> Any:
-        """Submit one order under the same lock as the final managed-gate check."""
+        """Submit one order and retain its callback-bound request evidence.
+
+        The native return value remains the CTP submit code. It is not an
+        order acceptance result; callers can read :meth:`get_order_insert_evidence`
+        for a matching native callback, and a missing callback remains
+        ``unknown``.
+        """
 
         with self._query_state_lock:
-            self._require_execution_write_locked(
+            simnow_authorization = self._require_execution_write_locked(
                 execution_capability,
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
+                operation="insert",
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
             )
             self._require_native_field_identity_locked(field, require_user_id=True)
-            if self._api is None:
+            if self._native_api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+            if type(request_id) is not int or request_id <= 0:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_request_id_invalid"
+                )
+            try:
+                field_request_id = getattr(field, "RequestID", None)
+            except Exception:
+                field_request_id = None
+            if isinstance(field_request_id, bool):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_field_request_id_invalid"
+                )
+            identity = _order_insert_identity(field)
+            if identity.field_request_id != request_id:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_field_request_id_mismatch"
+                )
+            if not identity.order_ref:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_order_ref_missing")
+            if not (
+                identity.broker_id
+                and identity.investor_id
+                and identity.user_id
+                and identity.instrument_id
+                and identity.exchange_id
+            ):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_native_identity_incomplete"
+                )
+            trading_day = self._trading_day
+            if (
+                type(self._connection_generation) is not int
+                or self._connection_generation <= 0
+                or type(trading_day) is not str
+                or len(trading_day) != 8
+                or not trading_day.isascii()
+                or not trading_day.isdigit()
+            ):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_session_identity_incomplete"
+                )
+            key = (request_id, identity.order_ref)
+            if key in self._order_insert_history:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_request_identity_reused"
+                )
+            if any(known_request_id == request_id for known_request_id, _ in self._order_insert_history):
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_order_insert_request_id_reused"
+                )
+            self._consume_runtime_simnow_write_authorization_locked(
+                simnow_authorization,
+                capability=execution_capability,
+                operation="insert",
+                native_field=field,
+                request_id=request_id,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=None,
+                managed_cancel_intent_id=None,
+            )
+            now = datetime.now(timezone.utc)
+            evidence = CtpOrderInsertEvidence(
+                request_id=request_id,
+                order_ref=identity.order_ref,
+                status="unknown",
+                account_fingerprint=f"acct_{self._account_fingerprint}",
+                trading_day=trading_day,
+                connection_generation=self._connection_generation,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                evidence_source="",
+                callback_received=False,
+                evidence_received=False,
+                error_code=None,
+                error_message="",
+                reason="awaiting_native_callback",
+                submitted_at_utc=now,
+                observed_at_utc=None,
+                submit_code=None,
+            )
+            self._order_insert_history[key] = evidence
+            self._order_insert_identities[key] = identity
             self._record_request("order_insert")
-            return self._api.ReqOrderInsert(field, request_id)
+            try:
+                ret = self._native_api.ReqOrderInsert(field, request_id)
+            except Exception:
+                self._order_insert_history[key] = replace(
+                    self._order_insert_history[key],
+                    reason="native_submit_exception",
+                )
+                raise
+            try:
+                submit_code = int(ret) if ret is not None else None
+            except (TypeError, ValueError, OverflowError):
+                submit_code = None
+            self._order_insert_history[key] = replace(
+                self._order_insert_history[key],
+                submit_code=submit_code,
+            )
+            return ret
+
+    def get_order_insert_evidence(
+        self,
+        request_id: int,
+        *,
+        order_ref: str | int | None = None,
+    ) -> CtpOrderInsertEvidence | None:
+        """Return the immutable evidence snapshot for one insert request.
+
+        ``None`` means this client has no matching recorded request. A
+        recorded request without a matched native callback returns an explicit
+        ``unknown`` snapshot.
+        """
+
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        with self._query_state_lock:
+            if order_ref is None:
+                matches = [
+                    evidence
+                    for (known_request_id, _), evidence in self._order_insert_history.items()
+                    if known_request_id == normalized_request_id
+                ]
+                return matches[0] if len(matches) == 1 else None
+            key = (normalized_request_id, str(order_ref))
+            return self._order_insert_history.get(key)
+
+    def _record_order_insert_callback(
+        self,
+        *,
+        source: str,
+        field: Any,
+        rsp_info: Any,
+        request_id: int | None,
+        is_last: bool | None,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        identity = _order_insert_identity(field)
+        error_code, error_message = _rsp_error(rsp_info)
+        with self._query_state_lock:
+            # The SPI decorator fences callback entry, but API replacement can
+            # happen after that check and before this recorder acquires the
+            # lock. Revalidate the originating SPI/API atomically with the
+            # evidence mutation so a stale callback cannot resolve a request.
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+
+            if source == "OnRspOrderInsert":
+                candidates = [
+                    key
+                    for key in self._order_insert_history
+                    if request_id is not None and key[0] == request_id
+                ]
+                if len(candidates) != 1:
+                    candidates = [key for key in candidates if key[1] == identity.order_ref]
+            else:
+                candidates = [
+                    key
+                    for key in self._order_insert_history
+                    if key[1] == identity.order_ref
+                ]
+                if identity.field_request_id not in (None, 0):
+                    candidates = [
+                        key for key in candidates if key[0] == identity.field_request_id
+                    ]
+                exact_candidates = [
+                    key for key in candidates if self._order_insert_identities[key] == identity
+                ]
+                if exact_candidates:
+                    candidates = exact_candidates
+
+            if len(candidates) != 1:
+                self._order_insert_late_callback_count += 1
+                return
+
+            key = candidates[0]
+            evidence = self._order_insert_history[key]
+            expected_identity = self._order_insert_identities[key]
+            observed_at = datetime.now(timezone.utc)
+            identity_matches = expected_identity == identity
+            scope_matches = (
+                evidence.account_fingerprint == f"acct_{self._account_fingerprint}"
+                and evidence.connection_generation == self._connection_generation
+                and evidence.trading_day == self._trading_day
+            )
+            identity_present = bool(
+                identity.order_ref
+                and identity.broker_id
+                and identity.investor_id
+                and identity.user_id
+                and identity.instrument_id
+                and identity.exchange_id
+            )
+            if evidence.status != "unknown" and (not identity_matches or not scope_matches):
+                self._order_insert_late_callback_count += 1
+                return
+            callback_evidence = replace(
+                evidence,
+                evidence_source=source,
+                callback_received=True,
+                evidence_received=identity_matches and scope_matches,
+                error_code=error_code,
+                error_message=error_message,
+                observed_at_utc=observed_at,
+            )
+            if not identity_matches:
+                reason = "callback_identity_mismatch"
+                status = "unknown"
+            elif identity.field_request_id != evidence.request_id:
+                reason = "native_request_id_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not scope_matches:
+                reason = "callback_session_scope_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not identity_present:
+                reason = "native_order_identity_incomplete"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif error_code is None:
+                reason = "native_response_info_missing"
+                status = "unknown"
+            elif source == "OnRspOrderInsert" and is_last is not True:
+                reason = "native_response_not_terminal"
+                status = "unknown"
+            elif error_code != 0:
+                reason = "native_order_insert_rejected"
+                status = "rejected"
+            elif source == "OnErrRtnOrderInsert":
+                reason = "native_error_return_without_error_code"
+                status = "unknown"
+            else:
+                reason = "order_insert_request_accepted"
+                status = "accepted"
+
+            # A later matching error return may downgrade request acceptance
+            # to rejection. Unmatched callbacks cannot replace known evidence.
+            if evidence.status == "rejected" and status == "accepted":
+                status = "rejected"
+                reason = evidence.reason
+            elif evidence.status == "accepted" and status == "unknown":
+                status = evidence.status
+                reason = evidence.reason
+            self._order_insert_history[key] = replace(
+                callback_evidence,
+                status=status,
+                reason=reason,
+            )
+
+    def _handle_order_insert_response(
+        self,
+        field: Any,
+        rsp_info: Any,
+        request_id: Any,
+        is_last: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            normalized_request_id = None
+        self._record_order_insert_callback(
+            source="OnRspOrderInsert",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=normalized_request_id,
+            is_last=is_last if type(is_last) is bool else None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
+
+    def _handle_order_insert_error(
+        self,
+        field: Any,
+        rsp_info: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        self._record_order_insert_callback(
+            source="OnErrRtnOrderInsert",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=_native_int_field(field, "RequestID"),
+            is_last=None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
 
     def submit_order_action(
         self,
@@ -2668,20 +4594,322 @@ class TraderClient:
         request_id: int,
         *,
         execution_capability: object | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
     ) -> Any:
-        """Submit one cancellation under the managed native-order gate."""
+        """Submit one cancellation and retain its callback-bound evidence.
+
+        The native return value remains the CTP submit code for compatibility.
+        It is not a cancel result. Read :meth:`get_order_action_evidence` for
+        an immutable callback snapshot; without a matching native callback its
+        status remains ``unknown``.
+        """
 
         with self._query_state_lock:
-            self._require_execution_write_locked(
+            if type(request_id) is not int or request_id <= 0:
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_cancel_request_id_invalid"
+                )
+            simnow_authorization = self._require_execution_write_locked(
                 execution_capability,
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
+                operation="cancel",
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
             )
             self._require_native_field_identity_locked(field, require_user_id=False)
-            if self._api is None:
+            if self._native_api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+            identity = _order_action_identity(field)
+            key = (request_id, identity.order_action_ref)
+            if key in self._order_action_history:
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_identity_reused")
+            if any(known_request_id == request_id for known_request_id, _ in self._order_action_history):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_reused")
+            now = datetime.now(timezone.utc)
+            order_identity_present = bool(
+                (identity.order_ref and identity.front_id and identity.session_id)
+                or (identity.order_sys_id and identity.exchange_id)
+            )
+            if request_id <= 0:
+                initial_reason = "request_id_invalid"
+            elif identity.field_request_id != request_id:
+                initial_reason = "native_request_id_mismatch"
+            elif not identity.order_action_ref:
+                initial_reason = "order_action_ref_missing"
+            elif identity.action_flag != "0":
+                initial_reason = "action_flag_not_cancel"
+            elif not order_identity_present:
+                initial_reason = "native_order_identity_incomplete"
+            elif self._connection_generation <= 0 or not self._trading_day:
+                initial_reason = "session_identity_incomplete"
+            else:
+                initial_reason = "awaiting_native_callback"
+            if initial_reason != "awaiting_native_callback":
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_cancel_request_invalid"
+                )
+            self._consume_runtime_simnow_write_authorization_locked(
+                simnow_authorization,
+                capability=execution_capability,
+                operation="cancel",
+                native_field=field,
+                request_id=request_id,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+            )
+            evidence = CtpOrderActionEvidence(
+                request_id=request_id,
+                order_action_ref=identity.order_action_ref,
+                status="unknown",
+                account_fingerprint=f"acct_{self._account_fingerprint}",
+                trading_day=self._trading_day,
+                connection_generation=self._connection_generation,
+                order_ref=identity.order_ref,
+                order_sys_id=identity.order_sys_id,
+                front_id=identity.front_id or 0,
+                session_id=identity.session_id or 0,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                action_flag=identity.action_flag,
+                evidence_source="",
+                callback_received=False,
+                evidence_received=False,
+                error_code=None,
+                error_message="",
+                reason=initial_reason,
+                submitted_at_utc=now,
+                observed_at_utc=None,
+                submit_code=None,
+            )
+            self._order_action_history[key] = evidence
+            self._order_action_identities[key] = identity
             self._record_request("order_action")
-            return self._api.ReqOrderAction(field, request_id)
+            try:
+                ret = self._native_api.ReqOrderAction(field, request_id)
+            except Exception:
+                self._order_action_history[key] = replace(
+                    self._order_action_history[key],
+                    reason=(
+                        initial_reason
+                        if initial_reason != "awaiting_native_callback"
+                        else "native_submit_exception"
+                    ),
+                )
+                raise
+            try:
+                submit_code = int(ret) if ret is not None else None
+            except (TypeError, ValueError, OverflowError):
+                submit_code = None
+            self._order_action_history[key] = replace(
+                self._order_action_history[key],
+                submit_code=submit_code,
+            )
+            return ret
+
+    def get_order_action_evidence(
+        self,
+        request_id: int,
+        *,
+        order_action_ref: str | int | None = None,
+    ) -> CtpOrderActionEvidence | None:
+        """Return the immutable evidence snapshot for one cancel request.
+
+        ``None`` means this client has no recorded request with the supplied
+        identity. A recorded request with no matched native receipt returns an
+        explicit ``unknown`` snapshot.
+        """
+
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        with self._query_state_lock:
+            if order_action_ref is None:
+                matches = [
+                    evidence
+                    for (known_request_id, _), evidence in self._order_action_history.items()
+                    if known_request_id == normalized_request_id
+                ]
+                return matches[0] if len(matches) == 1 else None
+            key = (normalized_request_id, str(order_action_ref))
+            return self._order_action_history.get(key)
+
+    def _record_order_action_callback(
+        self,
+        *,
+        source: str,
+        field: Any,
+        rsp_info: Any,
+        request_id: int | None,
+        is_last: bool | None,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        identity = _order_action_identity(field)
+        error_code, error_message = _rsp_error(rsp_info)
+        with self._query_state_lock:
+            # As with insert evidence, callback-entry validation alone has a
+            # TOCTOU window before this lock is acquired.
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+
+            if source == "OnRspOrderAction":
+                candidates = [
+                    key
+                    for key in self._order_action_history
+                    if request_id is not None and key[0] == request_id
+                ]
+                if len(candidates) != 1:
+                    candidates = [key for key in candidates if key[1] == identity.order_action_ref]
+            else:
+                candidates = [
+                    key for key in self._order_action_history if key[1] == identity.order_action_ref
+                ]
+                if identity.field_request_id not in (None, 0):
+                    candidates = [key for key in candidates if key[0] == identity.field_request_id]
+                exact_candidates = [
+                    key for key in candidates if self._order_action_identities[key] == identity
+                ]
+                if exact_candidates:
+                    candidates = exact_candidates
+
+            if len(candidates) != 1:
+                self._order_action_late_callback_count += 1
+                return
+
+            key = candidates[0]
+            evidence = self._order_action_history[key]
+            expected_identity = self._order_action_identities[key]
+            observed_at = datetime.now(timezone.utc)
+            identity_matches = expected_identity == identity
+            scope_matches = (
+                evidence.account_fingerprint == f"acct_{self._account_fingerprint}"
+                and evidence.connection_generation == self._connection_generation
+                and evidence.trading_day == self._trading_day
+            )
+            order_identity_present = bool(
+                (identity.order_ref and identity.front_id and identity.session_id)
+                or (identity.order_sys_id and identity.exchange_id)
+            )
+            if evidence.status != "unknown" and (not identity_matches or not scope_matches):
+                self._order_action_late_callback_count += 1
+                return
+            callback_evidence = replace(
+                evidence,
+                evidence_source=source,
+                callback_received=True,
+                evidence_received=identity_matches and scope_matches,
+                error_code=error_code,
+                error_message=error_message,
+                observed_at_utc=observed_at,
+            )
+            if not identity_matches:
+                reason = "callback_identity_mismatch"
+                status = "unknown"
+            elif identity.field_request_id != evidence.request_id:
+                reason = "native_request_id_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not scope_matches:
+                reason = "callback_session_scope_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not order_identity_present:
+                reason = "native_order_identity_incomplete"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif identity.action_flag != "0":
+                reason = "action_flag_not_cancel"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif error_code is None:
+                reason = "native_response_info_missing"
+                status = "unknown"
+            elif source == "OnRspOrderAction" and is_last is not True:
+                reason = "native_response_not_terminal"
+                status = "unknown"
+            elif error_code != 0:
+                reason = "native_cancel_rejected"
+                status = "rejected"
+            elif source == "OnErrRtnOrderAction":
+                # An error-return callback without an error code is not a
+                # successful cancellation receipt.
+                reason = "native_error_return_without_error_code"
+                status = "unknown"
+            else:
+                reason = "cancel_request_accepted"
+                status = "accepted"
+
+            # A later matching error return may downgrade request acceptance
+            # to rejection. Unmatched callbacks and order-status events cannot
+            # replace already captured evidence.
+            if evidence.status == "rejected" and status == "accepted":
+                status = "rejected"
+                reason = evidence.reason
+            elif evidence.status == "accepted" and status == "unknown":
+                status = evidence.status
+                reason = evidence.reason
+            self._order_action_history[key] = replace(
+                callback_evidence,
+                status=status,
+                reason=reason,
+            )
+
+    def _handle_order_action_response(
+        self,
+        field: Any,
+        rsp_info: Any,
+        request_id: Any,
+        is_last: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            normalized_request_id = None
+        self._record_order_action_callback(
+            source="OnRspOrderAction",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=normalized_request_id,
+            is_last=is_last if type(is_last) is bool else None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
+
+    def _handle_order_action_error(
+        self,
+        field: Any,
+        rsp_info: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        self._record_order_action_callback(
+            source="OnErrRtnOrderAction",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=_native_int_field(field, "RequestID"),
+            is_last=None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
 
     def _next_request_id(self) -> int:
         with self._query_state_lock:
@@ -2723,10 +4951,11 @@ class TraderClient:
     def _on_front_connected(self) -> None:
         with self._query_state_lock:
             self._revoke_execution_gate_locked("ctp_execution_gate_connection_generation_changed")
-            self._session_native_api = self._api
+            self._session_native_api = self._native_api
             # The registered front is fixed by start(); a reconnect does not
             # accept a mutable public ``front`` replacement.
             self._session_native_front = self._bound_front
+            self._front_connected_front = self._bound_front
             self._connection_generation += 1
             self._execution_preflight_epoch += 1
             self._connected = True
@@ -2737,7 +4966,9 @@ class TraderClient:
             self._authentication_connection_generation = None
             self._login_request_id = None
             self._login_connection_generation = None
+            self._login_identity_observation = None
             self._settlement_state = "unknown"
+            self._trading_day = ""
             self._settlement_request_id = None
             self._settlement_connection_generation = None
             self._settlement_account_fingerprint = None
@@ -2752,6 +4983,7 @@ class TraderClient:
             self._revoke_execution_gate_locked("ctp_execution_gate_disconnected")
             self._session_native_api = None
             self._session_native_front = None
+            self._front_connected_front = None
             self._execution_preflight_epoch += 1
             self._connected = False
             self._ready = False
@@ -2761,6 +4993,7 @@ class TraderClient:
             self._authentication_connection_generation = None
             self._login_request_id = None
             self._login_connection_generation = None
+            self._login_identity_observation = None
             self._settlement_state = "unknown"
             self._settlement_request_id = None
             self._settlement_connection_generation = None
@@ -2786,6 +5019,7 @@ class TraderClient:
         settlement_environment_profile: object | None,
         settlement_environment_verified: object,
     ) -> _CtpSettlementAuthorization:
+        self._reject_official_simnow_write_locked()
         installed = self._execution_gate_capability
         if installed is None or not _is_ctp_core_execution_authority(installed):
             raise CtpExecutionGateError("ctp_execution_gate_capability_required")
@@ -2814,7 +5048,7 @@ class TraderClient:
             raise CtpExecutionGateError("ctp_execution_gate_settlement_requires_disarmed")
         if not self.is_read_only_ready or self._connection_generation <= 0 or not self._trading_day:
             raise CtpExecutionGateError("ctp_execution_gate_session_not_read_only_ready")
-        if self._api is None or self._api is not self._session_native_api:
+        if self._native_api is None or self._native_api is not self._session_native_api:
             raise CtpExecutionGateError("ctp_execution_gate_native_api_mismatch")
         return settlement_authorization
 
@@ -2847,7 +5081,7 @@ class TraderClient:
             ):
                 # One managed confirmation attempt is allowed per connection.
                 return self._settlement_state == "confirming"
-            api = self._api
+            api = self._native_api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
             # The terminal write consumes its independently issued budget and
@@ -3020,6 +5254,30 @@ class TraderClient:
                 "execution_gate_revocation_reason": execution_gate["revocation_reason"],
             }
 
+    def get_front_binding_state(self) -> dict[str, Any]:
+        """Return the configured front and generation-fenced CTP callback fact.
+
+        CTP does not report a canonical remote endpoint in its connection
+        callback. ``connection_confirmed_front`` therefore means the active
+        native API emitted ``OnFrontConnected`` after the SDK registered the
+        listed front; it does not independently attest to a provider-reported
+        endpoint identity.
+        """
+
+        with self._query_state_lock:
+            active_api = self._native_api
+            identity_current = self._bound_identity_is_current(require_active_front=True)
+            return {
+                "configured_front": self._bound_front,
+                "registered_front": self._session_native_front,
+                "connection_confirmed_front": self._front_connected_front,
+                "connected": self._connected is True,
+                "connection_generation": self._connection_generation,
+                "native_api_current": active_api is not None
+                and active_api is self._session_native_api,
+                "bound_identity_current": identity_current is True,
+            }
+
     def get_query_session_scope(self) -> _QuerySessionScope:
         """Return an opaque typed scope for strict read-only query consumers.
 
@@ -3036,14 +5294,29 @@ class TraderClient:
         # typed scope created below is trusted by evidence consumers.
         self.get_session_state()
         with self._query_state_lock:
+            observation = self._current_login_identity_locked()
+            if observation is None:
+                broker_id = ""
+                investor_id = ""
+                trading_day = ""
+                account_fingerprint = ""
+                read_only_ready = False
+            else:
+                broker_id = observation.broker_id
+                investor_id = observation.user_id
+                trading_day = observation.trading_day
+                account_fingerprint = hashlib.sha256(
+                    f"{broker_id}:{investor_id}".encode()
+                ).hexdigest()[:16]
+                read_only_ready = self.is_read_only_ready
             return _new_query_session_scope(
                 issuer=self._query_evidence_issuer,
-                account_fingerprint=self._account_fingerprint,
+                account_fingerprint=account_fingerprint,
                 connection_generation=self._connection_generation,
-                trading_day=self._trading_day,
-                broker_id=self._bound_broker_id,
-                investor_id=self._bound_user_id,
-                read_only_ready=self.is_read_only_ready,
+                trading_day=trading_day,
+                broker_id=broker_id,
+                investor_id=investor_id,
+                read_only_ready=read_only_ready,
                 captured_at_utc=datetime.now(timezone.utc),
                 captured_monotonic=time.monotonic(),
             )
@@ -3060,7 +5333,7 @@ class TraderClient:
             # Preserve the managed-gate revocation contract even when this is
             # a rejected re-entrant start attempt.
             self._revoke_execution_gate_locked("ctp_execution_gate_client_start")
-            if self._api is not None or self._starting_generation is not None:
+            if self._native_api is not None or self._starting_generation is not None:
                 raise RuntimeError("ctp_trader_client_already_started")
             self._lifecycle_generation += 1
             generation = self._lifecycle_generation
@@ -3077,7 +5350,7 @@ class TraderClient:
         return (
             self._lifecycle_generation == generation
             and self._starting_generation == generation
-            and self._api is api
+            and self._native_api is api
             and self._spi is spi
             and not self._startup_cancel_event.is_set()
         )
@@ -3159,11 +5432,12 @@ class TraderClient:
         finally:
             if join_returned:
                 with self._query_state_lock:
-                    if self._api is api:
+                    if self._native_api is api:
                         self._join_active = False
                         self._native_init_started = False
                     if self._thread is threading.current_thread():
                         self._thread = None
+                _record_ctp_native_join_completed(api)
                 _release_retired_ctp_native_session_after_join(api)
 
     def _start_join_observer(self, api: Any) -> bool:
@@ -3171,7 +5445,7 @@ class TraderClient:
 
         thread = threading.Thread(target=self._join_native_api, args=(api,), daemon=True)
         with self._query_state_lock:
-            if self._api is api:
+            if self._native_api is api:
                 self._thread = thread
                 self._join_active = True
             elif not _set_retired_ctp_native_session_join_thread(api, thread):
@@ -3219,10 +5493,14 @@ class TraderClient:
         # public ``front`` mutation cannot be mistaken for a verified
         # environment on reconnect.
         with self._query_state_lock:
-            if self._api is not api or self._spi is not spi:
-                self._abort_startup(api, spi, generation)
-                return
-            self._session_native_front = self._bound_front
+            startup_current = self._native_api is api and self._spi is spi
+            if startup_current:
+                self._session_native_front = self._bound_front
+        if not startup_current:
+            # Cleanup may acquire the state lock itself; do it after leaving
+            # the check block so startup never nests lifecycle work under it.
+            self._abort_startup(api, spi, generation)
+            return
 
         def init_native_api() -> None:
             nonlocal init_invoked
@@ -3310,8 +5588,32 @@ class TraderClient:
             time.sleep(min(0.2, max(0.0, deadline - time.time())))
         return self.is_ready
 
-    def _new_query_accumulator(self, request_type: str) -> _QueryAccumulator:
+    def _new_query_accumulator(
+        self,
+        request_type: str,
+        request_filters: Mapping[str, str] | None = None,
+        explicit_request_filters: tuple[str, ...] = (),
+    ) -> _QueryAccumulator:
         request_id = self._next_request_id()
+        if request_filters is None:
+            filter_items: tuple[tuple[str, str], ...] = ()
+        elif isinstance(request_filters, Mapping):
+            if any(
+                type(key) is not str or type(value) is not str
+                for key, value in request_filters.items()
+            ):
+                raise TypeError("query request filters must contain exact strings")
+            filter_items = tuple(sorted(request_filters.items()))
+        else:
+            raise TypeError("query request filters must be a mapping")
+        if (
+            type(explicit_request_filters) is not tuple
+            or any(type(name) is not str for name in explicit_request_filters)
+            or len(explicit_request_filters) != len(set(explicit_request_filters))
+            or any(name not in dict(filter_items) for name in explicit_request_filters)
+        ):
+            raise TypeError("explicit query filter names must identify captured filters")
+        explicit_filter_names = tuple(sorted(explicit_request_filters))
         accumulator = _QueryAccumulator(
             request_type=request_type,
             request_id=request_id,
@@ -3322,6 +5624,8 @@ class TraderClient:
             trading_day=self._trading_day,
             broker_id=self._bound_broker_id,
             investor_id=self._bound_user_id,
+            request_filters=filter_items,
+            explicit_request_filters=explicit_filter_names,
             started_monotonic=time.monotonic(),
         )
         with self._query_state_lock:
@@ -3451,6 +5755,9 @@ class TraderClient:
         request_type: str,
         submit: Callable[[int], Any] | None,
         timeout: float,
+        *,
+        request_filters: Mapping[str, str] | None = None,
+        explicit_request_filters: tuple[str, ...] = (),
     ) -> QueryResult[Any]:
         if not self.is_read_only_ready:
             return self._local_query_failure(request_type, "trader_not_logged_in")
@@ -3465,7 +5772,11 @@ class TraderClient:
             wait_time = self._query_interval - elapsed
             if wait_time > 0:
                 time.sleep(wait_time)
-            accumulator = self._new_query_accumulator(request_type)
+            accumulator = self._new_query_accumulator(
+                request_type,
+                request_filters,
+                explicit_request_filters=explicit_request_filters,
+            )
             self._record_request(f"query_{request_type}")
             try:
                 ret = submit(accumulator.request_id)
@@ -3515,11 +5826,17 @@ class TraderClient:
         field = CThostFtdcQryTradingAccountField()
         field.BrokerID = self._bound_broker_id
         field.InvestorID = self._bound_user_id
-        method = getattr(self._api, "ReqQryTradingAccount", None) if self._api else None
+        method = (
+            getattr(self._native_api, "ReqQryTradingAccount", None) if self._native_api else None
+        )
         return self._execute_query(
             "account",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+            },
         )
 
     def query_account(self, timeout=5):
@@ -3530,11 +5847,17 @@ class TraderClient:
         field = CThostFtdcQryInvestorPositionField()
         field.BrokerID = self._bound_broker_id
         field.InvestorID = self._bound_user_id
-        method = getattr(self._api, "ReqQryInvestorPosition", None) if self._api else None
+        method = (
+            getattr(self._native_api, "ReqQryInvestorPosition", None) if self._native_api else None
+        )
         return self._execute_query(
             "positions",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+            },
         )
 
     def query_positions(self, timeout=5):
@@ -3553,11 +5876,18 @@ class TraderClient:
             field.ExchangeID = str(exchange_id)
         if order_sys_id:
             field.OrderSysID = str(order_sys_id)
-        method = getattr(self._api, "ReqQryOrder", None) if self._api else None
+        method = getattr(self._native_api, "ReqQryOrder", None) if self._native_api else None
         return self._execute_query(
             "orders",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+                "OrderSysID": str(order_sys_id or ""),
+            },
         )
 
     def query_orders(self, instrument_id="", exchange_id="", order_sys_id="", timeout=5):
@@ -3597,11 +5927,20 @@ class TraderClient:
                         f"native_trade_filter_unsupported:{name}",
                         unsupported=True,
                     )
-        method = getattr(self._api, "ReqQryTrade", None) if self._api else None
+        method = getattr(self._native_api, "ReqQryTrade", None) if self._native_api else None
         return self._execute_query(
             "trades",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+                "TradeID": str(trade_id or ""),
+                "TradeTimeStart": str(start_time or ""),
+                "TradeTimeEnd": str(end_time or ""),
+            },
         )
 
     def query_trades(self, **kwargs: Any) -> list[Any]:
@@ -3633,11 +5972,16 @@ class TraderClient:
                     "native_instrument_filter_unsupported:ProductID",
                     unsupported=True,
                 )
-        method = getattr(self._api, "ReqQryInstrument", None) if self._api else None
+        method = getattr(self._native_api, "ReqQryInstrument", None) if self._native_api else None
         return self._execute_query(
             "instruments",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+                "ProductID": str(product_id or ""),
+            },
         )
 
     def query_instrument(self, instrument_id, exchange_id="", timeout=5):
@@ -3646,21 +5990,47 @@ class TraderClient:
         ).first
 
     def query_instrument_margin_rate_result(
-        self, instrument_id, exchange_id="", hedge_flag="1", timeout=5
+        self,
+        instrument_id,
+        exchange_id="",
+        hedge_flag=_QUERY_FILTER_UNSET,
+        timeout=5,
     ) -> QueryResult[Any]:
+        """Read margin rates and record whether HedgeFlag was supplied explicitly.
+
+        The legacy effective default remains ``"1"``. Strict native query
+        certificates reject this result when that default was omitted.
+        """
+
+        hedge_flag_explicit = hedge_flag is not _QUERY_FILTER_UNSET
+        if not hedge_flag_explicit:
+            hedge_flag = "1"
+        hedge_flag_value = str(hedge_flag or "")
         field = CThostFtdcQryInstrumentMarginRateField()
         field.BrokerID = self._bound_broker_id
         field.InvestorID = self._bound_user_id
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
             field.ExchangeID = str(exchange_id)
-        if hedge_flag:
-            field.HedgeFlag = str(hedge_flag)
-        method = getattr(self._api, "ReqQryInstrumentMarginRate", None) if self._api else None
+        if hedge_flag_value:
+            field.HedgeFlag = hedge_flag_value
+        method = (
+            getattr(self._native_api, "ReqQryInstrumentMarginRate", None)
+            if self._native_api
+            else None
+        )
         return self._execute_query(
             "margin_rate",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+                "HedgeFlag": hedge_flag_value,
+            },
+            explicit_request_filters=("HedgeFlag",) if hedge_flag_explicit else (),
         )
 
     def query_instrument_margin_rate(
@@ -3682,11 +6052,21 @@ class TraderClient:
         field.InstrumentID = str(instrument_id or "")
         if exchange_id:
             field.ExchangeID = str(exchange_id)
-        method = getattr(self._api, "ReqQryInstrumentCommissionRate", None) if self._api else None
+        method = (
+            getattr(self._native_api, "ReqQryInstrumentCommissionRate", None)
+            if self._native_api
+            else None
+        )
         return self._execute_query(
             "commission_rate",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
             timeout,
+            request_filters={
+                "BrokerID": self._bound_broker_id,
+                "InvestorID": self._bound_user_id,
+                "InstrumentID": str(instrument_id or ""),
+                "ExchangeID": str(exchange_id or ""),
+            },
         )
 
     def query_instrument_commission_rate(self, instrument_id, exchange_id="", timeout=5):
@@ -3704,7 +6084,7 @@ class TraderClient:
             return self._local_query_failure(
                 request_type, "native_query_fields_unsupported", unsupported=True
             )
-        method = getattr(self._api, method_name, None) if self._api else None
+        method = getattr(self._native_api, method_name, None) if self._native_api else None
         return self._execute_query(
             request_type,
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
@@ -3792,7 +6172,11 @@ class TraderClient:
         field = CThostFtdcQrySettlementInfoConfirmField()
         field.BrokerID = self._bound_broker_id
         field.InvestorID = self._bound_user_id
-        method = getattr(self._api, "ReqQrySettlementInfoConfirm", None) if self._api else None
+        method = (
+            getattr(self._native_api, "ReqQrySettlementInfoConfirm", None)
+            if self._native_api
+            else None
+        )
         return self._execute_query(
             "settlement_confirmation",
             ((lambda request_id: method(field, request_id)) if callable(method) else None),
@@ -3876,50 +6260,142 @@ class TraderClient:
 
     def wait_order_event(self, timeout=5):
         """Wait for the next order callback snapshot."""
-        try:
-            return self._order_events.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        return self._wait_current_trader_event(self._order_events, timeout)
 
     def wait_trade_event(self, timeout=5):
         """Wait for the next trade callback snapshot."""
+        return self._wait_current_trader_event(self._trade_events, timeout)
+
+    def _wait_current_trader_event(self, event_queue, timeout):
+        started_at = time.monotonic()
         try:
-            return self._trade_events.get(timeout=timeout)
+            while True:
+                remaining = (
+                    None
+                    if timeout is None
+                    else max(0.0, float(timeout) - (time.monotonic() - started_at))
+                )
+                event = event_queue.get(timeout=remaining)
+                if not isinstance(event, _TraderEventQueueEntry):
+                    return event
+                with self._query_state_lock:
+                    if (
+                        event.native_api_generation == self._native_api_generation
+                        and event.connection_generation == self._connection_generation
+                    ):
+                        return event.snapshot
+                if timeout is not None and time.monotonic() - started_at >= float(timeout):
+                    return None
         except queue.Empty:
             return None
+
+    def _drain_trader_event_queues_locked(self) -> None:
+        """Drop buffered callback snapshots when their native API retires."""
+
+        for event_queue in (self._order_events, self._trade_events, self._error_events):
+            while True:
+                try:
+                    event_queue.get_nowait()
+                except queue.Empty:
+                    break
 
     def wait_error_event(self, timeout=5):
         """Wait for the next error callback snapshot."""
-        try:
-            return self._error_events.get(timeout=timeout)
-        except queue.Empty:
-            return None
+        return self._wait_current_trader_event(self._error_events, timeout)
 
-    def _push_order_event(self, order_field) -> None:
-        snapshot = _snapshot_ctp_field(order_field)
-        if snapshot:
-            self._order_events.put(snapshot)
-        if self.on_order:
-            self.on_order(order_field)
+    def _push_order_event(
+        self,
+        order_field,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        # Origin validation, queue admission, and callback capture share the
+        # API setter's state lock. User code runs only after it is released; a
+        # callback admitted here may finish if the API changes afterward.
+        with self._query_state_lock:
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+            snapshot = _snapshot_ctp_field(order_field)
+            if snapshot:
+                self._order_events.put(
+                    _TraderEventQueueEntry(
+                        snapshot=snapshot,
+                        native_api_generation=self._native_api_generation,
+                        connection_generation=self._connection_generation,
+                    )
+                )
+            callback = self.on_order
+        if callback is not None:
+            callback(order_field)
 
-    def _push_trade_event(self, trade_field) -> None:
-        snapshot = _snapshot_ctp_field(trade_field)
-        if snapshot:
-            self._trade_events.put(snapshot)
-        if self.on_trade:
-            self.on_trade(trade_field)
+    def _push_trade_event(
+        self,
+        trade_field,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        with self._query_state_lock:
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+            snapshot = _snapshot_ctp_field(trade_field)
+            if snapshot:
+                self._trade_events.put(
+                    _TraderEventQueueEntry(
+                        snapshot=snapshot,
+                        native_api_generation=self._native_api_generation,
+                        connection_generation=self._connection_generation,
+                    )
+                )
+            callback = self.on_trade
+        if callback is not None:
+            callback(trade_field)
 
-    def _push_error_event(self, event_type, rsp_info=None, field=None, request_id=None) -> None:
-        payload = {
-            "event": event_type,
-            "request_id": request_id,
-            "error_id": getattr(rsp_info, "ErrorID", 0) if rsp_info is not None else 0,
-            "error_msg": (getattr(rsp_info, "ErrorMsg", "") if rsp_info is not None else ""),
-            "field": _snapshot_ctp_field(field),
-        }
-        self._error_events.put(payload)
-        if self.on_error and rsp_info is not None:
-            self.on_error(rsp_info)
+    def _push_error_event(
+        self,
+        event_type,
+        rsp_info=None,
+        field=None,
+        request_id=None,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        with self._query_state_lock:
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+            payload = {
+                "event": event_type,
+                "request_id": request_id,
+                "error_id": getattr(rsp_info, "ErrorID", 0) if rsp_info is not None else 0,
+                "error_msg": (
+                    getattr(rsp_info, "ErrorMsg", "") if rsp_info is not None else ""
+                ),
+                "field": _snapshot_ctp_field(field),
+            }
+            self._error_events.put(
+                _TraderEventQueueEntry(
+                    snapshot=payload,
+                    native_api_generation=self._native_api_generation,
+                    connection_generation=self._connection_generation,
+                )
+            )
+            callback = self.on_error if rsp_info is not None else None
+        if callback is not None:
+            callback(rsp_info)
 
     @property
     def api(self):
@@ -3945,7 +6421,7 @@ class TraderClient:
             self._lifecycle_generation += 1
             self._starting_generation = None
             self._on_front_disconnected("client_stop")
-            api = self._api
+            api = self._native_api
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
@@ -3954,6 +6430,10 @@ class TraderClient:
             )
             if api is None:
                 return
+            self._last_stopped_native_api = api
+            self._last_stopped_connection_generation = self._connection_generation
+            self._last_stop_join_required = join_active
+            self._last_stop_native_released = False if join_active else None
             if join_active:
                 _retain_live_ctp_native_session(api, spi, join_thread)
             self._api = None
@@ -3969,27 +6449,65 @@ class TraderClient:
                 api.RegisterSpi(None)
             return
 
+        released = False
         with suppress(Exception):
             api.RegisterSpi(None)
             api.Release()
+            released = True
+        with self._query_state_lock:
+            if self._last_stopped_native_api is api:
+                self._last_stop_native_released = released
 
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        """Stop this trader session and observe bounded native shutdown.
+
+        ``timeout`` is in seconds and is capped at 30 seconds. A pending native
+        Join or a failed Release returns an incomplete immutable receipt; the
+        method never treats cleared client fields as shutdown evidence.
+        """
+
+        return _make_ctp_native_stop_receipt(
+            self,
+            timeout,
+            lock=self._query_state_lock,
+            api_attribute="_native_api",
+        )
     @property
     def is_ready(self):
         if self.auto_settlement_confirm:
             return self.is_trading_ready
         return self.is_read_only_ready
 
+    def _current_login_identity_locked(
+        self,
+    ) -> _TraderLoginIdentityObservation | None:
+        observation = self._login_identity_observation
+        if (
+            type(observation) is not _TraderLoginIdentityObservation
+            or observation._seal is not _TRADER_LOGIN_IDENTITY_SEAL
+            or observation.connection_generation != self._connection_generation
+            or observation.connection_generation <= 0
+            or observation.request_id <= 0
+            or observation.broker_id != self._bound_broker_id
+            or observation.user_id != self._bound_user_id
+            or observation.trading_day != self._trading_day
+            or self._login_state != "logged_in"
+            or self._authentication_state != "authenticated"
+            or not self._connected
+        ):
+            return None
+        if not self._bound_identity_is_current(require_active_front=False):
+            return None
+        return observation
+
     @property
     def is_read_only_ready(self):
-        return (
-            self._connected
-            and self._authentication_state == "authenticated"
-            and self._login_state == "logged_in"
+        with self._query_state_lock:
             # Read-only discovery remains available with an offline/test
-            # native API.  The stronger active-front check is enforced only
-            # at arm, settlement, and native order final gates.
-            and self._bound_identity_is_current(require_active_front=False)
-        )
+            # native API. The authenticated account/day must still come from
+            # this generation's fenced native login response, never merely
+            # from the constructor's configured account fields.
+            return self._current_login_identity_locked() is not None
 
     @property
     def is_trading_ready(self):

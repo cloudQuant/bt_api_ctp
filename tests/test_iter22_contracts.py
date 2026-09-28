@@ -16,7 +16,7 @@ from bt_api_ctp import get_ctp_native_diagnostics
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.ctp import client as client_module
 from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
-from bt_api_ctp.ctp_env_selector import official_simnow_fronts
+from bt_api_ctp.ctp_env_selector import registered_broker_sim_fronts
 from bt_api_ctp.feeds.live_ctp_feed import (
     CtpMarketStream,
     CtpRequestDataFuture,
@@ -39,13 +39,28 @@ def _core_capability() -> object:
 def _read_ready(client: TraderClient, *, trading_day: str = "20260909") -> TraderClient:
     client._connected = True
     client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = trading_day
+    client._login_state = "logging_in"
     client._connection_generation = max(client._connection_generation, 1)
+    request_id = 1
+    client._login_request_id = request_id
+    client._login_connection_generation = client._connection_generation
     # Offline fixtures install a synthetic native API without calling start().
     # Mirror the immutable front binding that real start() records before
     # RegisterFront so managed-gate tests exercise the same final check.
     client._session_native_front = client._bound_front
+    _TraderSpi(client).OnRspUserLogin(
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=1,
+            SessionID=2,
+            TradingDay=trading_day,
+            MaxOrderRef="7",
+        ),
+        SimpleNamespace(ErrorID=0, ErrorMsg=""),
+        request_id,
+        True,
+    )
     client._query_interval = 0
     return client
 
@@ -166,7 +181,7 @@ def _ctp_execution_bundle_proof(
 
 def _execution_ready_feed():
     native_calls = []
-    td_front, md_front = official_simnow_fronts("set1_group1")
+    td_front, md_front = registered_broker_sim_fronts("hongyuan_sim_telecom")
 
     class Api:
         def ReqQryOrder(self, _field, _request_id):
@@ -192,7 +207,7 @@ def _execution_ready_feed():
     )
     client._api = Api()
     client = _read_ready(client)
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     client._settlement_state = "confirmed"
     client._ready = True
@@ -208,11 +223,38 @@ def _execution_ready_feed():
         password="secret",
         td_front=td_front,
         md_front=md_front,
-        ctp_env_profile="set1_group1",
         auto_settlement_confirm=False,
     )
+    _bind_offline_demo_environment(feed)
     feed._trader = client
     return feed, client, native_calls
+
+
+def _bind_offline_demo_environment(feed: CtpRequestDataFuture) -> None:
+    """Give generic gate tests a synthetic proof on a non-SimNow fake front."""
+
+    profile = "offline-hongyuan-sim"
+    feed.ctp_env_profile = profile
+    feed._execution_bound_profile = profile
+    feed.ctp_environment = "demo"
+    feed._execution_bound_environment = "demo"
+
+    def environment_info() -> dict[str, object]:
+        binding_is_current = (
+            feed.ctp_env_profile == feed._execution_bound_profile
+            and feed.ctp_environment == feed._execution_bound_environment
+            and feed.td_front == feed._execution_bound_td_front
+            and feed.md_front == feed._execution_bound_md_front
+            and feed.broker_id == feed._execution_bound_broker_id
+            and feed.user_id == feed._execution_bound_user_id
+        )
+        return {
+            "environment": "demo" if binding_is_current else "unknown",
+            "verified": binding_is_current,
+            "profile": feed.ctp_env_profile,
+        }
+
+    feed.get_environment_info = environment_info
 
 
 @pytest.mark.parametrize("operation", ("make_order", "cancel_order"))
@@ -405,7 +447,7 @@ def test_arm_token_is_one_shot_and_generation_bound_before_native_writes() -> No
 
 def test_settlement_token_is_independent_one_shot_and_invalidates_arm_preflight() -> None:
     feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
+    client._native_api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
         native_calls.append(("settlement",)) or 0
     )
     capability = _core_capability()
@@ -457,7 +499,7 @@ def test_settlement_token_revalidates_bound_environment_before_native_write() ->
     """A post-issuance front mutation cannot retarget a terminal write."""
 
     feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
+    client._native_api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
         native_calls.append(("settlement",)) or 0
     )
     capability = _core_capability()
@@ -508,31 +550,7 @@ def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_wri
     assert native_calls == []
     assert client.get_request_counts()["order_insert"] == 0
 
-    td_front, md_front = official_simnow_fronts("set1_group1")
-    feed = CtpRequestDataFuture(
-        broker_id="9999",
-        user_id="account",
-        password="secret",
-        td_front=td_front,
-        md_front=md_front,
-        ctp_env_profile="set1_group1",
-        auto_settlement_confirm=False,
-    )
-    client = _read_ready(
-        TraderClient(td_front, "9999", "account", "secret", auto_settlement_confirm=False)
-    )
-    client._api = SimpleNamespace()
-    client._session_native_api = client._api
-    client._session_native_front = client._bound_front
-    client._settlement_state = "confirmed"
-    client._ready = True
-    client._settlement_connection_generation = client._connection_generation
-    client._settlement_account_fingerprint = client._account_fingerprint
-    client._settlement_trading_day = client._trading_day
-    client._settlement_proof_source = "confirmation_query"
-    client._settlement_proof_query_request_id = 1
-    client._settlement_readback_verified = True
-    feed._trader = client
+    feed, client, native_calls = _execution_ready_feed()
     capability = feed._issue_execution_capability_for_core()
     feed.configure_execution_gate(capability)
     proof = _ctp_execution_proof(client, feed)
@@ -1004,8 +1022,8 @@ def test_managed_trader_api_blocks_direct_native_write_methods(
 def test_managed_trader_api_blocks_cached_raw_query_requests() -> None:
     feed, client, native_calls = _execution_ready_feed()
     raw_calls = []
-    client._api.ReqQryOrder = lambda *_args: raw_calls.append("qry") or 0
-    client._api.ReqQueryBankAccountMoneyByFuture = lambda *_args: raw_calls.append("query") or 0
+    client._native_api.ReqQryOrder = lambda *_args: raw_calls.append("qry") or 0
+    client._native_api.ReqQueryBankAccountMoneyByFuture = lambda *_args: raw_calls.append("query") or 0
     public_api = client.api
     cached_qry = public_api.ReqQryOrder
     cached_query = public_api.ReqQueryBankAccountMoneyByFuture
@@ -1038,9 +1056,9 @@ def test_managed_trader_api_blocks_cached_raw_query_requests() -> None:
 def test_public_trader_api_blocks_cached_lifecycle_and_front_mutation_calls() -> None:
     feed, client, native_calls = _execution_ready_feed()
     lifecycle_calls = []
-    client._api.Release = lambda: lifecycle_calls.append("release")
-    client._api.RegisterFront = lambda value: lifecycle_calls.append(("front", value))
-    client._api.Init = lambda: lifecycle_calls.append("init")
+    client._native_api.Release = lambda: lifecycle_calls.append("release")
+    client._native_api.RegisterFront = lambda value: lifecycle_calls.append(("front", value))
+    client._native_api.Init = lambda: lifecycle_calls.append("init")
     public_api = client.api
     cached_release = public_api.Release
     cached_front = public_api.RegisterFront
@@ -1151,7 +1169,7 @@ def test_api_swap_revokes_proof_and_old_public_handles_remain_blocked() -> None:
 
 def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
     native_calls = []
-    td_front, md_front = official_simnow_fronts("set1_group1")
+    td_front, md_front = registered_broker_sim_fronts("hongyuan_sim_telecom")
     client = TraderClient(
         td_front,
         "9999",
@@ -1177,7 +1195,7 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
 
     client._api = Api()
     client = _read_ready(client)
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     client._settlement_state = "not_requested"
     feed = CtpRequestDataFuture(
@@ -1186,9 +1204,9 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
         password="secret",
         td_front=td_front,
         md_front=md_front,
-        ctp_env_profile="set1_group1",
         auto_settlement_confirm=False,
     )
+    _bind_offline_demo_environment(feed)
     feed._trader = client
     capability = _core_capability()
     feed.configure_execution_gate(capability)
@@ -1232,7 +1250,7 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
     ):
         _arm(feed, client, capability, _ctp_execution_proof(client, feed))
 
-    client._api.ReqQrySettlementInfoConfirm = lambda _field, request_id: (
+    client._native_api.ReqQrySettlementInfoConfirm = lambda _field, request_id: (
         client._handle_query_callback(
             "settlement_confirmation",
             {
@@ -1281,7 +1299,7 @@ def test_managed_settlement_timeout_cannot_resubmit_same_connection() -> None:
         ReqSettlementInfoConfirm=lambda *_args: native_calls.append("confirm") or 0
     )
     client = _read_ready(client)
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     client._settlement_state = "not_requested"
     capability = _core_capability()
@@ -1322,7 +1340,7 @@ def test_managed_settlement_rejects_auto_confirmation_mode_before_write() -> Non
         ReqSettlementInfoConfirm=lambda *_args: native_calls.append("confirm") or 0
     )
     client = _read_ready(client)
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     capability = _core_capability()
     client.configure_execution_gate(capability)
@@ -1359,12 +1377,19 @@ def test_auto_settlement_configuration_never_issues_implicit_terminal_write() ->
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda *_args: native_calls.append("confirm") or 0
     )
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
 
     _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=1,
+            SessionID=2,
+            TradingDay="20260909",
+            MaxOrderRef="7",
+        ),
+        SimpleNamespace(ErrorID=0),
         1,
         True,
     )
@@ -1540,7 +1565,7 @@ def test_managed_feed_rejects_replaced_unmanaged_trader_client() -> None:
     )
     replacement._settlement_state = "confirmed"
     replacement._ready = True
-    replacement._api = client._api
+    replacement._api = client._native_api
     feed._trader = replacement
 
     with pytest.raises(
@@ -2223,6 +2248,8 @@ def test_auth_and_login_responses_are_fenced_across_same_spi_reconnect() -> None
     current_login_request = login_requests[-1]
     spi.OnRspUserLogin(
         SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
             FrontID=1,
             SessionID=2,
             TradingDay="20260909",
@@ -2313,8 +2340,15 @@ def test_read_only_login_issues_zero_implicit_settlement_writes() -> None:
         )
     )
     _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=1,
+            SessionID=2,
+            TradingDay="20260909",
+            MaxOrderRef="7",
+        ),
+        SimpleNamespace(ErrorID=0),
         1,
         True,
     )
@@ -2449,8 +2483,15 @@ def test_login_with_automatic_settlement_enabled_never_submits_settlement_confir
         ReqSettlementInfoConfirm=lambda *_args: (_ for _ in ()).throw(RuntimeError("boom"))
     )
     _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=1,
+            SessionID=2,
+            TradingDay="20260909",
+            MaxOrderRef="7",
+        ),
+        SimpleNamespace(ErrorID=0),
         1,
         True,
     )
@@ -2468,7 +2509,7 @@ def test_old_settlement_response_cannot_confirm_new_generation() -> None:
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(request_id) or 0
     )
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     capability = _core_capability()
     client.configure_execution_gate(capability)
@@ -2488,8 +2529,21 @@ def test_old_settlement_response_cannot_confirm_new_generation() -> None:
     client._on_front_disconnected(1)
     client._on_front_connected()
     client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = "20260910"
+    client._login_state = "logging_in"
+    client._login_request_id = 37
+    client._login_connection_generation = client._connection_generation
+    _TraderSpi(client).OnRspUserLogin(
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            FrontID=3,
+            SessionID=4,
+            TradingDay="20260910",
+        ),
+        SimpleNamespace(ErrorID=0),
+        37,
+        True,
+    )
     assert (
         client._request_settlement_confirmation(
             execution_capability=capability,
@@ -2525,7 +2579,7 @@ def test_settlement_response_for_wrong_trading_day_is_rejected() -> None:
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda _field, request_id: request_ids.append(request_id) or 0
     )
-    client._session_native_api = client._api
+    client._session_native_api = client._native_api
     client._session_native_front = client._bound_front
     capability = _core_capability()
     client.configure_execution_gate(capability)

@@ -88,8 +88,16 @@ class TestSessionLogging:
         spi = _MdSpi(client)
 
         with caplog.at_level(logging.INFO):
+            spi.OnFrontConnected()
             spi.OnRspUserLogin(
-                SimpleNamespace(TradingDay="20260917"), SimpleNamespace(ErrorID=0), 1, True
+                SimpleNamespace(
+                    BrokerID=client.broker_id,
+                    UserID=client.user_id,
+                    TradingDay="20260917",
+                ),
+                SimpleNamespace(ErrorID=0),
+                1,
+                True,
             )
 
         messages = " ".join(record.getMessage() for record in caplog.records)
@@ -99,12 +107,17 @@ class TestSessionLogging:
     def test_login_failure_is_logged(self, caplog) -> None:
         client = _client()
         spi = _MdSpi(client)
+        errors = []
+        client.on_error = errors.append
 
         with caplog.at_level(logging.WARNING):
-            spi.OnRspUserLogin(
-                None, SimpleNamespace(ErrorID=3, ErrorMsg="bad password"), 1, True
-            )
+            spi.OnFrontConnected()
+            spi.OnRspUserLogin(None, SimpleNamespace(ErrorID=3, ErrorMsg="bad password"), 1, True)
 
         messages = " ".join(record.getMessage() for record in caplog.records)
         assert "3" in messages
-        assert "bad password" in messages
+        assert "[redacted]" in messages
+        assert "bad password" not in messages
+        assert len(errors) == 1
+        assert errors[0].ErrorID == 3
+        assert errors[0].ErrorMsg == "provider_login_rejected"

@@ -59,9 +59,24 @@ def read_client():
     )
     client._connected = True
     client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
+    client._login_state = "logging_in"
     client._connection_generation = 1
+    client._login_request_id = 1
+    client._login_connection_generation = 1
     client._query_interval = 0
+    _TraderSpi(client).OnRspUserLogin(
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            TradingDay="20260924",
+            FrontID=0,
+            SessionID=0,
+            MaxOrderRef="",
+        ),
+        SimpleNamespace(ErrorID=0, ErrorMsg=""),
+        1,
+        True,
+    )
     return client
 
 

@@ -19,10 +19,15 @@ T = TypeVar("T")
 _QUERY_SOURCE_SEAL = object()
 _QUERY_SCOPE_SEAL = object()
 _QUERY_MONOTONIC_CLOCK_DOMAIN = "python.time.monotonic"
-# Strict evidence is deliberately bounded by an issuer policy.  A caller can
-# request a shorter TTL, but a later conversion cannot extend a query beyond
-# this trusted maximum age by choosing new UTC and monotonic deadlines.
-_QUERY_EVIDENCE_MAX_TTL_SECONDS = 5.0
+# Strict query evidence is bounded by an issuer policy.  The seven-query
+# read-only certificate sequence is serialized and each native query may take
+# up to five seconds, so a 35-second issuer window covers the roughly 30-second
+# terminal-callback span plus bounded finalization time.  Consumers may impose
+# a shorter scope-specific TTL; a caller cannot extend the issuer deadline.
+_QUERY_EVIDENCE_MAX_TTL_SECONDS = 35.0
+# Position snapshots keep their existing short freshness contract even though
+# their underlying query provenance can also be used in a longer read bundle.
+_QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS = 5.0
 
 
 def _canonical_query_value(value: Any) -> Any:
@@ -89,6 +94,8 @@ class _QuerySource:
     trading_day: str
     broker_id: str
     investor_id: str
+    request_filters: tuple[tuple[str, str], ...]
+    explicit_request_filters: tuple[str, ...]
     started_at_utc: datetime
     completed_at_utc: datetime | None
     started_monotonic: float
@@ -125,6 +132,8 @@ def _new_query_source(
     trading_day: str,
     broker_id: str,
     investor_id: str,
+    request_filters: tuple[tuple[str, str], ...],
+    explicit_request_filters: tuple[str, ...],
     started_at_utc: datetime,
     completed_at_utc: datetime | None,
     started_monotonic: float,
@@ -149,6 +158,8 @@ def _new_query_source(
         trading_day=trading_day,
         broker_id=broker_id,
         investor_id=investor_id,
+        request_filters=request_filters,
+        explicit_request_filters=explicit_request_filters,
         started_at_utc=started_at_utc,
         completed_at_utc=completed_at_utc,
         started_monotonic=started_monotonic,

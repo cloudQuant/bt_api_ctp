@@ -36,6 +36,7 @@ from bt_api_ctp.ctp.ctp_structs_order import (
     CThostFtdcInputOrderField,
 )
 from bt_api_ctp.ctp_env_selector import (
+    is_official_simnow_td_front,
     official_simnow_fronts,
     select_ctp_environment,
     select_reachable_ctp_environment,
@@ -587,11 +588,13 @@ class CtpRequestData(Feed):
         client independently verifies its exact type and issuer seal.
         """
 
+        self._reject_official_simnow_write()
         return ctp_client._issue_ctp_execution_authority_for_core()
 
     def _execution_environment_proof(self) -> dict[str, Any]:
         """Return a provider-verified environment binding or fail closed."""
 
+        self._reject_official_simnow_write()
         info = self.get_environment_info()
         profile = self._execution_bound_profile
         if (
@@ -621,6 +624,12 @@ class CtpRequestData(Feed):
             "environment_profile": profile,
             "environment_verified": True,
         }
+
+    def _reject_official_simnow_write(self) -> None:
+        """Use the initialization-time front binding, never a mutable label."""
+
+        if is_official_simnow_td_front(self._execution_bound_td_front):
+            raise ctp_client.CtpExecutionGateError("ctp_simnow_execution_not_admitted")
 
     def _issue_execution_authorization_for_core(
         self,
@@ -748,6 +757,7 @@ class CtpRequestData(Feed):
         symbol: Any,
         exchange_id: Any = None,
     ) -> None:
+        self._reject_official_simnow_write()
         installed = self._execution_gate_capability
         if installed is None:
             # A CTP request feed may stay connected for read-only discovery,
@@ -782,6 +792,7 @@ class CtpRequestData(Feed):
         usable while preventing the former implicit terminal write.
         """
 
+        self._reject_official_simnow_write()
         installed = self._execution_gate_capability
         if installed is None or not ctp_client._is_ctp_core_execution_authority(installed):
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_required")
@@ -985,7 +996,10 @@ class CtpRequestData(Feed):
             field.ExchangeID = exchange_id
         field.Direction = direction
         field.CombOffsetFlag = offset_flag
-        field.CombHedgeFlag = "1"
+        hedge_flag = str(kwargs.get("hedge_flag") or "1")
+        if hedge_flag not in {"1", "2", "3", "5", "6", "7"}:
+            raise ValueError("CTP hedge_flag must be one of 1, 2, 3, 5, 6, 7")
+        field.CombHedgeFlag = hedge_flag
         field.VolumeTotalOriginal = order_volume
         field.MinVolume = 1
         field.ForceCloseReason = "0"
@@ -1063,6 +1077,9 @@ class CtpRequestData(Feed):
             field.FrontID = int(front_id) if front_id else trader._front_id
             field.SessionID = int(session_id) if session_id else trader._session_id
         request_id = trader._next_request_id()
+        order_action_ref = str(request_id)
+        field.RequestID = request_id
+        field.OrderActionRef = request_id
         submit = getattr(trader, "submit_order_action", None)
         if callable(submit):
             ret = submit(
@@ -1074,11 +1091,29 @@ class CtpRequestData(Feed):
             # See the insert path above.  A cancellation is also a real CTP
             # write and must cross the typed, locked native gate.
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
+        evidence = self.get_order_action_evidence(request_id, order_action_ref=order_action_ref)
+        evidence_snapshot = (
+            evidence.as_dict()
+            if evidence is not None and callable(getattr(evidence, "as_dict", None))
+            else {
+                "request_id": request_id,
+                "order_action_ref": order_action_ref,
+                "status": "unknown",
+                "evidence_received": False,
+                "reason": "native_cancel_evidence_unavailable",
+            }
+        )
+        payload = dict(extra_data or {})
+        payload["ctp_cancel"] = {
+            "request_id": request_id,
+            "order_action_ref": order_action_ref,
+            "evidence": evidence_snapshot,
+        }
         return self._make_request_data(
             [_ctp_field_to_dict(field)],
             "cancel_order",
             symbol,
-            extra_data,
+            payload,
             status=(ret == 0),
         )
 
@@ -1425,6 +1460,20 @@ class CtpRequestData(Feed):
         if self._trader is None:
             return ctp_client.empty_ctp_request_counts()
         return self._trader.get_request_counts()
+
+    def get_order_action_evidence(
+        self,
+        request_id: int,
+        *,
+        order_action_ref: str | int,
+    ) -> Any:
+        """Return one immutable native cancel-callback snapshot, if recorded."""
+
+        trader = getattr(self, "_trader", None)
+        getter = getattr(trader, "get_order_action_evidence", None)
+        if trader is None or not callable(getter):
+            return None
+        return getter(request_id, order_action_ref=order_action_ref)
 
     def confirm_settlement(
         self,

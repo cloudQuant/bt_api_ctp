@@ -140,12 +140,23 @@ class TestDeferredResubscribeOnLogin:
 
     def test_inline_resubscribe_is_the_default(self):
         batches: list[list[str]] = []
-        api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
+        api = SimpleNamespace(
+            ReqUserLogin=lambda *_args: 0,
+            SubscribeMarketData=lambda batch: batches.append(list(batch)),
+        )
         client, spi = self._wired_client(api)
         client.subscribe(["rb2510", "cu2510"])
+        spi.OnFrontConnected()
 
         spi.OnRspUserLogin(
-            SimpleNamespace(TradingDay="20260917"), SimpleNamespace(ErrorID=0), 1, True
+            SimpleNamespace(
+                BrokerID=client.broker_id,
+                UserID=client.user_id,
+                TradingDay="20260917",
+            ),
+            SimpleNamespace(ErrorID=0),
+            1,
+            True,
         )
 
         assert client.auto_resubscribe_on_login is True
@@ -153,15 +164,26 @@ class TestDeferredResubscribeOnLogin:
 
     def test_login_defers_resubscribe_to_the_caller(self):
         batches: list[list[str]] = []
-        api = SimpleNamespace(SubscribeMarketData=lambda batch: batches.append(list(batch)))
+        api = SimpleNamespace(
+            ReqUserLogin=lambda *_args: 0,
+            SubscribeMarketData=lambda batch: batches.append(list(batch)),
+        )
         client, spi = self._wired_client(api)
         client.auto_resubscribe_on_login = False
         client.subscribe(["rb2510", "cu2510"])
         logins: list[object] = []
         client.on_login = logins.append
+        spi.OnFrontConnected()
 
         spi.OnRspUserLogin(
-            SimpleNamespace(TradingDay="20260917"), SimpleNamespace(ErrorID=0), 1, True
+            SimpleNamespace(
+                BrokerID=client.broker_id,
+                UserID=client.user_id,
+                TradingDay="20260917",
+            ),
+            SimpleNamespace(ErrorID=0),
+            1,
+            True,
         )
 
         assert batches == [], "回调线程内不得提交订阅"

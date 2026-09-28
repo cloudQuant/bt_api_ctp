@@ -15,7 +15,7 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from math import isfinite
@@ -25,6 +25,7 @@ from typing import Any, NoReturn
 from bt_api_ctp.query import (
     _QUERY_EVIDENCE_MAX_TTL_SECONDS,
     _QUERY_MONOTONIC_CLOCK_DOMAIN,
+    _QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS,
     _QUERY_SCOPE_SEAL,
     _QUERY_SOURCE_SEAL,
     QueryResult,
@@ -701,9 +702,21 @@ def build_ctp_position_evidence(
     # The caller may shorten the issuer's deadline, but cannot replace it
     # with a new one.  Clamp both clock domains to the immutable policy-bound
     # deadline captured by the trusted query source.
-    trusted_expires = _utc(source.trusted_expires_at_utc)
+    # A larger issuer window supports a complete serial read bundle.  A single
+    # position snapshot retains its shorter five-second freshness policy.
+    position_expires = completed + timedelta(
+        seconds=_QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS
+    )
+    position_monotonic_expires = (
+        source.completed_monotonic + _QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS
+    )
+    trusted_expires = min(_utc(source.trusted_expires_at_utc), position_expires)
     expires = min(requested_expires, trusted_expires)
-    monotonic_expires = min(float(monotonic_expires_at), float(source.trusted_expires_monotonic))
+    monotonic_expires = min(
+        float(monotonic_expires_at),
+        float(source.trusted_expires_monotonic),
+        position_monotonic_expires,
+    )
     ttl_seconds = (expires - completed).total_seconds()
     if (
         not isfinite(ttl_seconds)
