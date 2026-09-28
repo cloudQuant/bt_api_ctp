@@ -84,8 +84,8 @@ def _fixture_tree(tmp_path):
     _write_ticks(
         tick_root,
         "SHFE",
-        "??odd-name",
-        [_tick_row("??odd-name", exchange_id="SHFE", update_time="09:00:00")],
+        "odd-name",
+        [_tick_row("odd-name", exchange_id="SHFE", update_time="09:00:00")],
     )
     return tick_root
 
@@ -111,7 +111,7 @@ class TestBuildDay:
         report = build_day(tick_root, tmp_path / "kline", "20260918", classifier=classify_contract)
 
         assert report.skipped_combination == 1
-        assert report.skipped_unknown == ["SHFE/??odd-name"]
+        assert report.skipped_unknown == ["SHFE/odd-name"]
         assert not (tmp_path / "kline" / "CZCE").exists()
 
     def test_options_can_be_excluded(self, tmp_path):
