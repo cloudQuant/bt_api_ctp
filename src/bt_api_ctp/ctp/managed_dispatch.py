@@ -253,9 +253,7 @@ class CtpManagedNativeDispatchRequestV1:
                 if mutation_field in fields:
                     value = fields[mutation_field]
                     if type(value) not in (int, float) or value != 0:
-                        raise ValueError(
-                            f"managed cancel {mutation_field} must be zero or absent"
-                        )
+                        raise ValueError(f"managed cancel {mutation_field} must be zero or absent")
             action_value = fields.get("OrderActionRef")
             if type(action_value) is int and action_value > 0:
                 native_action_ref = str(action_value)

@@ -1023,7 +1023,9 @@ def test_managed_trader_api_blocks_cached_raw_query_requests() -> None:
     feed, client, native_calls = _execution_ready_feed()
     raw_calls = []
     client._native_api.ReqQryOrder = lambda *_args: raw_calls.append("qry") or 0
-    client._native_api.ReqQueryBankAccountMoneyByFuture = lambda *_args: raw_calls.append("query") or 0
+    client._native_api.ReqQueryBankAccountMoneyByFuture = lambda *_args: (
+        raw_calls.append("query") or 0
+    )
     public_api = client.api
     cached_qry = public_api.ReqQryOrder
     cached_query = public_api.ReqQueryBankAccountMoneyByFuture

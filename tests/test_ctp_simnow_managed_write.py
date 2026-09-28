@@ -166,9 +166,7 @@ def _configured_simnow_client(
             {**context_values, **refreshed}, owner=self, refresh=refresh_context
         )
 
-    context = _new_runtime_context(
-        context_values, owner=owner, refresh=refresh_context
-    )
+    context = _new_runtime_context(context_values, owner=owner, refresh=refresh_context)
 
     instrument = {"instrument_id": "SA2701", "exchange_id": "CZCE"}
     if approval_kind == "entry":
@@ -206,10 +204,12 @@ def _configured_simnow_client(
             "revocation_snapshot_version": 1,
         }
     )
-    approval = object.__new__(__import__(
-        "bt_api_py._ctp_execution_authorization",
-        fromlist=["CtpExecutionApproval"],
-    ).CtpExecutionApproval)
+    approval = object.__new__(
+        __import__(
+            "bt_api_py._ctp_execution_authorization",
+            fromlist=["CtpExecutionApproval"],
+        ).CtpExecutionApproval
+    )
     object.__setattr__(approval, "payload", MappingProxyType(payload))
     object.__setattr__(approval, "payload_sha256", "0" * 64)
     object.__setattr__(approval, "_seal", _CAPABILITY_SEAL)
@@ -341,13 +341,16 @@ def test_owner_bound_approval_accepts_exact_custom_configured_front_pair():
     )
 
     assert not is_official_simnow_td_front(td_front)
-    assert client.submit_order_insert(
-        _insert_field(),
-        11,
-        execution_capability=capability,
-        runtime_order_id=_ORDER_ID,
-        managed_intent_id="entry-custom-front",
-    ) == 0
+    assert (
+        client.submit_order_insert(
+            _insert_field(),
+            11,
+            execution_capability=capability,
+            runtime_order_id=_ORDER_ID,
+            managed_intent_id="entry-custom-front",
+        )
+        == 0
+    )
 
     assert [call[0] for call in native.calls] == ["insert"]
     assert binding.td_front == td_front
@@ -365,13 +368,16 @@ def test_neutral_config_front_pair_marker_allows_only_the_bound_simnow_insert():
         md_front=md_front,
     )
 
-    assert client.submit_order_insert(
-        _insert_field(),
-        11,
-        execution_capability=capability,
-        runtime_order_id=_ORDER_ID,
-        managed_intent_id="entry-neutral-front-pair",
-    ) == 0
+    assert (
+        client.submit_order_insert(
+            _insert_field(),
+            11,
+            execution_capability=capability,
+            runtime_order_id=_ORDER_ID,
+            managed_intent_id="entry-neutral-front-pair",
+        )
+        == 0
+    )
 
     assert [call[0] for call in native.calls] == ["insert"]
     assert client._bound_md_front == md_front
@@ -499,7 +505,9 @@ def test_production_environment_cannot_install_custom_simnow_binding():
         client.configure_runtime_simnow_credential_binding(capability, candidate)
 
     assert native.calls == []
-    assert client.get_execution_gate_state()["runtime_simnow_credential_binding_configured"] is False
+    assert (
+        client.get_execution_gate_state()["runtime_simnow_credential_binding_configured"] is False
+    )
 
 
 def test_explicit_recovery_approval_allows_only_the_named_managed_cancel():
@@ -534,7 +542,11 @@ def test_explicit_recovery_approval_allows_only_the_named_managed_cancel():
     [
         ({}, {"managed_intent_id": None}, "ctp_simnow_credential_binding_rejected"),
         ({"InstrumentID": "RB2701"}, {}, "ctp_simnow_credential_binding_rejected"),
-        ({"InvestorID": "other-account", "UserID": "other-account"}, {}, "native_field_identity_mismatch"),
+        (
+            {"InvestorID": "other-account", "UserID": "other-account"},
+            {},
+            "native_field_identity_mismatch",
+        ),
         ({"ExchangeID": "SHFE"}, {}, "ctp_simnow_credential_binding_rejected"),
     ],
 )
@@ -621,7 +633,9 @@ def test_binding_rejects_7x24_profile_and_never_dispatches_native_write():
     assert native.calls == []
 
 
-@pytest.mark.parametrize("changed_field, changed_value", [("_trading_day", "20260924"), ("_connection_generation", 8)])
+@pytest.mark.parametrize(
+    "changed_field, changed_value", [("_trading_day", "20260924"), ("_connection_generation", 8)]
+)
 def test_stale_day_or_generation_binding_rejects_before_native_insert(changed_field, changed_value):
     client, native, capability, _binding, _scopes = _configured_simnow_client()
     setattr(client, changed_field, changed_value)

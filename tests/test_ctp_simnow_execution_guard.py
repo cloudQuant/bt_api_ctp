@@ -47,7 +47,7 @@ def test_ctp_client_import_supports_python39_dataclass_signature() -> None:
     env = dict(os.environ)
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = source_path + (os.pathsep + existing if existing else "")
-    script = r'''
+    script = r"""
 import dataclasses
 
 native_dataclass = dataclasses.dataclass
@@ -61,7 +61,7 @@ def python39_dataclass(cls=None, *, init=True, repr=True, eq=True, order=False,
 
 dataclasses.dataclass = python39_dataclass
 import bt_api_ctp.ctp.client
-'''
+"""
     subprocess.run(
         [sys.executable, "-c", script],
         check=True,
@@ -313,17 +313,13 @@ def test_simnow_binding_refresh_runs_at_native_boundary_and_stale_hmac_cannot_wr
     approved_binding = verifier.refresh(scope, owner=owner, operation="test")
     context_values = {
         "credential_binding_key_id": approved_binding["credential_binding_key_id"],
-        "credential_binding_hmac_sha256": approved_binding[
-            "credential_binding_hmac_sha256"
-        ],
+        "credential_binding_hmac_sha256": approved_binding["credential_binding_hmac_sha256"],
     }
     self = owner
     credential_binding_verifier = verifier
 
     def refresh_context():
-        refreshed_binding = credential_binding_verifier.refresh(
-            scope, owner=self, operation="test"
-        )
+        refreshed_binding = credential_binding_verifier.refresh(scope, owner=self, operation="test")
         return _new_runtime_context(
             {**context_values, **refreshed_binding},
             owner=self,

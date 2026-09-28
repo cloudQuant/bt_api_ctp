@@ -145,9 +145,7 @@ def test_insert_rsp_error_and_error_return_reject_only_the_exact_request():
 
     client = _client()
     _submit(client)
-    _TraderSpi(client).OnErrRtnOrderInsert(
-        _field(), _rsp_info(33, "exchange rejected insert")
-    )
+    _TraderSpi(client).OnErrRtnOrderInsert(_field(), _rsp_info(33, "exchange rejected insert"))
     evidence = client.get_order_insert_evidence(17, order_ref="000000000105")
     assert evidence.status == "rejected"
     assert evidence.error_code == 33

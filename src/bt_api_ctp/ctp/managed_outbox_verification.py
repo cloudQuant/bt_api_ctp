@@ -260,13 +260,9 @@ def verify_and_claim_ctp_managed_native_outbox_action(
     try:
         claimed_session = _current_session_facts(trader)
     except CtpOutboxPreDispatchError as exc:
-        raise CtpOutboxPreDispatchError(
-            "SDK account/session changed after atomic claim"
-        ) from exc
+        raise CtpOutboxPreDispatchError("SDK account/session changed after atomic claim") from exc
     if claimed_session != current_session:
-        raise CtpOutboxPreDispatchError(
-            "SDK account/session changed after atomic claim"
-        )
+        raise CtpOutboxPreDispatchError("SDK account/session changed after atomic claim")
 
     receipt_digest = _sha256_json(
         {
