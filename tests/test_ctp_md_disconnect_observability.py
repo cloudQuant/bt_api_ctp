@@ -88,8 +88,12 @@ class TestSessionLogging:
         spi = _MdSpi(client)
 
         with caplog.at_level(logging.INFO):
+            spi.OnFrontConnected()
             spi.OnRspUserLogin(
-                SimpleNamespace(TradingDay="20260917"), SimpleNamespace(ErrorID=0), 1, True
+                SimpleNamespace(BrokerID="9999", UserID="user", TradingDay="20260917"),
+                SimpleNamespace(ErrorID=0),
+                client._login_request_id,
+                True,
             )
 
         messages = " ".join(record.getMessage() for record in caplog.records)
@@ -101,8 +105,12 @@ class TestSessionLogging:
         spi = _MdSpi(client)
 
         with caplog.at_level(logging.WARNING):
+            spi.OnFrontConnected()
             spi.OnRspUserLogin(
-                None, SimpleNamespace(ErrorID=3, ErrorMsg="bad password"), 1, True
+                None,
+                SimpleNamespace(ErrorID=3, ErrorMsg="bad password"),
+                client._login_request_id,
+                True,
             )
 
         messages = " ".join(record.getMessage() for record in caplog.records)

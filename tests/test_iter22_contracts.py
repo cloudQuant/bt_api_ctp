@@ -37,16 +37,42 @@ def _core_capability() -> object:
 
 
 def _read_ready(client: TraderClient, *, trading_day: str = "20260909") -> TraderClient:
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = trading_day
-    client._connection_generation = max(client._connection_generation, 1)
+    # Use the same accepted terminal login callback as a successful SDK
+    # session. Directly setting the visible state flags cannot establish the
+    # candidate's sealed account/day observation.
+    with client._query_state_lock:
+        client._connected = True
+        client._authentication_state = "authenticated"
+        client._login_state = "logging_in"
+        client._trading_day = ""
+        client._connection_generation = max(client._connection_generation, 1)
+        request_id = client._next_request_id()
+        generation = client._connection_generation
+        client._login_request_id = request_id
+        client._login_connection_generation = generation
+        native_api = client._api
+        spi = _TraderSpi(client, native_api)
+        client._spi = spi
     # Offline fixtures install a synthetic native API without calling start().
     # Mirror the immutable front binding that real start() records before
     # RegisterFront so managed-gate tests exercise the same final check.
+    client._session_native_api = native_api
     client._session_native_front = client._bound_front
     client._query_interval = 0
+    spi.OnRspUserLogin(
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            TradingDay=trading_day,
+            FrontID=7,
+            SessionID=19,
+            MaxOrderRef="0",
+        ),
+        SimpleNamespace(ErrorID=0, ErrorMsg=""),
+        request_id,
+        True,
+    )
+    assert client.is_read_only_ready is True
     return client
 
 
@@ -301,6 +327,7 @@ def test_managed_ctp_feed_writes_only_with_bound_proof_contract_and_token() -> N
         1200,
         "buy-limit",
         exchange_id="CZCE",
+        client_order_id="000000000101",
         _execution_capability=capability,
     )
     feed.cancel_order(
@@ -348,6 +375,7 @@ def test_public_state_hash_mapping_and_bare_capability_never_arm_direct_feed() -
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000102",
             _execution_capability=capability,
         )
     with pytest.raises(
@@ -503,6 +531,7 @@ def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_wri
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000107",
             _execution_capability=capability,
         )
     assert native_calls == []
@@ -576,13 +605,14 @@ def test_managed_ctp_feed_v2_bundle_allows_exact_czce_option_legs_only() -> None
 
     assert state["scope_version"] == _BUNDLE_SCOPE_VERSION
     assert state["authorized_instruments"] == instruments
-    for instrument in instruments:
+    for index, instrument in enumerate(instruments, 1):
         feed.make_order(
             instrument.split(".", 1)[1],
             1,
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id=f"{index:012d}",
             _execution_capability=capability,
         )
     feed.cancel_order(
@@ -625,6 +655,7 @@ def test_managed_ctp_feed_v2_bundle_rejects_unapproved_or_rewritten_option_leg(
         1200,
         "buy-limit",
         exchange_id="DCE",
+        client_order_id="000000000103",
         _execution_capability=capability,
     )
 
@@ -636,6 +667,7 @@ def test_managed_ctp_feed_v2_bundle_rejects_unapproved_or_rewritten_option_leg(
                 1200,
                 "buy-limit",
                 exchange_id="DCE",
+                client_order_id="000000000104",
                 _execution_capability=capability,
             )
         else:
@@ -765,6 +797,7 @@ def test_managed_ctp_feed_v2_bundle_rechecks_tampered_fields_at_native_boundary(
                 1200,
                 "buy-limit",
                 exchange_id="DCE",
+                client_order_id="000000000105",
                 _execution_capability=capability,
             )
         else:
@@ -897,6 +930,7 @@ def test_managed_ctp_feed_rechecks_generation_at_native_submit_boundary() -> Non
             1200,
             "buy-limit",
             exchange_id="CZCE",
+            client_order_id="000000000106",
             _execution_capability=capability,
         )
 
@@ -1218,7 +1252,9 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
         )
         is True
     )
-    assert native_calls == [("9999", "account", 1)]
+    # The accepted fake login consumes request ID 1; settlement is the next
+    # native request in the same session generation.
+    assert native_calls == [("9999", "account", 2)]
     assert client.get_request_counts()["settlement_confirm"] == 1
 
     state = client.get_session_state()
@@ -1349,25 +1385,11 @@ def test_auto_settlement_configuration_never_issues_implicit_terminal_write() ->
         "secret",
         auto_settlement_confirm=True,
     )
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logging_in"
-    client._connection_generation = 1
-    client._login_request_id = 1
-    client._login_connection_generation = 1
     native_calls = []
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda *_args: native_calls.append("confirm") or 0
     )
-    client._session_native_api = client._api
-    client._session_native_front = client._bound_front
-
-    _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
-        1,
-        True,
-    )
+    _read_ready(client)
 
     assert client.wait_ready(timeout=0.01) is False
     state = client.get_session_state()
@@ -1588,7 +1610,7 @@ def test_query_result_accumulates_only_matching_request_and_terminal_packet() ->
 
     assert result.complete is True
     assert [row["OrderSysID"] for row in result.records] == ["A", "B"]
-    assert result.request_id == 1 and result.connection_generation == 1
+    assert result.request_id == 2 and result.connection_generation == 1
     assert result.evidence_complete is True
     counts = client.get_request_counts()
     assert counts["query_orders"] == 1
@@ -2204,6 +2226,8 @@ def test_auth_and_login_responses_are_fenced_across_same_spi_reconnect() -> None
 
     spi.OnRspUserLogin(
         SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
             FrontID=91,
             SessionID=92,
             TradingDay="20260908",
@@ -2223,6 +2247,8 @@ def test_auth_and_login_responses_are_fenced_across_same_spi_reconnect() -> None
     current_login_request = login_requests[-1]
     spi.OnRspUserLogin(
         SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
             FrontID=1,
             SessionID=2,
             TradingDay="20260909",
@@ -2301,23 +2327,12 @@ def test_spi_user_callbacks_do_not_hold_query_state_lock(event_type: str) -> Non
 def test_read_only_login_issues_zero_implicit_settlement_writes() -> None:
     client = TraderClient("tcp://test", "9999", "account", "secret")
     assert client.auto_settlement_confirm is False
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logging_in"
-    client._connection_generation = 1
-    client._login_request_id = 1
-    client._login_connection_generation = 1
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda *_args: pytest.fail(
             "read-only login must not confirm settlement"
         )
     )
-    _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
-        1,
-        True,
-    )
+    _read_ready(client)
     state = client.get_session_state()
     assert state["read_only_ready"] is True
     assert state["trading_ready"] is False
@@ -2439,21 +2454,10 @@ def test_login_with_automatic_settlement_enabled_never_submits_settlement_confir
         "secret",
         auto_settlement_confirm=True,
     )
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logging_in"
-    client._connection_generation = 1
-    client._login_request_id = 1
-    client._login_connection_generation = 1
     client._api = SimpleNamespace(
         ReqSettlementInfoConfirm=lambda *_args: (_ for _ in ()).throw(RuntimeError("boom"))
     )
-    _TraderSpi(client).OnRspUserLogin(
-        SimpleNamespace(FrontID=1, SessionID=2, TradingDay="20260909", MaxOrderRef="7"),
-        None,
-        1,
-        True,
-    )
+    _read_ready(client)
     state = client.get_session_state()
     assert state["settlement_state"] == "not_requested"
     assert state["trading_ready"] is False
@@ -2487,9 +2491,7 @@ def test_old_settlement_response_cannot_confirm_new_generation() -> None:
 
     client._on_front_disconnected(1)
     client._on_front_connected()
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = "20260910"
+    _read_ready(client, trading_day="20260910")
     assert (
         client._request_settlement_confirmation(
             execution_capability=capability,
@@ -3073,13 +3075,9 @@ def test_gateway_quote_v2_never_treats_placeholder_provenance_as_eligible(
     assert quality_flag in tick.quality_flags
 
 
-def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer(
-    monkeypatch,
-) -> None:
+def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer() -> None:
     """Exercise the source adapter -> remote payload -> parent SDK boundary."""
 
-    parent_root = Path(__file__).resolve().parents[3]
-    monkeypatch.syspath_prepend(str(parent_root))
     from bt_api_py._normalization import normalize_event
 
     adapter = object.__new__(CtpGatewayAdapter)

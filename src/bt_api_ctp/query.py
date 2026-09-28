@@ -22,7 +22,11 @@ _QUERY_MONOTONIC_CLOCK_DOMAIN = "python.time.monotonic"
 # Strict evidence is deliberately bounded by an issuer policy.  A caller can
 # request a shorter TTL, but a later conversion cannot extend a query beyond
 # this trusted maximum age by choosing new UTC and monotonic deadlines.
-_QUERY_EVIDENCE_MAX_TTL_SECONDS = 5.0
+# Strict query provenance must survive the bounded serial seven-query
+# certificate cadence. Individual position evidence keeps a shorter policy
+# window in ctp_position_evidence.py.
+_QUERY_EVIDENCE_MAX_TTL_SECONDS = 35.0
+_QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS = 5.0
 
 
 def _canonical_query_value(value: Any) -> Any:
@@ -78,7 +82,12 @@ def _query_records_digest(records: Iterable[Any]) -> str:
 
 @dataclass(frozen=True)
 class _QuerySource:
-    """Typed provenance issued by one live ``TraderClient`` query lane."""
+    """Typed provenance issued by one live ``TraderClient`` query lane.
+
+    ``request_intent_filters`` records the exact string values the SDK meant
+    to put in the native request. ``request_filters`` records getter values
+    read back from that populated native request before submission.
+    """
 
     _seal: object
     issuer: object
@@ -89,6 +98,11 @@ class _QuerySource:
     trading_day: str
     broker_id: str
     investor_id: str
+    request_intent_filters: tuple[tuple[str, str], ...]
+    request_filters: tuple[tuple[str, str], ...]
+    request_intent_parameters: tuple[tuple[str, float], ...]
+    request_parameters: tuple[tuple[str, float], ...]
+    explicit_request_filters: tuple[str, ...]
     started_at_utc: datetime
     completed_at_utc: datetime | None
     started_monotonic: float
@@ -125,11 +139,16 @@ def _new_query_source(
     trading_day: str,
     broker_id: str,
     investor_id: str,
+    request_intent_filters: tuple[tuple[str, str], ...] = (),
     started_at_utc: datetime,
     completed_at_utc: datetime | None,
     started_monotonic: float,
     completed_monotonic: float | None,
     records_sha256: str | None,
+    request_filters: tuple[tuple[str, str], ...] = (),
+    request_intent_parameters: tuple[tuple[str, float], ...] = (),
+    request_parameters: tuple[tuple[str, float], ...] = (),
+    explicit_request_filters: tuple[str, ...] = (),
 ) -> _QuerySource:
     trusted_expires_at_utc = None
     trusted_expires_monotonic = None
@@ -149,6 +168,11 @@ def _new_query_source(
         trading_day=trading_day,
         broker_id=broker_id,
         investor_id=investor_id,
+        request_intent_filters=request_intent_filters,
+        request_filters=request_filters,
+        request_intent_parameters=request_intent_parameters,
+        request_parameters=request_parameters,
+        explicit_request_filters=explicit_request_filters,
         started_at_utc=started_at_utc,
         completed_at_utc=completed_at_utc,
         started_monotonic=started_monotonic,
