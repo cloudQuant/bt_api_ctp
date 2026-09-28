@@ -111,9 +111,7 @@ class TickCollectionEngine:
             ]
         return select_instruments(instruments, self._config.shard)
 
-    def run_once(
-        self, *, duration_sec: float | None = None, stop_event: Any = None
-    ) -> SinkReport:
+    def run_once(self, *, duration_sec: float | None = None, stop_event: Any = None) -> SinkReport:
         """Collect for one window, then flush and report."""
         self._cumulative = {}
         self._reported = {}
@@ -201,9 +199,7 @@ class TickCollectionEngine:
             self._subscriber.close()
 
         if not trading_day:
-            _logger.info(
-                "collection finished: no data persisted (received=%d)", handler.accepted
-            )
+            _logger.info("collection finished: no data persisted (received=%d)", handler.accepted)
             return SinkReport(trading_day="", dropped_ticks=buffer.dropped_count())
         report = sink.finalize(
             trading_day,
@@ -233,9 +229,7 @@ class TickCollectionEngine:
         """
         if guard is None:
             return
-        verdict = guard.evaluate(
-            now=now, subscribed=subscribed, session=self._current_session()
-        )
+        verdict = guard.evaluate(now=now, subscribed=subscribed, session=self._current_session())
         _logger.info("health: %s", verdict.describe())
         for reason in verdict.alarm_reasons:
             _logger.error("collection health alarm: %s", reason)

@@ -121,8 +121,7 @@ def is_quote_window(moment: datetime) -> bool:
     quotes.  A snapshot pushed at subscribe time (observed 20:18) still fails.
     """
     return (
-        session_index(moment) is not None
-        or session_index(moment + _OPEN_AUCTION_LEAD) is not None
+        session_index(moment) is not None or session_index(moment + _OPEN_AUCTION_LEAD) is not None
     )
 
 

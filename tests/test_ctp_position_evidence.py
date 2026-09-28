@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +17,7 @@ from bt_api_ctp.containers.ctp.ctp_position_evidence import (
     CtpPositionEvidenceError,
     build_ctp_position_evidence,
 )
-from bt_api_ctp.ctp.client import TraderClient
+from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 from bt_api_ctp.query import QueryResult
 
@@ -24,6 +25,33 @@ UTC = timezone.utc
 NOW = datetime(2026, 9, 10, 6, 0, tzinfo=UTC)
 BROKER_ID = "fixture-broker"
 INVESTOR_ID = "fixture-investor"
+
+
+def _establish_offline_read_only_session(client, *, trading_day="20260910"):
+    """Publish a fenced login identity through the native callback without I/O."""
+
+    client._connected = True
+    client._authentication_state = "authenticated"
+    client._login_state = "logging_in"
+    client._connection_generation = 7
+    client._req_id = 30
+    client._login_request_id = 30
+    client._login_connection_generation = 7
+    client._query_interval = 0.0
+    _TraderSpi(client).OnRspUserLogin(
+        SimpleNamespace(
+            BrokerID=client._bound_broker_id,
+            UserID=client._bound_user_id,
+            TradingDay=trading_day,
+            FrontID=0,
+            SessionID=0,
+            MaxOrderRef="",
+        ),
+        SimpleNamespace(ErrorID=0, ErrorMsg=""),
+        30,
+        True,
+    )
+    return client
 
 
 def _offline_client():
@@ -36,13 +64,7 @@ def _offline_client():
         "",
         auto_settlement_confirm=False,
     )
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = "20260910"
-    client._connection_generation = 7
-    client._req_id = 30
-    client._query_interval = 0.0
+    _establish_offline_read_only_session(client)
     return client
 
 
@@ -625,12 +647,7 @@ def test_terminal_callback_clocks_survive_a_slow_native_query_return():
         "",
         auto_settlement_confirm=False,
     )
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = "20260910"
-    client._connection_generation = 7
-    client._query_interval = 0.0
+    _establish_offline_read_only_session(client)
     api = DelayedQueryApi(client)
     client._api = api
     result = client.query_positions_result(timeout=1.0)
@@ -689,12 +706,7 @@ def test_feed_adapter_uses_query_source_completion_for_delayed_scope_capture():
         "",
         auto_settlement_confirm=False,
     )
-    client._connected = True
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._trading_day = "20260910"
-    client._connection_generation = 7
-    client._query_interval = 0.0
+    _establish_offline_read_only_session(client)
     # Build the empty query through this delayed client so the feed's opaque
     # issuer matches the strict scope returned below.
     accumulator = client._new_query_accumulator("positions")

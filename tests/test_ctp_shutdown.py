@@ -168,13 +168,21 @@ class _ImmediateJoinApi(_NativeApi):
 def _isolate_retired_native_sessions():
     with client_module._RETIRED_CTP_NATIVE_SESSIONS_LOCK:
         original = list(client_module._RETIRED_CTP_NATIVE_SESSIONS)
+        original_joined = dict(client_module._CTP_NATIVE_JOIN_COMPLETED_APIS)
+        original_releasing = set(client_module._CTP_NATIVE_SESSIONS_RELEASING)
         client_module._RETIRED_CTP_NATIVE_SESSIONS.clear()
+        client_module._CTP_NATIVE_JOIN_COMPLETED_APIS.clear()
+        client_module._CTP_NATIVE_SESSIONS_RELEASING.clear()
     try:
         yield
     finally:
         with client_module._RETIRED_CTP_NATIVE_SESSIONS_LOCK:
             client_module._RETIRED_CTP_NATIVE_SESSIONS.clear()
             client_module._RETIRED_CTP_NATIVE_SESSIONS.extend(original)
+            client_module._CTP_NATIVE_JOIN_COMPLETED_APIS.clear()
+            client_module._CTP_NATIVE_JOIN_COMPLETED_APIS.update(original_joined)
+            client_module._CTP_NATIVE_SESSIONS_RELEASING.clear()
+            client_module._CTP_NATIVE_SESSIONS_RELEASING.update(original_releasing)
 
 
 def _install_live_md_session() -> tuple[MdClient, _NativeApi, object, _LiveJoinThread]:
@@ -553,3 +561,217 @@ def test_pre_init_start_failures_and_retry_do_not_accumulate_retired_sessions(
 
     assert success_api.calls.count(("release", None)) == 1
     assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+
+
+class _ReceiptJoinApi(_NativeApi):
+    def __init__(self, retained_spi: object, *, release_raises: bool = False) -> None:
+        super().__init__(retained_spi)
+        self.join_entered = threading.Event()
+        self.allow_join_return = threading.Event()
+        self.release_raises = release_raises
+
+    def Join(self) -> None:
+        self.calls.append(("join", None))
+        self.join_entered.set()
+        self.allow_join_return.wait()
+
+    def Release(self) -> None:
+        self.calls.append(("release", None))
+        if self.release_raises:
+            raise RuntimeError("release_failed")
+
+
+def _install_gated_join(client_type):
+    if client_type is MdClient:
+        client = MdClient("tcp://test", "9999", "account", "secret")
+        lock = client._state_lock
+        api_attribute = "_api"
+    else:
+        client = TraderClient("tcp://test", "9999", "account", "secret")
+        lock = client._query_state_lock
+        api_attribute = "_native_api"
+    spi = object()
+    api = _ReceiptJoinApi(spi)
+    with lock:
+        if client_type is MdClient:
+            client._api = api
+        else:
+            client._api = api
+        client._spi = spi
+        client._thread = threading.Thread(
+            target=client._join_native_api,
+            args=(api,),
+            daemon=True,
+        )
+        client._join_active = True
+        client._native_init_started = True
+        client._connection_generation = 23
+        thread = client._thread
+    thread.start()
+    assert api.join_entered.wait(1.0)
+    return client, api, thread, api_attribute
+
+
+@pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+def test_stop_and_wait_returns_pending_then_complete_for_exact_join(client_type) -> None:
+    client, api, thread, _api_attribute = _install_gated_join(client_type)
+
+    pending = client.stop_and_wait(timeout=0.01)
+
+    assert type(pending) is client_module.CtpNativeStopReceipt
+    assert pending.connection_generation == 23
+    assert pending.join_required is True
+    assert pending.join_completed is False
+    assert pending.native_released is False
+    assert pending.thread_alive is True
+    assert pending.timed_out is True
+    assert pending.complete is False
+    assert api.calls.count(("register", None)) == 1
+    assert ("release", None) not in api.calls
+    assert client._thread is None
+
+    # A retry observes the retained API and does not call stop or detach twice.
+    repeated_pending = client.stop_and_wait(timeout=0.01)
+    assert repeated_pending.complete is False
+    assert api.calls.count(("register", None)) == 1
+    assert api.calls.count(("release", None)) == 0
+
+    api.allow_join_return.set()
+    completed = client.stop_and_wait(timeout=1.0)
+
+    assert completed.connection_generation == 23
+    assert completed.join_required is True
+    assert completed.join_completed is True
+    assert completed.native_released is True
+    assert completed.thread_alive is False
+    assert completed.timed_out is False
+    assert completed.complete is True
+    assert not thread.is_alive()
+    assert api.calls.count(("release", None)) == 1
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+    assert [name for name, _ in api.calls if name not in {"register", "join", "release"}] == []
+
+
+@pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+def test_stop_and_wait_never_reports_complete_when_release_raises(client_type) -> None:
+    client, api, thread, _api_attribute = _install_gated_join(client_type)
+    api.release_raises = True
+    pending = client.stop_and_wait(timeout=0.01)
+    assert pending.complete is False
+
+    api.allow_join_return.set()
+    receipt = client.stop_and_wait(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert receipt.join_completed is True
+    assert receipt.native_released is False
+    assert receipt.thread_alive is False
+    assert receipt.timed_out is False
+    assert receipt.complete is False
+    assert any(entry[0] is api for entry in client_module._RETIRED_CTP_NATIVE_SESSIONS)
+
+
+@pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+def test_stop_and_wait_tracks_synchronous_join_without_observer(client_type) -> None:
+    if client_type is MdClient:
+        client = MdClient("tcp://test", "9999", "account", "secret")
+        lock = client._state_lock
+    else:
+        client = TraderClient("tcp://test", "9999", "account", "secret")
+        lock = client._query_state_lock
+    api = _ReceiptJoinApi(None)
+    with lock:
+        client._api = api
+        client._spi = object()
+        client._join_active = True
+        client._native_init_started = True
+        client._connection_generation = 41
+    join_caller = threading.Thread(target=client._join_native_api, args=(api,), daemon=True)
+    join_caller.start()
+    assert api.join_entered.wait(1.0)
+
+    pending = client.stop_and_wait(timeout=0.01)
+
+    assert pending.join_required is True
+    assert pending.join_completed is False
+    assert pending.native_released is False
+    assert pending.thread_alive is None
+    assert pending.timed_out is True
+    assert pending.complete is False
+    assert ("release", None) not in api.calls
+
+    api.allow_join_return.set()
+    completed = client.stop_and_wait(timeout=1.0)
+
+    join_caller.join(1.0)
+    assert not join_caller.is_alive()
+    assert completed.connection_generation == 41
+    assert completed.join_required is True
+    assert completed.join_completed is True
+    assert completed.native_released is True
+    assert completed.thread_alive is False
+    assert completed.complete is True
+    assert api.calls.count(("release", None)) == 1
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+
+
+def test_stop_and_wait_validates_finite_bounded_timeout() -> None:
+    client = TraderClient("tcp://test", "9999", "account", "secret")
+
+    for invalid in (True, float("nan"), float("inf"), -0.1, "1"):
+        with pytest.raises(ValueError, match="invalid CTP native stop timeout"):
+            client.stop_and_wait(invalid)
+
+    receipt = client.stop_and_wait(timeout=0)
+    assert receipt.complete is True
+    assert receipt.connection_generation == 0
+
+
+@pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+def test_stop_and_wait_reports_synchronous_release_failure(client_type) -> None:
+    if client_type is MdClient:
+        client = MdClient("tcp://test", "9999", "account", "secret")
+        lock = client._state_lock
+    else:
+        client = TraderClient("tcp://test", "9999", "account", "secret")
+        lock = client._query_state_lock
+    spi = object()
+    api = _ReceiptJoinApi(None, release_raises=True)
+    with lock:
+        client._api = api
+        client._spi = spi
+        client._connection_generation = 31
+
+    receipt = client.stop_and_wait(timeout=0.1)
+
+    assert receipt.connection_generation == 31
+    assert receipt.join_required is False
+    assert receipt.join_completed is True
+    assert receipt.native_released is False
+    assert receipt.thread_alive is False
+    assert receipt.complete is False
+    assert api.calls == [("register", None), ("release", None)]
+
+
+@pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+def test_stop_and_wait_matches_stop_join_required_predicate(client_type) -> None:
+    if client_type is MdClient:
+        client = MdClient("tcp://test", "9999", "account", "secret")
+        lock = client._state_lock
+    else:
+        client = TraderClient("tcp://test", "9999", "account", "secret")
+        lock = client._query_state_lock
+    api = _ReceiptJoinApi(None)
+    with lock:
+        client._api = api
+        client._spi = object()
+        client._native_init_started = True
+        client._join_active = False
+
+    receipt = client.stop_and_wait(timeout=0.1)
+
+    assert receipt.join_required is False
+    assert receipt.join_completed is True
+    assert receipt.native_released is True
+    assert receipt.complete is True
+    assert api.calls == [("register", None), ("release", None)]

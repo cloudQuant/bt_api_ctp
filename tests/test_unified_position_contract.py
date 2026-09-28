@@ -12,7 +12,13 @@ from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
 @pytest.fixture
 def feed():
-    result = CtpRequestDataFuture(queue.Queue(), broker_id="fixture", user_id="fixture")
+    result = CtpRequestDataFuture(
+        queue.Queue(),
+        broker_id="fixture",
+        user_id="fixture",
+        td_front="tcp://fixture.invalid:41205",
+        md_front="tcp://fixture.invalid:41206",
+    )
     calls = []
     # The managed feed no longer accepts a caller-created ``object()`` as a
     # write capability.  This isolated fixture uses the deliberately private

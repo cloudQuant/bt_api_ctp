@@ -40,9 +40,7 @@ class TickBuffer:
         self._cap = int(per_instrument_cap)
         self._policy = overflow_policy
         self._hard_cap = (
-            self._cap
-            if overflow_policy == "drop"
-            else self._cap * _FLUSH_HARD_CAP_MULTIPLE
+            self._cap if overflow_policy == "drop" else self._cap * _FLUSH_HARD_CAP_MULTIPLE
         )
         self._buckets: dict[str, deque[TickRecord]] = {}
         self._dropped = 0

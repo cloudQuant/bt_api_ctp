@@ -238,7 +238,7 @@ CTP supports three environments via `CTP_ENV` or `env` parameter:
 | `set1` | Production-like environment | Trading session only |
 | `set2` | 7x24 environment | Non-trading hours |
 
-For SimNow test accounts, leave `md_front`/`td_front` empty to auto-select the appropriate SimNow environment.
+For managed CTP sandbox writes, the SDK does not choose a front pair or require an official SimNow endpoint allowlist. A runtime may probe its configured TD/MD candidates and select a reachable pair, but writes require an owner-bound signed environment/account approval and a fresh credential-binding HMAC for that exact pair. The SDK checks the active TD/MD pair again at the native request boundary. TCP reachability alone never grants write permission. The independent approval and reviewed runtime adapter must support the selected sandbox profile; unsupported profiles remain closed. The older standalone `CTP_ENV` selector is separate from this managed path.
 
 ### Online Documentation
 
@@ -507,7 +507,7 @@ CTP 支持通过 `CTP_ENV` 或 `env` 参数配置三种环境：
 | `set1` | 类生产环境 | 仅交易时段 |
 | `set2` | 7x24 环境 | 非交易时段 |
 
-使用 SimNow 测试账户时，留空 `md_front`/`td_front` 可自动选择合适的 SimNow 环境。
+对于托管式 CTP 仿真交易，SDK 不选择前置组合，也不要求命中官方 SimNow 地址白名单。运行时可以探测配置的 TD/MD 候选组合并选择可连接的组合，但写操作必须同时具备由 owner 绑定的签名环境/账号审批，以及针对该精确前置组合的新鲜凭证绑定 HMAC；SDK 会在原生请求前再次核对当前 TD/MD 前置。仅 TCP 可连接不能授予写权限。独立审批和经审查的运行时适配器还必须支持所选仿真环境；不支持的环境仍拒绝写入。旧的独立 `CTP_ENV` 选择器与此托管路径相互独立。
 
 ### 在线文档
 

@@ -185,17 +185,12 @@ def _time_key(row: dict[str, Any]) -> tuple[str, str, int]:
 
 
 def _stamp(row: dict[str, Any]) -> str:
-    return (
-        f"{row['action_day']} {row['update_time']}."
-        f"{int(row['update_millisec'] or 0):03d}"
-    )
+    return f"{row['action_day']} {row['update_time']}.{int(row['update_millisec'] or 0):03d}"
 
 
 def _row_moment(row: dict[str, Any]) -> datetime | None:
     try:
-        return datetime.strptime(
-            f"{row['action_day']} {row['update_time']}", "%Y%m%d %H:%M:%S"
-        )
+        return datetime.strptime(f"{row['action_day']} {row['update_time']}", "%Y%m%d %H:%M:%S")
     except (TypeError, ValueError):
         return None
 
@@ -669,6 +664,7 @@ class ParquetSink:
                 "pending_segments": len(self._segments),
                 "last_error": self._last_compaction_error,
             }
+
     def _compact(self, segments: list[Path]) -> int:
         """Merge segment files (plus any existing final files) into final files.
 
@@ -748,9 +744,7 @@ class ParquetSink:
             if directory.name == self._run_id or _pid_is_alive(directory.name):
                 continue
             segments = [
-                path
-                for path in sorted(directory.glob("*.parquet"))
-                if path not in already_pending
+                path for path in sorted(directory.glob("*.parquet")) if path not in already_pending
             ]
             if not segments:
                 continue
@@ -803,7 +797,9 @@ class ParquetSink:
             disconnects=[dict(entry) for entry in disconnects],
             callback_errors=int(callback_errors),
             connection_generations=[dict(entry) for entry in connection_generations],
-            failed_instruments={str(key): int(value) for key, value in (failed_instruments or {}).items()},
+            failed_instruments={
+                str(key): int(value) for key, value in (failed_instruments or {}).items()
+            },
             resubscribes=[dict(entry) for entry in resubscribes],
             compactions=self._compactions,
             compaction_failures=self._compaction_failures,
