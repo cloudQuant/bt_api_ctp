@@ -18,9 +18,7 @@ CONNECTION_GENERATION = 9
 RUNTIME_ORDER_ID = "bt-managed-v1:" + "a" * 64
 BROKER_ID = "3070"
 INVESTOR_ID = "offline-account"
-SDK_ACCOUNT_FINGERPRINT = hashlib.sha256(
-    f"{BROKER_ID}:{INVESTOR_ID}".encode()
-).hexdigest()[:16]
+SDK_ACCOUNT_FINGERPRINT = hashlib.sha256(f"{BROKER_ID}:{INVESTOR_ID}".encode()).hexdigest()[:16]
 ACCOUNT_FINGERPRINT_SHA256 = hashlib.sha256(
     f"acct_{SDK_ACCOUNT_FINGERPRINT}".encode("ascii")
 ).hexdigest()

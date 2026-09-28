@@ -11,12 +11,8 @@ def test_zero_callback_id_does_not_match_generation_one_login_request():
     login_requests = []
     subscriptions = []
     api = SimpleNamespace(
-        ReqUserLogin=lambda field, request_id: login_requests.append(
-            (field, request_id)
-        )
-        or 0,
-        SubscribeMarketData=lambda instruments: subscriptions.append(list(instruments))
-        or 0,
+        ReqUserLogin=lambda field, request_id: login_requests.append((field, request_id)) or 0,
+        SubscribeMarketData=lambda instruments: subscriptions.append(list(instruments)) or 0,
     )
     client = MdClient("tcp://md.test:30011", "9999", "user-a", "unused-test-marker")
     spi = _MdSpi(client, native_api=api)

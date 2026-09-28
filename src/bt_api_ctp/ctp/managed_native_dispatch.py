@@ -242,9 +242,7 @@ def _build_native_field(operation: str, fields: Mapping[str, Any]) -> Any:
     )
 
     field_type = (
-        CThostFtdcInputOrderField
-        if operation == "insert"
-        else CThostFtdcInputOrderActionField
+        CThostFtdcInputOrderField if operation == "insert" else CThostFtdcInputOrderActionField
     )
     native_field = field_type()
     available = set(dir(native_field))
@@ -279,8 +277,10 @@ def _native_field_snapshot(native_field: Any) -> dict[str, Any]:
 
 
 def _is_zeroed_native_default(value: Any) -> bool:
-    return value is None or (type(value) is str and value == "") or (
-        type(value) in (int, float, bool) and value == 0
+    return (
+        value is None
+        or (type(value) is str and value == "")
+        or (type(value) in (int, float, bool) and value == 0)
     )
 
 
@@ -322,8 +322,7 @@ def _make_completion(
         observed_status = getattr(evidence, "status", "unknown")
         callback_status = (
             observed_status
-            if callback_identity_verified
-            and observed_status in {"accepted", "rejected", "unknown"}
+            if callback_identity_verified and observed_status in {"accepted", "rejected", "unknown"}
             else "unknown"
         )
     return CtpManagedNativeDispatchCompletionV1(
@@ -360,10 +359,8 @@ def _evidence_matches_request(
         and getattr(evidence, "trading_day", None) == trading_day
         and getattr(evidence, "connection_generation", None) == connection_generation
         and getattr(evidence, "order_ref", None) == request.order_ref
-        and getattr(evidence, "instrument_id", None)
-        == native_fields.get("InstrumentID")
-        and getattr(evidence, "exchange_id", None)
-        == native_fields.get("ExchangeID")
+        and getattr(evidence, "instrument_id", None) == native_fields.get("InstrumentID")
+        and getattr(evidence, "exchange_id", None) == native_fields.get("ExchangeID")
     )
     if not common:
         return False

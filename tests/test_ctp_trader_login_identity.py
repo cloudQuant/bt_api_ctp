@@ -100,9 +100,7 @@ def test_success_response_with_incorrect_native_identity_never_becomes_read_read
 
 def test_nonterminal_login_packet_cannot_publish_identity():
     client = _logging_in_client()
-    _TraderSpi(client).OnRspUserLogin(
-        _response(client), SimpleNamespace(ErrorID=0), 19, False
-    )
+    _TraderSpi(client).OnRspUserLogin(_response(client), SimpleNamespace(ErrorID=0), 19, False)
 
     assert client.get_session_state()["login_state"] == "logging_in"
     assert client.get_query_session_scope().read_only_ready is False

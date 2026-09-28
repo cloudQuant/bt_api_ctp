@@ -92,7 +92,11 @@ def prepare_ctp_managed_native_outbox_candidate(
     lease_assertion = getattr(store, "assert_writer_lease", None)
     command_reader = getattr(store, "read_ctp_dispatch_command", None)
     identity_reader = getattr(store, "read_ctp_order_identity", None)
-    if not callable(lease_assertion) or not callable(command_reader) or not callable(identity_reader):
+    if (
+        not callable(lease_assertion)
+        or not callable(command_reader)
+        or not callable(identity_reader)
+    ):
         raise TypeError("store must expose read-only CTP outbox and writer-lease APIs")
     lease_assertion(scope, writer_lease)
 
@@ -175,9 +179,7 @@ def prepare_ctp_managed_native_outbox_candidate(
     if _native_text(fields, "OrderRef") != order_ref:
         raise CtpOutboxPreDispatchError("native OrderRef does not match the reservation")
 
-    current_account_digest, current_trading_day, connection_generation = _sdk_session_facts(
-        trader
-    )
+    current_account_digest, current_trading_day, connection_generation = _sdk_session_facts(trader)
     if current_trading_day != trading_day:
         raise CtpOutboxPreDispatchError("SDK trading day does not match the command")
     request_id = _native_int(fields, "RequestID")
@@ -185,17 +187,14 @@ def prepare_ctp_managed_native_outbox_candidate(
     cancel_values: dict[str, Any] = {}
     runtime_action_id = None
     if operation == "SUBMIT":
-        if (
-            getattr(command, "order_ref", None) != order_ref
-            or any(
-                getattr(command, name, None) is not None
-                for name in (
-                    "cancel_target_order_ref",
-                    "cancel_target_exchange_id",
-                    "cancel_target_order_sys_id",
-                    "cancel_target_front_id",
-                    "cancel_target_session_id",
-                )
+        if getattr(command, "order_ref", None) != order_ref or any(
+            getattr(command, name, None) is not None
+            for name in (
+                "cancel_target_order_ref",
+                "cancel_target_exchange_id",
+                "cancel_target_order_sys_id",
+                "cancel_target_front_id",
+                "cancel_target_session_id",
             )
         ):
             raise CtpOutboxPreDispatchError("submit command does not match its reservation")

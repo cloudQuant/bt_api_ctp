@@ -704,9 +704,7 @@ def build_ctp_position_evidence(
     # deadline captured by the trusted query source.
     # A larger issuer window supports a complete serial read bundle.  A single
     # position snapshot retains its shorter five-second freshness policy.
-    position_expires = completed + timedelta(
-        seconds=_QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS
-    )
+    position_expires = completed + timedelta(seconds=_QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS)
     position_monotonic_expires = (
         source.completed_monotonic + _QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS
     )

@@ -608,9 +608,7 @@ def test_finish_rejects_evidence_expired_after_add(monkeypatch):
     certificate_builder = builder(client)
     queries = issue_all(client)
     add_all(certificate_builder, queries)
-    first_expiry = min(
-        result.query_source.trusted_expires_monotonic for result in queries.values()
-    )
+    first_expiry = min(result.query_source.trusted_expires_monotonic for result in queries.values())
     monkeypatch.setattr(
         certificate_module,
         "time",
