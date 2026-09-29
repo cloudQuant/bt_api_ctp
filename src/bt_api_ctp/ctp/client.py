@@ -51,8 +51,11 @@ from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Literal
+from urllib.parse import urlsplit
 
+from bt_api_ctp.ctp_env_selector import is_official_simnow_td_front
 from bt_api_ctp.instrument import normalize_ctp_instrument
+from bt_api_ctp.md_identity import MdIdentityObservation
 from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
     QueryResult,
@@ -1824,7 +1827,6 @@ class _MdSpi(CThostFtdcMdSpi):
             callback(nReason)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
-        from bt_api_ctp.md_identity import MdIdentityObservation
 
         subscribe = None
         callback = None
@@ -2014,7 +2016,6 @@ class MdClient:
     def active_md_identity(self):
         """Atomic current login fact, not a feed/profile proof."""
 
-        from bt_api_ctp.md_identity import MdIdentityObservation
 
         with self._state_lock:
             identity = self._active_md_identity
@@ -3611,6 +3612,31 @@ def _ctp_query_callback_name(request_type: str) -> str | None:
     }.get(request_type)
 
 
+def _validate_explicit_ctp_front(front: Any) -> None:
+    """Validate a configured TCP endpoint without attempting a network probe."""
+
+    if type(front) is not str or not front or front != front.strip():
+        raise ValueError("invalid configured CTP front")
+    try:
+        parsed = urlsplit(front)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("invalid configured CTP front") from exc
+    if (
+        parsed.scheme != "tcp"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or port is None
+        or not 1 <= port <= 65535
+        or any(char.isspace() or ord(char) < 32 for char in front)
+    ):
+        raise ValueError("invalid configured CTP front")
+
+
 class TraderClient:
     """交易客户端封装
 
@@ -3632,16 +3658,33 @@ class TraderClient:
         app_id="simnow_client_test",
         auth_code="0000000000000000",
         auto_settlement_confirm=False,
+        *,
+        md_front: str | None = None,
+        ctp_env_profile: str | None = None,
     ):
+        if (md_front is None) != (ctp_env_profile is None):
+            raise ValueError("explicit CTP front pair and profile must be supplied together")
+        if ctp_env_profile is not None:
+            if (
+                type(ctp_env_profile) is not str
+                or not ctp_env_profile
+                or ctp_env_profile != ctp_env_profile.strip()
+            ):
+                raise ValueError("invalid CTP environment profile")
+            _validate_explicit_ctp_front(front)
+            _validate_explicit_ctp_front(md_front)
         # Keep the identity and TD front that created this client separate
         # from the historically public compatibility attributes below.  A
         # caller can mutate ``broker_id``/``user_id``/``front`` on a Python
         # object, but that must not retarget a session whose preflight proof
         # was bound to the original account and native front.
         self._bound_front = str(front or "").strip()
+        self.__bound_md_front = md_front
+        self.__bound_ctp_env_profile = ctp_env_profile
         self._bound_broker_id = str(broker_id or "").strip()
         self._bound_user_id = str(user_id or "").strip()
         self.front = front
+        self.md_front = md_front
         self.broker_id = broker_id
         self.user_id = user_id
         self.password = password
@@ -3766,6 +3809,14 @@ class TraderClient:
         self._native_stop_in_progress = False
         self._native_request_inflight_refs = 0
         self._callback_inflight_refs = 0
+
+    @property
+    def _bound_md_front(self) -> str | None:
+        return self.__bound_md_front
+
+    @property
+    def ctp_env_profile(self) -> str | None:
+        return self.__bound_ctp_env_profile
 
     @property
     def _api(self) -> Any:
@@ -4489,6 +4540,9 @@ class TraderClient:
                         or payload.get("ActionFlag") != "0"
                     ):
                         raise CtpExecutionGateError("ctp_managed_native_cancel_field_mismatch")
+                # The Store lease pins a native call, but a front classified as
+                # official SimNow also requires runtime credential admission.
+                self._reject_official_simnow_write_locked()
                 native_method = getattr(lease._api, method_name, None)
                 if not callable(native_method):
                     raise CtpExecutionGateError("ctp_managed_native_call_method_unavailable")
@@ -4872,12 +4926,23 @@ class TraderClient:
         ).hexdigest()[:16]
         if (
             str(self.front or "").strip() != self._bound_front
+            or self.md_front != self._bound_md_front
             or str(self.broker_id or "").strip() != self._bound_broker_id
             or str(self.user_id or "").strip() != self._bound_user_id
             or current_fingerprint != self._account_fingerprint
         ):
             return False
         return not require_active_front or self._session_native_front == self._bound_front
+
+    def _is_simnow_write_restricted_locked(self) -> bool:
+        return (
+            is_official_simnow_td_front(self._bound_front)
+            or self.ctp_env_profile == "config_front_pair"
+        )
+
+    def _reject_official_simnow_write_locked(self) -> None:
+        if self._is_simnow_write_restricted_locked():
+            raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
 
     def _require_bound_identity_locked(self, *, require_active_front: bool = False) -> None:
         """Fail closed before a managed native write can use mutable identity."""
@@ -5055,6 +5120,7 @@ class TraderClient:
         """
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if not _is_ctp_core_execution_authority(capability):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_required")
             if capability is not self._execution_gate_capability:
@@ -5109,6 +5175,7 @@ class TraderClient:
         """Create one independent, account/day/generation-bound write grant."""
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if not _is_ctp_core_execution_authority(capability):
                 raise CtpExecutionGateError("ctp_execution_gate_capability_required")
             if capability is not self._execution_gate_capability:
@@ -5209,6 +5276,7 @@ class TraderClient:
         instrument: Any,
         exchange_id: Any = None,
     ) -> None:
+        self._reject_official_simnow_write_locked()
         installed = self._execution_gate_capability
         if installed is None:
             raise CtpExecutionGateError("ctp_execution_gate_capability_required")
@@ -5285,6 +5353,7 @@ class TraderClient:
         """
 
         with self._query_state_lock:
+            self._reject_official_simnow_write_locked()
             if (
                 not _is_ctp_core_execution_authority(capability)
                 or capability is not self._execution_gate_capability

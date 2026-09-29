@@ -36,6 +36,7 @@ from bt_api_ctp.ctp.ctp_structs_order import (
     CThostFtdcInputOrderField,
 )
 from bt_api_ctp.ctp_env_selector import (
+    is_official_simnow_td_front,
     official_simnow_fronts,
     select_ctp_environment,
     select_reachable_ctp_environment,
@@ -319,7 +320,12 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
     auto_detect_fronts = _as_bool(resolved.get("auto_detect_fronts"), default=False)
     supplied_td = td_front or static_td
     supplied_md = md_front or static_md
-    if claimed_profile and not auto_detect_fronts and bool(supplied_td) != bool(supplied_md):
+    if (
+        claimed_profile
+        and claimed_profile != "config_front_pair"
+        and not auto_detect_fronts
+        and bool(supplied_td) != bool(supplied_md)
+    ):
         raise ValueError("claimed CTP profile requires both td_front and md_front, or neither")
     required_profile = (
         str(resolved.get("require_ctp_profile") or resolved.get("ctp_required_profile") or "")
@@ -340,6 +346,26 @@ def _resolve_ctp_runtime_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any],
             raise RuntimeError(
                 f"required CTP profile {required_profile!r}, configured {claimed_profile!r}"
             )
+    if claimed_profile == "config_front_pair":
+        # The owner must supply one explicit pair; process-level fronts and
+        # reachability probes are not evidence of this configured identity.
+        if auto_detect_fronts or not td_front or not md_front:
+            raise ValueError("config_front_pair requires an explicit td_front and md_front")
+        resolved.update(
+            {
+                "broker_id": broker_id,
+                "user_id": user_id,
+                "password": password,
+                "auth_code": auth_code,
+                "app_id": app_id,
+                "td_front": td_front,
+                "md_front": md_front,
+                "ctp_environment": str(resolved.get("ctp_environment") or "custom").strip(),
+                "ctp_env_profile": "config_front_pair",
+                "ctp_env_readiness": "explicit_configured_pair_unverified",
+            }
+        )
+        return resolved, "config_front_pair"
     front_probe_timeout = resolved.get("front_probe_timeout", 3.0)
     env_name = ""
     selected_environment = "custom"
@@ -592,11 +618,30 @@ class CtpRequestData(Feed):
         client independently verifies its exact type and issuer seal.
         """
 
+        if self._execution_bound_profile != "config_front_pair":
+            self._reject_official_simnow_write()
+        elif (
+            not self._execution_bound_td_front
+            or not self._execution_bound_md_front
+            or self.td_front != self._execution_bound_td_front
+            or self.md_front != self._execution_bound_md_front
+            or str(self.broker_id or "").strip() != self._execution_bound_broker_id
+            or str(self.user_id or "").strip() != self._execution_bound_user_id
+        ):
+            raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
         return ctp_client._issue_ctp_execution_authority_for_core()
+
+    def _reject_official_simnow_write(self) -> None:
+        if (
+            is_official_simnow_td_front(self._execution_bound_td_front)
+            or self._execution_bound_profile == "config_front_pair"
+        ):
+            raise ctp_client.CtpExecutionGateError("ctp_simnow_execution_not_admitted")
 
     def _execution_environment_proof(self) -> dict[str, Any]:
         """Return a provider-verified environment binding or fail closed."""
 
+        self._reject_official_simnow_write()
         info = self.get_environment_info()
         profile = self._execution_bound_profile
         if (
@@ -753,6 +798,7 @@ class CtpRequestData(Feed):
         symbol: Any,
         exchange_id: Any = None,
     ) -> None:
+        self._reject_official_simnow_write()
         installed = self._execution_gate_capability
         if installed is None:
             # A CTP request feed may stay connected for read-only discovery,
@@ -845,6 +891,16 @@ class CtpRequestData(Feed):
                     app_id=self.app_id,
                     auth_code=self.auth_code,
                     auto_settlement_confirm=self.auto_settlement_confirm,
+                    md_front=(
+                        self._execution_bound_md_front
+                        if self._execution_bound_profile == "config_front_pair"
+                        else None
+                    ),
+                    ctp_env_profile=(
+                        self._execution_bound_profile
+                        if self._execution_bound_profile == "config_front_pair"
+                        else None
+                    ),
                 )
                 if self._execution_gate_capability is not None:
                     trader.configure_execution_gate(self._execution_gate_capability)
@@ -1943,6 +1999,7 @@ class CtpTradeStream(BaseDataStream):
         self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
         self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.td_front = resolved_kwargs.get("td_front", "")
+        self.md_front = resolved_kwargs.get("md_front", "")
         self.broker_id = resolved_kwargs.get("broker_id", "")
         self.user_id = resolved_kwargs.get("user_id", "")
         self.password = resolved_kwargs.get("password", "")
@@ -1962,6 +2019,16 @@ class CtpTradeStream(BaseDataStream):
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
         if self._request_feed is not None:
+            request_profile = getattr(self._request_feed, "_execution_bound_profile", None)
+            if request_profile == "config_front_pair" and (
+                self.ctp_env_profile != request_profile
+                or self.td_front != self._request_feed._execution_bound_td_front
+                or self.md_front != self._request_feed._execution_bound_md_front
+                or self.broker_id != self._request_feed._execution_bound_broker_id
+                or self.user_id != self._request_feed._execution_bound_user_id
+            ):
+                self.state = ConnectionState.ERROR
+                raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
             self._request_feed.connect()
             self._trader = self._request_feed.trader_client
             self._owns_trader = False
@@ -1972,6 +2039,13 @@ class CtpTradeStream(BaseDataStream):
                 raise ctp_client.CtpExecutionGateError(
                     "ctp_execution_gate_auto_settlement_confirm_enabled"
                 )
+            if request_profile == "config_front_pair" and (
+                self._trader._bound_front != self._request_feed._execution_bound_td_front
+                or self._trader._bound_md_front != self._request_feed._execution_bound_md_front
+                or self._trader.ctp_env_profile != request_profile
+            ):
+                self.state = ConnectionState.ERROR
+                raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
         else:
             self._trader = ctp_client.TraderClient(
                 self.td_front,
@@ -1981,6 +2055,10 @@ class CtpTradeStream(BaseDataStream):
                 app_id=self.app_id,
                 auth_code=self.auth_code,
                 auto_settlement_confirm=self.auto_settlement_confirm,
+                md_front=(self.md_front if self.ctp_env_profile == "config_front_pair" else None),
+                ctp_env_profile=(
+                    self.ctp_env_profile if self.ctp_env_profile == "config_front_pair" else None
+                ),
             )
             self._owns_trader = True
         self._trader.on_order = self._on_order

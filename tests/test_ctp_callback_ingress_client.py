@@ -208,6 +208,7 @@ def _new_active_client(
     sink=None,
     expect_active=True,
     block_join=False,
+    front="tcp://fake",
 ):
     _FakeTraderApiFactory.instances = []
     _FakeTraderApiFactory.block_join = block_join
@@ -218,7 +219,7 @@ def _new_active_client(
     monkeypatch.setattr(client_module, "_register_ctp_native_api", lambda _api: None)
     monkeypatch.setattr(client_module, "CThostFtdcTraderApi", _FakeTraderApiFactory)
 
-    client = TraderClient("tcp://fake", "9999", "investor-1", "not-a-real-secret")
+    client = TraderClient(front, "9999", "investor-1", "not-a-real-secret")
     sink = sink or _Sink()
     owner = _OwnerIntent()
     exposure = []
@@ -397,6 +398,24 @@ def test_store_binding_sends_detached_insert_and_consumes_one_lease(monkeypatch)
         }
         with pytest.raises(CtpExecutionGateError):
             client.submit_order_insert_with_lease(lease, field, 41)
+    finally:
+        client.stop()
+
+
+def test_official_simnow_front_blocks_store_lease_before_native_insert(monkeypatch):
+    from bt_api_ctp.ctp_env_selector import official_simnow_fronts
+
+    td_front, _md_front = official_simnow_fronts("set2_7x24")
+    client, api, _sink, owner = _new_active_client(monkeypatch, front=td_front)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(CThostFtdcInputOrderField, payload)
+
+        with pytest.raises(CtpExecutionGateError, match="ctp_simnow_execution_not_admitted"):
+            client.submit_order_insert_with_lease(lease, field, 41)
+        assert not any(call[0] == "ReqOrderInsert" for call in api.calls)
     finally:
         client.stop()
 

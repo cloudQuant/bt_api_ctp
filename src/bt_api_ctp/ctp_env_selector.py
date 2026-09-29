@@ -6,6 +6,7 @@ import os
 import socket
 from dataclasses import asdict, dataclass
 from datetime import datetime, time
+from types import MappingProxyType
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -49,7 +50,7 @@ _REGISTERED_BROKER_SIM_FRONTS = {
         "tcp://112.65.19.116:32213",
     ),
 }
-_SIMNOW_PROFILE_FRONTS = {
+_SIMNOW_PROFILE_FRONTS = MappingProxyType({
     "set1_group1": _SET1_DEFAULTS["1"],
     "set1_group1_vpn": _SET1_GROUP1_VPN,
     "set1_group2": _SET1_DEFAULTS["2"],
@@ -61,7 +62,10 @@ _SIMNOW_PROFILE_FRONTS = {
     # Retain the prior public spelling for callers that already persisted it.
     # New Iteration 22 paths use the more precise ``set2_7x24_4000x`` name.
     "set2_7x24_vpn": _SET2_7X24_4000X,
-}
+})
+_OFFICIAL_SIMNOW_TD_FRONTS = frozenset(
+    td_front for td_front, _md_front in _SIMNOW_PROFILE_FRONTS.values()
+)
 _SIMNOW_PROFILE_FAMILIES = {
     "set1_group1": ("set1_group1", "set1_group1_vpn"),
     "set1_group1_vpn": ("set1_group1_vpn", "set1_group1"),
@@ -413,6 +417,13 @@ def official_simnow_fronts(profile: str) -> tuple[str, str]:
     return expected
 
 
+def is_official_simnow_td_front(td_front: str) -> bool:
+    """Identify an official TD endpoint using the frozen front registry."""
+
+    front = str(td_front or "").strip()
+    return bool(front) and front in _OFFICIAL_SIMNOW_TD_FRONTS
+
+
 def registered_broker_sim_fronts(profile: str) -> tuple[str, str]:
     """Return the immutable endpoint pair of a registered broker simulation."""
     name = str(profile or "").strip().lower()
@@ -498,6 +509,7 @@ __all__ = [
     "CtpEnvironmentSelection",
     "apply_ctp_env",
     "get_ctp_fronts",
+    "is_official_simnow_td_front",
     "official_simnow_fronts",
     "probe_ctp_environment_pair",
     "registered_broker_sim_fronts",
