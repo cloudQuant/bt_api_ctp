@@ -728,7 +728,7 @@ def test_stop_and_wait_tracks_native_join_without_python_observer(client_type) -
 def test_runtime_shutdown_consumer_accepts_completed_sync_join_and_rejects_active_join(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backtrader_runtime import ctp_native_shutdown
+    ctp_native_shutdown = pytest.importorskip("backtrader_runtime.ctp_native_shutdown")
 
     monkeypatch.setattr(ctp_native_shutdown, "_STOP_WAIT_TIMEOUT_SECONDS", 0.01)
 

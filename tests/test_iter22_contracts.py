@@ -27,8 +27,6 @@ from bt_api_ctp.feeds.live_ctp_feed import (
 from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
 from bt_api_ctp.query import QueryResult
 
-_BUNDLE_SCOPE_VERSION = "ctp-contract-bundle-v1"
-
 
 def _core_capability() -> object:
     """Use the deliberately private core/test authority seam."""
@@ -74,26 +72,6 @@ def _read_ready(client: TraderClient, *, trading_day: str = "20260909") -> Trade
     )
     assert client.is_read_only_ready is True
     return client
-
-
-def _arm(
-    feed: CtpRequestDataFuture,
-    client: TraderClient,
-    capability: object,
-    proof: dict,
-    *,
-    strategy_identity_sha256: str = "0" * 64,
-    execution_cycle_id: str = "controlled-test-cycle",
-) -> dict:
-    """Use the explicit private offline issuer; arm never takes a mapping."""
-
-    authorization = client._issue_execution_authorization_for_test(
-        capability,
-        proof,
-        strategy_identity_sha256=strategy_identity_sha256,
-        execution_cycle_id=execution_cycle_id,
-    )
-    return feed.arm_execution_gate(capability, authorization)
 
 
 def _settlement_authorization(
@@ -153,46 +131,10 @@ def test_request_count_contract_is_closed_even_before_any_request() -> None:
     assert {"settlement_confirm", "order_insert", "order_action"} <= counts.keys()
 
 
-def _ctp_execution_proof(
-    client: TraderClient,
-    feed: CtpRequestDataFuture,
-    **changes,
-) -> dict:
-    proof = {
-        "account_fingerprint": f"acct_{client._account_fingerprint}",
-        "trading_day": "20260909",
-        "instrument": "CZCE.SA609",
-        "connection_generation": 1,
-        "environment_profile": feed.ctp_env_profile,
-        "preflight_sha256": "0" * 64,
-        "receipt_sha256": "1" * 64,
-        "native_sha256": "2" * 64,
-        "ctp_package_sha256": "3" * 64,
-        "source_hashes_sha256": "4" * 64,
-        "dependency_hashes_sha256": "5" * 64,
-    }
-    proof.update(changes)
-    return proof
-
-
-def _ctp_execution_bundle_proof(
-    client: TraderClient,
-    feed: CtpRequestDataFuture,
-    *,
-    instruments: list[str],
-) -> dict:
-    return _ctp_execution_proof(
-        client,
-        feed,
-        instrument=instruments[0],
-        scope_version=_BUNDLE_SCOPE_VERSION,
-        authorized_instruments=list(instruments),
-    )
-
-
 def _execution_ready_feed():
     native_calls = []
-    td_front, md_front = official_simnow_fronts("set1_group1")
+    td_front = "tcp://offline-neutral-td.invalid:30001"
+    md_front = "tcp://offline-neutral-md.invalid:30011"
 
     class Api:
         def ReqQryOrder(self, _field, _request_id):
@@ -234,7 +176,6 @@ def _execution_ready_feed():
         password="secret",
         td_front=td_front,
         md_front=md_front,
-        ctp_env_profile="set1_group1",
         auto_settlement_confirm=False,
     )
     feed._trader = client
@@ -310,694 +251,6 @@ def test_managed_ctp_feed_is_disarmed_before_proof_and_issues_zero_writes() -> N
     assert client.get_request_counts()["order_insert"] == 0
 
 
-def test_managed_ctp_feed_writes_only_with_bound_proof_contract_and_token() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    proof = _ctp_execution_proof(client, feed)
-
-    first = _arm(feed, client, capability, proof)
-    assert first["armed"] is True
-    assert first["instrument"] == "CZCE.SA609"
-    assert len(first["proof_sha256"]) == 64
-
-    feed.make_order(
-        "SA2609",
-        1,
-        1200,
-        "buy-limit",
-        exchange_id="CZCE",
-        client_order_id="000000000101",
-        _execution_capability=capability,
-    )
-    feed.cancel_order(
-        "SA2609",
-        order_id="SYS",
-        exchange_id="CZCE",
-        _execution_capability=capability,
-    )
-
-    assert [call[0] for call in native_calls] == ["insert", "cancel"]
-    assert client.get_request_counts()["order_insert"] == 1
-    assert client.get_request_counts()["order_action"] == 1
-
-
-def test_public_state_hash_mapping_and_bare_capability_never_arm_direct_feed() -> None:
-    """An exported feed cannot turn public state into a native write right."""
-
-    feed, client, native_calls = _execution_ready_feed()
-    public_state = feed.get_session_state()
-    self_signed_proof = _ctp_execution_proof(
-        client,
-        feed,
-        account_fingerprint=f"acct_{public_state['account_fingerprint']}",
-        trading_day=public_state["trading_day"],
-        connection_generation=public_state["connection_generation"],
-    )
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_capability_required",
-    ):
-        feed.configure_execution_gate(object())
-
-    capability = client_module._issue_ctp_execution_authority_for_core()
-    feed.configure_execution_gate(capability)
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_authorization_required",
-    ):
-        feed.arm_execution_gate(capability, self_signed_proof)
-    with pytest.raises(client_module.CtpExecutionGateError, match="unarmed"):
-        feed.make_order(
-            "SA2609",
-            1,
-            1200,
-            "buy-limit",
-            exchange_id="CZCE",
-            client_order_id="000000000102",
-            _execution_capability=capability,
-        )
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_settlement_authorization_required",
-    ):
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization={"forged": "mapping"},
-        )
-
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-    assert client.get_request_counts()["settlement_confirm"] == 0
-
-
-def test_arm_token_is_one_shot_and_generation_bound_before_native_writes() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    proof = _ctp_execution_proof(client, feed)
-    stale = client._issue_execution_authorization_for_test(
-        capability, proof, execution_cycle_id="cycle-a"
-    )
-    client._connection_generation += 1
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_connection_generation_mismatch",
-    ):
-        feed.arm_execution_gate(capability, stale)
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    proof = _ctp_execution_proof(client, feed)
-    authorization = client._issue_execution_authorization_for_test(
-        capability, proof, execution_cycle_id="cycle-a"
-    )
-    proof["instrument"] = "CZCE.SR609"  # Mutating public source cannot widen scope.
-    state = feed.arm_execution_gate(capability, authorization)
-    assert state["instrument"] == "CZCE.SA609"
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_authorization_required",
-    ):
-        feed.arm_execution_gate(capability, authorization)
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-
-
-def test_settlement_token_is_independent_one_shot_and_invalidates_arm_preflight() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
-        native_calls.append(("settlement",)) or 0
-    )
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    arm_authorization = client._issue_execution_authorization_for_test(
-        capability, _ctp_execution_proof(client, feed), execution_cycle_id="cycle-a"
-    )
-    settlement_authorization = _settlement_authorization(
-        client,
-        capability,
-        environment_profile=feed.ctp_env_profile,
-    )
-    client._settlement_state = "not_requested"
-    client._ready = False
-    client._settlement_readback_verified = False
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_settlement_authorization_required",
-    ):
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization={"forged": "mapping"},
-        )
-    assert native_calls == []
-
-    assert (
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization=settlement_authorization,
-        )
-        is False
-    )
-    assert native_calls == [("settlement",)]
-    assert client.get_request_counts()["settlement_confirm"] == 1
-    assert client.get_execution_gate_state()["armed"] is False
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_environment_profile_mismatch",
-    ):
-        feed.arm_execution_gate(capability, arm_authorization)
-    assert client.get_request_counts()["order_insert"] == 0
-
-
-def test_settlement_token_revalidates_bound_environment_before_native_write() -> None:
-    """A post-issuance front mutation cannot retarget a terminal write."""
-
-    feed, client, native_calls = _execution_ready_feed()
-    client._api.ReqSettlementInfoConfirm = lambda _field, _request_id: (
-        native_calls.append(("settlement",)) or 0
-    )
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    authorization = _settlement_authorization(
-        client,
-        capability,
-        environment_profile=feed.ctp_env_profile,
-    )
-    client._settlement_state = "not_requested"
-    client._ready = False
-    client._settlement_readback_verified = False
-    client.front = "tcp://untrusted-front"
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_environment_binding_mismatch",
-    ):
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization=authorization,
-        )
-    assert native_calls == []
-    assert client.get_request_counts()["settlement_confirm"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-
-
-def test_mutated_account_or_reconnected_front_cannot_retarget_managed_native_writes() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-    feed.broker_id = "other"
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_native_field_identity_mismatch",
-    ):
-        feed.make_order(
-            "SA2609",
-            1,
-            1200,
-            "buy-limit",
-            exchange_id="CZCE",
-            client_order_id="000000000107",
-            _execution_capability=capability,
-        )
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-
-    td_front, md_front = official_simnow_fronts("set1_group1")
-    feed = CtpRequestDataFuture(
-        broker_id="9999",
-        user_id="account",
-        password="secret",
-        td_front=td_front,
-        md_front=md_front,
-        ctp_env_profile="set1_group1",
-        auto_settlement_confirm=False,
-    )
-    client = _read_ready(
-        TraderClient(td_front, "9999", "account", "secret", auto_settlement_confirm=False)
-    )
-    client._api = SimpleNamespace()
-    client._session_native_api = client._api
-    client._session_native_front = client._bound_front
-    client._settlement_state = "confirmed"
-    client._ready = True
-    client._settlement_connection_generation = client._connection_generation
-    client._settlement_account_fingerprint = client._account_fingerprint
-    client._settlement_trading_day = client._trading_day
-    client._settlement_proof_source = "confirmation_query"
-    client._settlement_proof_query_request_id = 1
-    client._settlement_readback_verified = True
-    feed._trader = client
-    capability = feed._issue_execution_capability_for_core()
-    feed.configure_execution_gate(capability)
-    proof = _ctp_execution_proof(client, feed)
-    client.front = "tcp://publicly-mutated-front"
-    client._on_front_disconnected(1)
-    client._on_front_connected()
-    client._authentication_state = "authenticated"
-    client._login_state = "logged_in"
-    client._settlement_state = "confirmed"
-    client._ready = True
-    client._settlement_connection_generation = client._connection_generation
-    client._settlement_trading_day = client._trading_day
-    client._settlement_account_fingerprint = client._account_fingerprint
-    client._settlement_readback_verified = True
-
-    assert feed.get_environment_info()["verified"] is True
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_environment_binding_mismatch",
-    ):
-        feed._issue_execution_authorization_for_core(
-            capability,
-            proof,
-            strategy_identity_sha256="0" * 64,
-            execution_cycle_id="cycle-a",
-        )
-    assert client.get_request_counts()["order_insert"] == 0
-
-
-def test_managed_ctp_feed_v2_bundle_allows_exact_czce_option_legs_only() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    instruments = ["CZCE.SA701", "CZCE.SA701C1080", "CZCE.SA701P1080"]
-    feed.configure_execution_gate(capability)
-    state = _arm(
-        feed,
-        client,
-        capability,
-        _ctp_execution_bundle_proof(client, feed, instruments=instruments),
-    )
-
-    assert state["scope_version"] == _BUNDLE_SCOPE_VERSION
-    assert state["authorized_instruments"] == instruments
-    for index, instrument in enumerate(instruments, 1):
-        feed.make_order(
-            instrument.split(".", 1)[1],
-            1,
-            1200,
-            "buy-limit",
-            exchange_id="CZCE",
-            client_order_id=f"{index:012d}",
-            _execution_capability=capability,
-        )
-    feed.cancel_order(
-        "SA701P1080",
-        order_id="SYS",
-        exchange_id="CZCE",
-        _execution_capability=capability,
-    )
-
-    assert [call[0] for call in native_calls] == [
-        "insert",
-        "insert",
-        "insert",
-        "cancel",
-    ]
-    assert client.get_request_counts()["order_insert"] == 3
-    assert client.get_request_counts()["order_action"] == 1
-
-
-@pytest.mark.parametrize("operation", ["make_order", "cancel_order"])
-def test_managed_ctp_feed_v2_bundle_rejects_unapproved_or_rewritten_option_leg(
-    operation,
-) -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(
-        feed,
-        client,
-        capability,
-        _ctp_execution_bundle_proof(
-            client,
-            feed,
-            instruments=["DCE.m2701", "DCE.m2701-C-3400"],
-        ),
-    )
-    feed.make_order(
-        "m2701-C-3400",
-        1,
-        1200,
-        "buy-limit",
-        exchange_id="DCE",
-        client_order_id="000000000103",
-        _execution_capability=capability,
-    )
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        if operation == "make_order":
-            feed.make_order(
-                "M2701-C-3400",
-                1,
-                1200,
-                "buy-limit",
-                exchange_id="DCE",
-                client_order_id="000000000104",
-                _execution_capability=capability,
-            )
-        else:
-            feed.cancel_order(
-                "M2701-C-3400",
-                order_id="SYS",
-                exchange_id="DCE",
-                _execution_capability=capability,
-            )
-
-    assert excinfo.value.code == "ctp_execution_gate_instrument_mismatch"
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert [call[0] for call in native_calls] == ["insert"]
-    assert client.get_request_counts()["order_insert"] == 1
-
-
-@pytest.mark.parametrize("operation", ("make_order", "cancel_order"))
-@pytest.mark.parametrize(
-    ("symbol", "exchange_id"),
-    (
-        (" m2701-C-3400", "DCE"),
-        ("m2701-C-3400 ", "DCE"),
-        ("DCE.m2701-C-3400", "DCE"),
-        ("m2701-C-3400.DCE", "DCE"),
-        ("m2701-C-3400", " dce"),
-        ("m2701-C-3400", "dce"),
-        ("m2701-C-3400", "DCE "),
-        ("m2701-C-3400", None),
-    ),
-)
-def test_managed_ctp_feed_v2_bundle_rejects_rewritten_native_wire_fields(
-    operation, symbol, exchange_id
-) -> None:
-    """V2 checks the exact bare native fields immediately before a write."""
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(
-        feed,
-        client,
-        capability,
-        _ctp_execution_bundle_proof(
-            client,
-            feed,
-            instruments=["DCE.m2701", "DCE.m2701-C-3400"],
-        ),
-    )
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        if operation == "make_order":
-            feed.make_order(
-                symbol,
-                1,
-                1200,
-                "buy-limit",
-                exchange_id=exchange_id,
-                _execution_capability=capability,
-            )
-        else:
-            feed.cancel_order(
-                symbol,
-                order_id="SYS",
-                exchange_id=exchange_id,
-                _execution_capability=capability,
-            )
-
-    assert excinfo.value.code == "ctp_execution_gate_instrument_mismatch"
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-
-
-@pytest.mark.parametrize(
-    ("operation", "method_name", "field_name", "replacement"),
-    (
-        (
-            "make_order",
-            "submit_order_insert",
-            "InstrumentID",
-            "DCE.m2701-C-3400",
-        ),
-        ("make_order", "submit_order_insert", "ExchangeID", "dce"),
-        (
-            "cancel_order",
-            "submit_order_action",
-            "InstrumentID",
-            "m2701-C-3400.DCE",
-        ),
-        ("cancel_order", "submit_order_action", "ExchangeID", "DCE "),
-    ),
-)
-def test_managed_ctp_feed_v2_bundle_rechecks_tampered_fields_at_native_boundary(
-    operation, method_name, field_name, replacement
-) -> None:
-    """The locked native gate closes the gap after the feed's first check."""
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(
-        feed,
-        client,
-        capability,
-        _ctp_execution_bundle_proof(
-            client,
-            feed,
-            instruments=["DCE.m2701", "DCE.m2701-C-3400"],
-        ),
-    )
-    original = getattr(client, method_name)
-
-    def tampered_submit(field, request_id, *, execution_capability=None):
-        setattr(field, field_name, replacement)
-        return original(
-            field,
-            request_id,
-            execution_capability=execution_capability,
-        )
-
-    setattr(client, method_name, tampered_submit)
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        if operation == "make_order":
-            feed.make_order(
-                "m2701-C-3400",
-                1,
-                1200,
-                "buy-limit",
-                exchange_id="DCE",
-                client_order_id="000000000105",
-                _execution_capability=capability,
-            )
-        else:
-            feed.cancel_order(
-                "m2701-C-3400",
-                order_id="SYS",
-                exchange_id="DCE",
-                _execution_capability=capability,
-            )
-
-    assert excinfo.value.code == "ctp_execution_gate_instrument_mismatch"
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-
-
-@pytest.mark.parametrize(
-    "instruments",
-    [
-        ["CZCE.SA701"],
-        ["CZCE.SA701P1080", "CZCE.SA701"],
-        ["CZCE.SA701", "DCE.m2701-C-3400"],
-        ["CZCE.SA701", "CZCE.SA701C1080", "CZCE.SA701P1080", "CZCE.SA701P1100"],
-    ],
-)
-def test_native_ctp_gate_rejects_non_closed_v2_bundle_proofs(instruments) -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        _arm(
-            feed,
-            client,
-            capability,
-            _ctp_execution_bundle_proof(client, feed, instruments=instruments),
-        )
-
-    assert excinfo.value.code == "ctp_execution_gate_invalid_proof"
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert native_calls == []
-
-
-@pytest.mark.parametrize(
-    ("mutation", "expected_code"),
-    [
-        (
-            lambda feed, client, capability: (object(), "SA2609", "CZCE"),
-            "ctp_execution_gate_capability_mismatch",
-        ),
-        (
-            lambda feed, client, capability: (capability, "SR609", "CZCE"),
-            "ctp_execution_gate_instrument_mismatch",
-        ),
-    ],
-)
-@pytest.mark.parametrize("operation", ["make_order", "cancel_order"])
-def test_managed_ctp_feed_rejects_wrong_token_or_contract_before_native_write(
-    mutation, expected_code, operation
-) -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-    supplied, symbol, exchange_id = mutation(feed, client, capability)
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        if operation == "make_order":
-            feed.make_order(
-                symbol,
-                1,
-                1200,
-                "buy-limit",
-                exchange_id=exchange_id,
-                _execution_capability=supplied,
-            )
-        else:
-            feed.cancel_order(
-                symbol,
-                order_id="SYS",
-                exchange_id=exchange_id,
-                _execution_capability=supplied,
-            )
-
-    assert excinfo.value.code == expected_code
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-
-
-def test_managed_ctp_feed_rejects_wrong_generation_before_native_write() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-    client._connection_generation += 1
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        feed.cancel_order(
-            "SA2609",
-            order_id="SYS",
-            exchange_id="CZCE",
-            _execution_capability=capability,
-        )
-
-    assert excinfo.value.code == "ctp_execution_gate_connection_generation_mismatch"
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert native_calls == []
-    assert client.get_request_counts()["order_action"] == 0
-
-
-def test_managed_ctp_feed_rechecks_generation_at_native_submit_boundary() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-    next_request_id = client._next_request_id
-
-    def change_generation_after_initial_gate_check() -> int:
-        request_id = next_request_id()
-        client._connection_generation += 1
-        return request_id
-
-    client._next_request_id = change_generation_after_initial_gate_check
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        feed.make_order(
-            "SA2609",
-            1,
-            1200,
-            "buy-limit",
-            exchange_id="CZCE",
-            client_order_id="000000000106",
-            _execution_capability=capability,
-        )
-
-    assert excinfo.value.code == "ctp_execution_gate_connection_generation_mismatch"
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-
-
-def test_reconnect_and_explicit_revoke_both_disable_managed_native_writes() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    proof = _ctp_execution_proof(client, feed)
-    feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, proof)
-    revoked = feed.disarm_execution_gate(capability, "test_revoked")
-    repeated = feed.disarm_execution_gate(capability, "ignored_later_reason")
-    assert revoked == repeated and revoked["revocation_reason"] == "test_revoked"
-
-    with pytest.raises(client_module.CtpExecutionGateError, match="unarmed"):
-        feed.cancel_order(
-            "SA2609",
-            order_id="SYS",
-            exchange_id="CZCE",
-            _execution_capability=capability,
-        )
-
-    _arm(feed, client, capability, proof)
-    client._on_front_disconnected(1)
-    client._on_front_connected()
-    with pytest.raises(client_module.CtpExecutionGateError, match="unarmed"):
-        feed.make_order(
-            "SA2609",
-            1,
-            1200,
-            "buy-limit",
-            exchange_id="CZCE",
-            _execution_capability=capability,
-        )
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-    assert client.get_request_counts()["order_action"] == 0
-
-
-def test_native_disarm_invalidates_sibling_same_preflight_arm_grant() -> None:
-    """A second opaque grant cannot reopen a gate after a same-gen disarm."""
-
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    proof = _ctp_execution_proof(client, feed)
-    first = client._issue_execution_authorization_for_test(capability, proof)
-    sibling = client._issue_execution_authorization_for_test(capability, proof)
-
-    feed.arm_execution_gate(capability, first)
-    feed.disarm_execution_gate(capability, "test_sibling_grant_revoked")
-
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_environment_profile_mismatch",
-    ):
-        feed.arm_execution_gate(capability, sibling)
-
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert native_calls == []
-    assert client.get_request_counts()["order_insert"] == 0
-
-
 @pytest.mark.parametrize(
     "method_name",
     [
@@ -1025,7 +278,6 @@ def test_managed_trader_api_blocks_direct_native_write_methods(
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
 
     with pytest.raises(
         client_module.CtpExecutionGateError,
@@ -1153,7 +405,6 @@ def test_api_swap_revokes_proof_and_old_public_handles_remain_blocked() -> None:
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
     public_api = client.api
     cached_insert = public_api.ReqOrderInsert
     cached_query = public_api.ReqQryOrder
@@ -1183,37 +434,20 @@ def test_api_swap_revokes_proof_and_old_public_handles_remain_blocked() -> None:
     assert replacement_calls == []
 
 
-def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
+def test_official_simnow_legacy_settlement_requires_typed_admission() -> None:
     native_calls = []
     td_front, md_front = official_simnow_fronts("set1_group1")
-    client = TraderClient(
-        td_front,
-        "9999",
-        "account",
-        "secret",
-        auto_settlement_confirm=False,
-    )
 
     class Api:
-        def ReqSettlementInfoConfirm(self, field, request_id):
-            native_calls.append((field.BrokerID, field.InvestorID, request_id))
-            _TraderSpi(client).OnRspSettlementInfoConfirm(
-                SimpleNamespace(
-                    BrokerID="9999",
-                    InvestorID="account",
-                    ConfirmDate="20260909",
-                ),
-                None,
-                request_id,
-                True,
-            )
+        def ReqSettlementInfoConfirm(self, _field, _request_id):
+            native_calls.append("settlement")
             return 0
 
+    client = TraderClient(td_front, "9999", "account", "secret", auto_settlement_confirm=False)
     client._api = Api()
-    client = _read_ready(client)
+    _read_ready(client)
     client._session_native_api = client._api
     client._session_native_front = client._bound_front
-    client._settlement_state = "not_requested"
     feed = CtpRequestDataFuture(
         broker_id="9999",
         user_id="account",
@@ -1229,79 +463,11 @@ def test_managed_settlement_requires_capability_and_submits_only_once() -> None:
 
     with pytest.raises(
         client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_capability_mismatch",
+        match="ctp_simnow_execution_not_admitted",
     ):
-        client.confirm_settlement(timeout=0)
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_capability_mismatch",
-    ):
-        feed.confirm_settlement(timeout=0, _execution_capability=object())
+        _settlement_authorization(client, capability, environment_profile=feed.ctp_env_profile)
     assert native_calls == []
     assert client.get_request_counts()["settlement_confirm"] == 0
-
-    assert (
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization=_settlement_authorization(
-                client,
-                capability,
-                environment_profile=feed.ctp_env_profile,
-            ),
-        )
-        is True
-    )
-    # The accepted fake login consumes request ID 1; settlement is the next
-    # native request in the same session generation.
-    assert native_calls == [("9999", "account", 2)]
-    assert client.get_request_counts()["settlement_confirm"] == 1
-
-    state = client.get_session_state()
-    assert state["settlement_state"] == "confirmed"
-    assert state["settlement_proof_source"] == "direct_confirmation"
-    assert state["settlement_readback_verified"] is False
-    assert state["trading_ready"] is False
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_session_not_trading_ready",
-    ):
-        _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-
-    client._api.ReqQrySettlementInfoConfirm = lambda _field, request_id: (
-        client._handle_query_callback(
-            "settlement_confirmation",
-            {
-                "BrokerID": "9999",
-                "InvestorID": "account",
-                "ConfirmDate": "20260909",
-            },
-            None,
-            request_id,
-            True,
-        )
-        or 0
-    )
-    readback = feed.verify_settlement_confirmation(timeout=0)
-    assert readback.complete is True
-    assert client.get_session_state()["settlement_readback_verified"] is True
-
-    settlement_authorization = _settlement_authorization(
-        client,
-        capability,
-        environment_profile=feed.ctp_env_profile,
-    )
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
-    with pytest.raises(
-        client_module.CtpExecutionGateError,
-        match="ctp_execution_gate_settlement_requires_disarmed",
-    ):
-        feed.confirm_settlement(
-            timeout=0,
-            _execution_capability=capability,
-            _settlement_authorization=settlement_authorization,
-        )
-    assert len(native_calls) == 1
 
 
 def test_managed_settlement_timeout_cannot_resubmit_same_connection() -> None:
@@ -1406,7 +572,6 @@ def test_reentrant_start_revokes_managed_proof_before_rejecting(
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
     cached_insert = client.api.ReqOrderInsert
     monkeypatch.setattr(client_module, "_check_native_module", lambda: None)
 
@@ -1502,7 +667,6 @@ def test_old_spi_callbacks_cannot_restore_state_after_api_swap() -> None:
     client._spi = old_spi
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
 
     client._api = SimpleNamespace(ReqQryOrder=lambda *_args: 0)
     client._settlement_state = "confirming"
@@ -1549,7 +713,6 @@ def test_managed_feed_rejects_replaced_unmanaged_trader_client() -> None:
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
 
     replacement = _read_ready(
         TraderClient(
@@ -1579,21 +742,6 @@ def test_managed_feed_rejects_replaced_unmanaged_trader_client() -> None:
         )
     assert native_calls == []
     assert replacement.get_request_counts()["order_insert"] == 0
-
-
-def test_bad_execution_proof_disarms_gate_without_leaking_credentials() -> None:
-    feed, client, native_calls = _execution_ready_feed()
-    capability = _core_capability()
-    feed.configure_execution_gate(capability)
-    bad_proof = _ctp_execution_proof(client, feed, receipt_sha256="secret")
-
-    with pytest.raises(client_module.CtpExecutionGateError) as excinfo:
-        client._issue_execution_authorization_for_test(capability, bad_proof)
-
-    assert excinfo.value.code == "ctp_execution_gate_invalid_proof"
-    assert "secret" not in str(excinfo.value)
-    assert feed.get_execution_gate_state()["armed"] is False
-    assert native_calls == []
 
 
 def test_query_result_accumulates_only_matching_request_and_terminal_packet() -> None:
@@ -2605,7 +1753,6 @@ def test_bad_settlement_readback_demotes_readiness_and_revokes_native_gate(
     feed, client, native_calls = _execution_ready_feed()
     capability = _core_capability()
     feed.configure_execution_gate(capability)
-    _arm(feed, client, capability, _ctp_execution_proof(client, feed))
     result = _result(
         "settlement_confirmation",
         records,

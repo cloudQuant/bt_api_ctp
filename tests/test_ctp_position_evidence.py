@@ -16,7 +16,11 @@ from bt_api_ctp.containers.ctp.ctp_position_evidence import (
     CtpPositionEvidenceError,
     build_ctp_position_evidence,
 )
-from bt_api_ctp.ctp.client import TraderClient
+from bt_api_ctp.ctp.client import (
+    _TRADER_LOGIN_IDENTITY_SEAL,
+    TraderClient,
+    _TraderLoginIdentityObservation,
+)
 from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 from bt_api_ctp.query import QueryResult
 
@@ -41,6 +45,14 @@ def _offline_client():
     client._login_state = "logged_in"
     client._trading_day = "20260910"
     client._connection_generation = 7
+    client._login_identity_observation = _TraderLoginIdentityObservation(
+        _seal=_TRADER_LOGIN_IDENTITY_SEAL,
+        broker_id=BROKER_ID,
+        user_id=INVESTOR_ID,
+        trading_day="20260910",
+        connection_generation=7,
+        request_id=1,
+    )
     client._req_id = 30
     client._query_interval = 0.0
     return client
@@ -630,6 +642,14 @@ def test_terminal_callback_clocks_survive_a_slow_native_query_return():
     client._login_state = "logged_in"
     client._trading_day = "20260910"
     client._connection_generation = 7
+    client._login_identity_observation = _TraderLoginIdentityObservation(
+        _seal=_TRADER_LOGIN_IDENTITY_SEAL,
+        broker_id="BRK",
+        user_id="INV",
+        trading_day="20260910",
+        connection_generation=7,
+        request_id=1,
+    )
     client._query_interval = 0.0
     api = DelayedQueryApi(client)
     client._api = api
@@ -694,6 +714,14 @@ def test_feed_adapter_uses_query_source_completion_for_delayed_scope_capture():
     client._login_state = "logged_in"
     client._trading_day = "20260910"
     client._connection_generation = 7
+    client._login_identity_observation = _TraderLoginIdentityObservation(
+        _seal=_TRADER_LOGIN_IDENTITY_SEAL,
+        broker_id=BROKER_ID,
+        user_id=INVESTOR_ID,
+        trading_day="20260910",
+        connection_generation=7,
+        request_id=1,
+    )
     client._query_interval = 0.0
     # Build the empty query through this delayed client so the feed's opaque
     # issuer matches the strict scope returned below.

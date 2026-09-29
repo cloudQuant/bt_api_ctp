@@ -56,6 +56,21 @@ from urllib.parse import urlsplit
 
 from bt_api_ctp.ctp_env_selector import is_official_simnow_td_front
 from bt_api_ctp.instrument import normalize_ctp_instrument
+from bt_api_ctp.md_diagnostics import (
+    MdLoginBrokerIdShape,
+    MdLoginCallbackDiagnostic,
+    MdLoginCallbackDisposition,
+    MdLoginNativeFieldShape,
+    MdLoginRequestIdRelation,
+    MdLoginResponseErrorStatus,
+    MdLoginTradingDayShape,
+    MdLoginUserIdShape,
+    identity_shape,
+    request_id_relation,
+    response_error_status,
+    source_text,
+    trading_day_shape,
+)
 from bt_api_ctp.md_identity import MdIdentityObservation
 from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
@@ -1951,6 +1966,12 @@ class _QueryAccumulator:
 # ===========================================================================
 
 
+@dataclass(frozen=True)
+class _MdLoginError:
+    ErrorID: int
+    ErrorMsg: str
+
+
 class _MdSpi(CThostFtdcMdSpi):
     def __init__(self, client, native_api=None):
         super().__init__()
@@ -1972,6 +1993,7 @@ class _MdSpi(CThostFtdcMdSpi):
             if not self._is_current_locked():
                 return
             self._c._connection_generation += 1
+            self._c._reset_md_login_diagnostic_locked()
             self._c._connected = True
             self._c._loggedin = False
             self._c._clear_active_md_identity_locked()
@@ -1993,8 +2015,11 @@ class _MdSpi(CThostFtdcMdSpi):
             )
             return
         if api is not None:
-            result = api.ReqUserLogin(field, request_id)
-            if type(result) is int and result != 0:
+            try:
+                result = api.ReqUserLogin(field, request_id)
+            except Exception:
+                result = -1
+            if result is not None and (type(result) is not int or result != 0):
                 with self._c._state_lock:
                     if (
                         self._is_current_locked()
@@ -2005,7 +2030,11 @@ class _MdSpi(CThostFtdcMdSpi):
                         self._c._login_request_id = None
                         self._c._login_request_generation = None
                         self._c._loggedin = False
+                        self._c._connected = False
                         self._c._clear_active_md_identity_locked()
+                        error_callback = self._c.on_error
+                    else:
+                        error_callback = None
                 _logger.warning(
                     "CTP market-data login request rejected "
                     "(generation=%s, request_id=%s, result=%s)",
@@ -2013,6 +2042,8 @@ class _MdSpi(CThostFtdcMdSpi):
                     request_id,
                     result,
                 )
+                if error_callback is not None:
+                    error_callback(_MdLoginError(-1, "login_request_rejected"))
 
     def OnFrontDisconnected(self, nReason):
         with self._c._state_lock:
@@ -2044,52 +2075,98 @@ class _MdSpi(CThostFtdcMdSpi):
         pending = 0
         generation = None
         with self._c._state_lock:
+            self._c._login_callback_count += 1
+            self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.NOT_OBSERVED
+            self._c._login_callback_response_error_status = (
+                MdLoginResponseErrorStatus.NOT_OBSERVED
+            )
+            self._c._login_callback_disposition = MdLoginCallbackDisposition.NONE
             if not self._is_current_locked():
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.STALE_SPI
                 return
             generation = self._c._connection_generation
-            terminal = type(bIsLast) in (bool, int) and bIsLast == 1
+            expected = self._c._login_request_id
+            self._c._login_callback_request_id_relation = request_id_relation(nRequestID, expected)
+            status, error_id = response_error_status(pRspInfo)
+            self._c._login_callback_response_error_status = status
+            if (
+                not self._c._connected
+                or type(generation) is not int
+                or generation <= 0
+                or not self._c._login_request_pending
+                or self._c._login_request_generation != generation
+                or type(expected) is not int
+            ):
+                self._c._login_callback_disposition = (
+                    MdLoginCallbackDisposition.GENERATION_MISMATCH
+                )
+                return
+            terminal = bIsLast is True
             current_request = (
                 type(nRequestID) is int
                 and self._c._login_request_pending
                 and self._c._login_request_id == nRequestID
                 and self._c._login_request_generation == generation
             )
-            if not terminal or not current_request:
+            if type(nRequestID) is not int:
+                self._c._login_callback_disposition = (
+                    MdLoginCallbackDisposition.REQUEST_ID_TYPE_INVALID
+                )
+                return
+            if not current_request:
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.REQUEST_ID_MISMATCH
+                return
+            if not terminal:
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.NONTERMINAL
                 return
             self._c._login_request_pending = False
-            error_id = getattr(pRspInfo, "ErrorID", None) if pRspInfo is not None else None
-            if pRspInfo is not None and type(error_id) is int and error_id == 0:
-                self._c._loggedin = True
-                login_ok = True
-                broker_id = self._source_identity_text(
-                    getattr(pRspUserLogin, "BrokerID", None)
-                )
-                user_id = self._source_identity_text(getattr(pRspUserLogin, "UserID", None))
-                trading_day = self._source_identity_text(
-                    getattr(pRspUserLogin, "TradingDay", None)
-                )
-                self._c._active_md_identity = MdIdentityObservation(
-                    front=self._c._bound_front,
-                    broker_id=broker_id,
-                    user_id=user_id,
-                    connection_generation=generation,
-                    request_id=nRequestID,
-                    trading_day=trading_day,
-                    authenticated=True,
-                )
-                self._c._active_md_identity_api = (
-                    self._native_api if self._native_api is not None else self._c._api
-                )
-                self._c._active_md_identity_spi = self
-                pending = len(self._c._pending_instruments)
-                if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
-                    subscribe = (self._c._api, list(self._c._pending_instruments))
-                callback = self._c.on_login
+            if status is MdLoginResponseErrorStatus.ZERO:
+                broker_id, broker_readable = source_text(pRspUserLogin, "BrokerID")
+                user_id, user_readable = source_text(pRspUserLogin, "UserID")
+                trading_day, day_readable = source_text(pRspUserLogin, "TradingDay")
+                if not broker_readable or broker_id != self._c._bound_broker_id:
+                    failure_reason = "broker_id_mismatch"
+                elif not user_readable or user_id != self._c._bound_user_id:
+                    failure_reason = "user_id_mismatch"
+                elif not day_readable or trading_day_shape(trading_day, True) is not MdLoginTradingDayShape.VALID:
+                    failure_reason = "trading_day_invalid"
+                else:
+                    failure_reason = ""
+                if failure_reason:
+                    self._c._loggedin = False
+                    self._c._clear_active_md_identity_locked()
+                    self._c._login_callback_disposition = (
+                        MdLoginCallbackDisposition.IDENTITY_REJECTED
+                    )
+                    error_callback = self._c.on_error
+                    error_info = _MdLoginError(-1, f"login_identity_rejected:{failure_reason}")
+                else:
+                    self._c._loggedin = True
+                    login_ok = True
+                    self._c._login_callback_disposition = MdLoginCallbackDisposition.ACCEPTED
+                    self._c._active_md_identity = MdIdentityObservation(
+                        front=self._c._bound_front,
+                        broker_id=broker_id,
+                        user_id=user_id,
+                        connection_generation=generation,
+                        request_id=nRequestID,
+                        trading_day=trading_day,
+                        authenticated=True,
+                    )
+                    self._c._active_md_identity_api = (
+                        self._native_api if self._native_api is not None else self._c._api
+                    )
+                    self._c._active_md_identity_spi = self
+                    pending = len(self._c._pending_instruments)
+                    if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
+                        subscribe = (self._c._api, list(self._c._pending_instruments))
+                    callback = self._c.on_login
             else:
                 self._c._loggedin = False
                 self._c._clear_active_md_identity_locked()
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.PROVIDER_REJECTED
                 error_callback = self._c.on_error
-                error_info = pRspInfo
+                error_info = _MdLoginError(error_id if error_id not in (None, 0) else -1, "provider_login_rejected")
         if login_ok:
             _logger.info(
                 "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d)",
@@ -2101,8 +2178,8 @@ class _MdSpi(CThostFtdcMdSpi):
             _logger.warning(
                 "CTP market-data login failed (generation=%s, error_id=%s, error_msg=%s)",
                 generation,
-                getattr(pRspInfo, "ErrorID", None),
-                getattr(pRspInfo, "ErrorMsg", ""),
+                error_id,
+                "[redacted]",
             )
         if subscribe is not None and subscribe[0] is not None:
             subscribe[0].SubscribeMarketData(subscribe[1])
@@ -2184,6 +2261,8 @@ class MdClient:
         self._active_md_identity = None
         self._active_md_identity_api = None
         self._active_md_identity_spi = None
+        self._login_callback_count = 0
+        self._reset_md_login_diagnostic_locked()
         self._api = None
         self._spi = None
         self._thread = None
@@ -2245,6 +2324,32 @@ class MdClient:
             ):
                 return None
             return identity
+
+    @property
+    def login_callback_diagnostic(self) -> MdLoginCallbackDiagnostic:
+        with self._state_lock:
+            return MdLoginCallbackDiagnostic(
+                callback_count=self._login_callback_count,
+                disposition=self._login_callback_disposition,
+                request_id_relation=self._login_callback_request_id_relation,
+                response_error_status=self._login_callback_response_error_status,
+                broker_id_shape=self._login_callback_broker_id_shape,
+                user_id_shape=self._login_callback_user_id_shape,
+                trading_day_shape=self._login_callback_trading_day_shape,
+                native_broker_id_shape=self._login_callback_native_broker_id_shape,
+                native_user_id_shape=self._login_callback_native_user_id_shape,
+            )
+
+    def _reset_md_login_diagnostic_locked(self) -> None:
+        self._login_callback_count = 0
+        self._login_callback_disposition = MdLoginCallbackDisposition.NONE
+        self._login_callback_request_id_relation = MdLoginRequestIdRelation.NOT_OBSERVED
+        self._login_callback_response_error_status = MdLoginResponseErrorStatus.NOT_OBSERVED
+        self._login_callback_broker_id_shape = MdLoginBrokerIdShape.NOT_OBSERVED
+        self._login_callback_user_id_shape = MdLoginUserIdShape.NOT_OBSERVED
+        self._login_callback_trading_day_shape = MdLoginTradingDayShape.NOT_OBSERVED
+        self._login_callback_native_broker_id_shape = MdLoginNativeFieldShape.NOT_OBSERVED
+        self._login_callback_native_user_id_shape = MdLoginNativeFieldShape.NOT_OBSERVED
 
     def _begin_md_login_request_locked(self, generation):
         """Record the exact request/generation pair before sending login."""
@@ -2588,14 +2693,14 @@ class MdClient:
         """
         _check_native_module()
         generation = self._reserve_start_generation()
-        flow = _flow_dir(f"md_{self._bound_broker_id}_{self._bound_user_id}")
+        flow = self._native_flow_dir()
         try:
             api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
             _register_ctp_native_api(api)
         except BaseException:
             self._clear_start_reservation(generation)
             raise
-        spi = _MdSpi(self, api)
+        spi = self._create_md_spi(api)
         with self._state_lock:
             if (
                 self._starting_generation != generation
@@ -2691,6 +2796,12 @@ class MdClient:
             return
 
         self._start_join_observer(api)
+
+    def _create_md_spi(self, api: Any) -> _MdSpi:
+        return _MdSpi(self, api)
+
+    def _native_flow_dir(self) -> str:
+        return _flow_dir(f"md_{self._bound_broker_id}_{self._bound_user_id}")
 
     def wait_ready(self, timeout=15):
         """等待登录就绪"""
@@ -2827,6 +2938,431 @@ class MdClient:
     def connection_generation(self):
         with self._state_lock:
             return self._connection_generation
+
+
+def _one_shot_md_callback(callback):
+    @wraps(callback)
+    def guarded(self, *args, **kwargs):
+        client = self._c
+        client._enter_diagnostic_callback()
+        try:
+            return callback(self, *args, **kwargs)
+        except Exception:
+            client._fail_diagnostic("spi_callback_failed")
+            return None
+        finally:
+            client._leave_diagnostic_callback()
+
+    return guarded
+
+
+class _OneShotMdDiagnosticSpi(_MdSpi):
+    """One front connection, one exact zero-ID login, one acknowledged tick."""
+
+    def _fail(self, reason, disposition=MdLoginCallbackDisposition.TERMINAL):
+        callback = self._c._fail_diagnostic(reason, disposition)
+        self._c._deliver_diagnostic_callback(callback, _MdLoginError(-1, reason))
+
+    @_one_shot_md_callback
+    def OnFrontConnected(self):
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal or not self._is_current_locked():
+                return
+            if self._c._diagnostic_front_seen:
+                duplicate = True
+            else:
+                duplicate = False
+                self._c._diagnostic_front_seen = True
+                self._c._connection_generation += 1
+                self._c._connected = True
+                self._c._loggedin = False
+                self._c._clear_active_md_identity_locked()
+                self._c._reset_md_login_diagnostic_locked()
+                self._c._login_request_id = 0
+                self._c._login_request_generation = self._c._connection_generation
+                self._c._login_request_pending = True
+                self._c._diagnostic_login_submitted = True
+                field = CThostFtdcReqUserLoginField()
+                field.BrokerID = self._c._bound_broker_id
+                field.UserID = self._c._bound_user_id
+                field.Password = self._c.password
+                api = self._native_api
+        if duplicate:
+            self._fail("duplicate_front_connected", MdLoginCallbackDisposition.GENERATION_MISMATCH)
+        elif api is None:
+            self._fail("login_api_missing")
+        else:
+            self._c._submit_diagnostic_request(
+                api, self, lambda: api.ReqUserLogin(field, 0), "login"
+            )
+
+    @_one_shot_md_callback
+    def OnFrontDisconnected(self, nReason):
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal or not self._is_current_locked():
+                return
+            callback = self._c.on_disconnect
+            self._c._terminalize_diagnostic_locked("front_disconnected")
+        self._c._schedule_diagnostic_stop()
+        self._c._deliver_diagnostic_callback(callback, nReason)
+
+    @_one_shot_md_callback
+    def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
+        failure = None
+        callback = None
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal:
+                return
+            self._c._login_callback_count += 1
+            self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.NOT_OBSERVED
+            self._c._login_callback_response_error_status = MdLoginResponseErrorStatus.NOT_OBSERVED
+            self._c._login_callback_broker_id_shape = MdLoginBrokerIdShape.NOT_OBSERVED
+            self._c._login_callback_user_id_shape = MdLoginUserIdShape.NOT_OBSERVED
+            self._c._login_callback_trading_day_shape = MdLoginTradingDayShape.NOT_OBSERVED
+            if not self._is_current_locked():
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.STALE_SPI
+                return
+            if (
+                self._c._diagnostic_login_completed
+                or not self._c._connected
+                or not self._c._diagnostic_login_submitted
+                or not self._c._login_request_pending
+                or self._c._login_request_generation != self._c._connection_generation
+            ):
+                failure = ("unexpected_login_callback", MdLoginCallbackDisposition.GENERATION_MISMATCH)
+            elif type(nRequestID) is not int:
+                self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.INVALID
+                failure = ("login_request_id_type_invalid", MdLoginCallbackDisposition.REQUEST_ID_TYPE_INVALID)
+            elif nRequestID != 0:
+                self._c._login_callback_request_id_relation = (
+                    MdLoginRequestIdRelation.LOWER if nRequestID < 0 else MdLoginRequestIdRelation.HIGHER
+                )
+                failure = ("login_request_id_mismatch", MdLoginCallbackDisposition.REQUEST_ID_MISMATCH)
+            else:
+                self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.ZERO
+                status, error_id = response_error_status(pRspInfo)
+                self._c._login_callback_response_error_status = status
+                if bIsLast is not True:
+                    failure = ("login_response_nonterminal", MdLoginCallbackDisposition.NONTERMINAL)
+                elif status is not MdLoginResponseErrorStatus.ZERO:
+                    reason = "provider_login_rejected" if error_id not in (None, 0) else "login_response_invalid"
+                    failure = (reason, MdLoginCallbackDisposition.PROVIDER_REJECTED)
+                else:
+                    broker, broker_readable = source_text(pRspUserLogin, "BrokerID")
+                    user, user_readable = source_text(pRspUserLogin, "UserID")
+                    day, day_readable = source_text(pRspUserLogin, "TradingDay")
+                    if not self._is_current_locked() or self._c._diagnostic_terminal:
+                        self._c._login_callback_disposition = MdLoginCallbackDisposition.STALE_SPI
+                        return
+                    if self._c._login_request_generation != self._c._connection_generation:
+                        self._c._login_callback_disposition = MdLoginCallbackDisposition.GENERATION_MISMATCH
+                        return
+                    self._c._login_callback_broker_id_shape = identity_shape(
+                        broker, broker_readable, self._c._bound_broker_id, MdLoginBrokerIdShape
+                    )
+                    self._c._login_callback_user_id_shape = identity_shape(
+                        user, user_readable, self._c._bound_user_id, MdLoginUserIdShape
+                    )
+                    self._c._login_callback_trading_day_shape = trading_day_shape(day, day_readable)
+                    if broker != self._c._bound_broker_id or not broker_readable:
+                        failure = ("broker_id_mismatch", MdLoginCallbackDisposition.IDENTITY_REJECTED)
+                    elif user != self._c._bound_user_id or not user_readable:
+                        failure = ("user_id_mismatch", MdLoginCallbackDisposition.IDENTITY_REJECTED)
+                    elif self._c._login_callback_trading_day_shape is not MdLoginTradingDayShape.VALID:
+                        failure = ("trading_day_invalid", MdLoginCallbackDisposition.IDENTITY_REJECTED)
+                    else:
+                        self._c._diagnostic_login_completed = True
+                        self._c._login_request_pending = False
+                        self._c._loggedin = True
+                        self._c._login_callback_disposition = MdLoginCallbackDisposition.ACCEPTED
+                        self._c._active_md_identity = MdIdentityObservation(
+                            front=self._c._bound_front,
+                            broker_id=broker,
+                            user_id=user,
+                            connection_generation=self._c._connection_generation,
+                            request_id=0,
+                            trading_day=day,
+                            authenticated=True,
+                        )
+                        self._c._active_md_identity_api = self._native_api
+                        self._c._active_md_identity_spi = self
+                        callback = self._c.on_login
+        if failure is not None:
+            self._fail(*failure)
+        else:
+            self._c._deliver_diagnostic_callback(callback, pRspUserLogin)
+
+    @_one_shot_md_callback
+    def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
+        failure = None
+        callback = None
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal or not self._is_current_locked():
+                return
+            instrument, readable = source_text(pSpecificInstrument, "InstrumentID")
+            status, _ = response_error_status(pRspInfo)
+            if not self._c._loggedin or not self._c._diagnostic_subscription_submitted:
+                failure = "unexpected_subscription_callback"
+            elif self._c._diagnostic_subscription_acknowledged:
+                failure = "duplicate_subscription_callback"
+            elif type(nRequestID) is not int or bIsLast is not True or status is not MdLoginResponseErrorStatus.ZERO:
+                failure = "subscription_response_invalid"
+            elif not readable or instrument != self._c._diagnostic_subscription_instrument:
+                failure = "subscription_instrument_mismatch"
+            else:
+                self._c._diagnostic_subscription_acknowledged = True
+                callback = self._c.on_subscribe
+        if failure is not None:
+            self._fail(failure, MdLoginCallbackDisposition.PROVIDER_REJECTED)
+        else:
+            self._c._deliver_diagnostic_callback(callback, pSpecificInstrument, pRspInfo)
+
+    @_one_shot_md_callback
+    def OnRtnDepthMarketData(self, pDepthMarketData):
+        failure = None
+        callback = None
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal or not self._is_current_locked():
+                return
+            instrument, readable = source_text(pDepthMarketData, "InstrumentID")
+            if not self._c._diagnostic_subscription_acknowledged:
+                failure = "tick_before_subscription_ack"
+            elif not readable or instrument != self._c._diagnostic_subscription_instrument:
+                failure = "tick_instrument_mismatch"
+            else:
+                self._c._diagnostic_first_tick_received = True
+                callback = self._c.on_tick
+                self._c._terminalize_diagnostic_locked("diagnostic_complete")
+        if failure is not None:
+            self._fail(failure, MdLoginCallbackDisposition.IDENTITY_REJECTED)
+        else:
+            self._c._schedule_diagnostic_stop()
+            self._c._deliver_diagnostic_callback(callback, pDepthMarketData)
+
+    @_one_shot_md_callback
+    def OnRspError(self, pRspInfo, nRequestID, bIsLast):
+        with self._c._state_lock:
+            if self._c._diagnostic_terminal or not self._is_current_locked():
+                return
+        self._fail("unexpected_provider_error", MdLoginCallbackDisposition.PROVIDER_REJECTED)
+
+
+class OneShotMdDiagnosticClient(MdClient):
+    """Disposable MD probe; zero-ID login and at most one subscribed tick."""
+
+    def __init__(self, front, broker_id, user_id, password):
+        super().__init__(front, broker_id, user_id, password)
+        self.auto_resubscribe_on_login = False
+        self._diagnostic_submit_lock = threading.RLock()
+        self._diagnostic_callback_local = threading.local()
+        self._diagnostic_callbacks_idle = threading.Event()
+        self._diagnostic_callbacks_idle.set()
+        self._diagnostic_callbacks_active = 0
+        self._diagnostic_submit_depth = 0
+        self._diagnostic_terminal = False
+        self._diagnostic_terminal_reason = None
+        self._diagnostic_start_claimed = False
+        self._diagnostic_front_seen = False
+        self._diagnostic_login_submitted = False
+        self._diagnostic_login_completed = False
+        self._diagnostic_subscription_instrument = None
+        self._diagnostic_subscription_submitted = False
+        self._diagnostic_subscription_acknowledged = False
+        self._diagnostic_first_tick_received = False
+        self._diagnostic_stop_started = False
+        self._diagnostic_stop_scheduled = False
+        self._diagnostic_flow_directory = None
+
+    def _create_md_spi(self, api: Any) -> _OneShotMdDiagnosticSpi:
+        return _OneShotMdDiagnosticSpi(self, api)
+
+    def _native_flow_dir(self) -> str:
+        if self._diagnostic_flow_directory is None:
+            self._diagnostic_flow_directory = tempfile.TemporaryDirectory(prefix="ctp-md-one-shot-")
+        return self._diagnostic_flow_directory.name + os.sep
+
+    def _terminalize_diagnostic_locked(
+        self, reason: str, disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL
+    ) -> None:
+        if self._diagnostic_terminal:
+            return
+        self._diagnostic_terminal = True
+        self._diagnostic_terminal_reason = reason
+        self._connected = False
+        self._loggedin = False
+        self._clear_active_md_identity_locked()
+        self._login_request_pending = False
+        self._pending_instruments.clear()
+        self._login_callback_disposition = disposition
+
+    def _fail_diagnostic(
+        self, reason: str, disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL
+    ):
+        with self._state_lock:
+            if self._diagnostic_terminal:
+                return None
+            self._terminalize_diagnostic_locked(reason, disposition)
+            callback = self.on_error
+        self._schedule_diagnostic_stop()
+        return callback
+
+    def _deliver_diagnostic_callback(self, callback, *args) -> None:
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception:
+            self._fail_diagnostic("callback_failed")
+
+    def _enter_diagnostic_callback(self) -> None:
+        self._diagnostic_callback_local.depth = getattr(self._diagnostic_callback_local, "depth", 0) + 1
+        with self._state_lock:
+            self._diagnostic_callbacks_active += 1
+            self._diagnostic_callbacks_idle.clear()
+
+    def _leave_diagnostic_callback(self) -> None:
+        self._diagnostic_callback_local.depth = max(0, getattr(self._diagnostic_callback_local, "depth", 1) - 1)
+        with self._state_lock:
+            self._diagnostic_callbacks_active -= 1
+            if self._diagnostic_callbacks_active == 0:
+                self._diagnostic_callbacks_idle.set()
+
+    def _schedule_diagnostic_stop(self) -> None:
+        self._startup_cancel_event.set()
+        with self._state_lock:
+            if self._diagnostic_stop_scheduled or self._diagnostic_stop_started:
+                return
+            self._diagnostic_stop_scheduled = True
+
+        def finish():
+            self._diagnostic_callbacks_idle.wait()
+            self.stop()
+
+        threading.Thread(target=finish, name="ctp-md-diagnostic-stop", daemon=True).start()
+
+    def _submit_diagnostic_request(self, api, spi, submit, name):
+        with self._diagnostic_submit_lock:
+            with self._state_lock:
+                if (
+                    self._diagnostic_terminal
+                    or self._startup_cancel_event.is_set()
+                    or self._api is not api
+                    or self._spi is not spi
+                ):
+                    return None
+                self._diagnostic_submit_depth += 1
+            try:
+                result = submit()
+            except Exception:
+                result = -1
+            finally:
+                with self._state_lock:
+                    self._diagnostic_submit_depth -= 1
+        if result is not None and (type(result) is not int or result != 0):
+            reason = f"{name}_request_rejected"
+            callback = self._fail_diagnostic(reason)
+            self._deliver_diagnostic_callback(callback, _MdLoginError(-1, reason))
+        return result
+
+    @property
+    def diagnostic_terminal(self) -> bool:
+        with self._state_lock:
+            return self._diagnostic_terminal
+
+    @property
+    def diagnostic_terminal_reason(self) -> str | None:
+        with self._state_lock:
+            return self._diagnostic_terminal_reason
+
+    @property
+    def diagnostic_callbacks_active(self) -> int:
+        with self._state_lock:
+            return self._diagnostic_callbacks_active
+
+    @property
+    def diagnostic_subscription_acknowledged(self) -> bool:
+        with self._state_lock:
+            return self._diagnostic_subscription_acknowledged
+
+    @property
+    def diagnostic_first_tick_received(self) -> bool:
+        with self._state_lock:
+            return self._diagnostic_first_tick_received
+
+    def start(self, block: bool = False):
+        with self._state_lock:
+            if self._diagnostic_start_claimed or self._diagnostic_terminal:
+                raise RuntimeError("ctp_md_diagnostic_client_single_use")
+            self._diagnostic_start_claimed = True
+        try:
+            return super().start(block=block)
+        except Exception:
+            self._fail_diagnostic("startup_failed")
+            raise
+
+    def subscribe(self, instruments):
+        requested = [instruments] if isinstance(instruments, str) else list(instruments)
+        if (
+            len(requested) != 1
+            or type(requested[0]) is not str
+            or not requested[0]
+            or not requested[0].isascii()
+            or requested[0] != requested[0].strip()
+            or "\x00" in requested[0]
+        ):
+            raise ValueError("ctp_md_diagnostic_requires_one_ascii_instrument")
+        instrument = requested[0]
+        with self._state_lock:
+            if self._diagnostic_terminal:
+                raise RuntimeError("ctp_md_diagnostic_terminal")
+            if not self._loggedin or not self._connected or self._api is None:
+                raise RuntimeError("ctp_md_diagnostic_login_not_ready")
+            if self._diagnostic_subscription_submitted:
+                duplicate = True
+                self._terminalize_diagnostic_locked("duplicate_subscription_request")
+            else:
+                duplicate = False
+                self._diagnostic_subscription_submitted = True
+                self._diagnostic_subscription_instrument = instrument
+                api, spi = self._api, self._spi
+        if duplicate:
+            self._schedule_diagnostic_stop()
+            raise RuntimeError("ctp_md_diagnostic_single_subscription")
+        return self._submit_diagnostic_request(
+            api, spi, lambda: api.SubscribeMarketData([instrument]), "subscription"
+        )
+
+    def subscribe_batched(self, *args, **kwargs):
+        raise RuntimeError("ctp_md_diagnostic_single_subscription_only")
+
+    def stop(self):
+        self._startup_cancel_event.set()
+        with self._state_lock:
+            self._terminalize_diagnostic_locked("client_stopped")
+            if self._diagnostic_stop_started:
+                return None
+            if self._diagnostic_callbacks_active or self._diagnostic_submit_depth:
+                defer = True
+            else:
+                defer = False
+                self._diagnostic_stop_started = True
+        if defer:
+            self._schedule_diagnostic_stop()
+            return None
+        with self._diagnostic_submit_lock:
+            return super().stop()
+
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        self.stop()
+        if getattr(self._diagnostic_callback_local, "depth", 0):
+            return CtpNativeStopReceipt(
+                self.connection_generation, True, False, False, True, True
+            )
+        if not self._diagnostic_callbacks_idle.wait(timeout):
+            return CtpNativeStopReceipt(
+                self.connection_generation, True, False, False, True, True
+            )
+        return super().stop_and_wait(timeout)
 
 
 # ===========================================================================

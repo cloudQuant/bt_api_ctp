@@ -124,20 +124,8 @@ def test_missing_callback_identity_stays_missing_and_unverified():
 
     _login_response(spi, request_id, response=SimpleNamespace(TradingDay=""))
 
-    identity = client.active_md_identity
-    assert identity is not None
-    assert identity.authenticated is True
-    assert identity.broker_id is None
-    assert identity.user_id is None
-    assert identity.trading_day is None
-    assert not md_identity.md_identity_matches(
-        identity,
-        expected_front="tcp://md.example:123",
-        expected_broker_id="broker-1",
-        expected_user_id="user-1",
-        expected_connection_generation=1,
-        expected_request_id=request_id,
-    )
+    assert client.active_md_identity is None
+    assert client.is_ready is False
 
 
 def test_failed_terminal_login_clears_identity_and_readiness():

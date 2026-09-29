@@ -115,4 +115,5 @@ class TestSessionLogging:
 
         messages = " ".join(record.getMessage() for record in caplog.records)
         assert "3" in messages
-        assert "bad password" in messages
+        assert "[redacted]" in messages
+        assert "bad password" not in messages

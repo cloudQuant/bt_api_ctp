@@ -39,8 +39,10 @@ class MdIdentityObservation:
                 raise ValueError(f"{name} must be a source string or None")
         if type(self.connection_generation) is not int or self.connection_generation <= 0:
             raise ValueError("connection_generation must be a positive exact integer")
-        if type(self.request_id) is not int or self.request_id <= 0:
-            raise ValueError("request_id must be a positive exact integer")
+        # Zero is reserved for the disposable one-shot MD probe.  The normal
+        # readiness matcher below still requires a positive request ID.
+        if type(self.request_id) is not int or self.request_id < 0:
+            raise ValueError("request_id must be a nonnegative exact integer")
         if type(self.authenticated) is not bool:
             raise ValueError("authenticated must be an exact bool")
 
@@ -77,6 +79,7 @@ def md_identity_matches(
 
     return (
         observation.authenticated is True
+        and observation.request_id > 0
         and observation.front == expected_front
         and observation.broker_id == expected_broker_id
         and observation.user_id == expected_user_id
