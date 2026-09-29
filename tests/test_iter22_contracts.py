@@ -511,6 +511,82 @@ def test_managed_settlement_timeout_cannot_resubmit_same_connection() -> None:
     assert client.get_request_counts()["settlement_confirm"] == 1
 
 
+def test_custom_front_settlement_requires_matching_readback_before_ready() -> None:
+    native_calls = []
+    query_calls = []
+    client = TraderClient(
+        "tcp://neutral-settlement.invalid:31001",
+        "9999",
+        "account",
+        "secret",
+        auto_settlement_confirm=False,
+    )
+
+    class Api:
+        def ReqSettlementInfoConfirm(self, field, request_id):
+            native_calls.append((field.BrokerID, field.InvestorID, request_id))
+            _TraderSpi(client).OnRspSettlementInfoConfirm(
+                SimpleNamespace(
+                    BrokerID="9999",
+                    InvestorID="account",
+                    ConfirmDate="20260909",
+                ),
+                None,
+                request_id,
+                True,
+            )
+            return 0
+
+        def ReqQrySettlementInfoConfirm(self, _field, request_id):
+            query_calls.append(request_id)
+            client._handle_query_callback(
+                "settlement_confirmation",
+                SimpleNamespace(
+                    BrokerID="9999",
+                    InvestorID="account",
+                    ConfirmDate="20260909",
+                ),
+                None,
+                request_id,
+                True,
+            )
+            return 0
+
+    client._api = Api()
+    _read_ready(client)
+    client._session_native_api = client._api
+    client._session_native_front = client._bound_front
+    capability = _core_capability()
+    client.configure_execution_gate(capability)
+
+    assert client.confirm_settlement(
+        timeout=0,
+        _execution_capability=capability,
+        _settlement_authorization=_settlement_authorization(client, capability),
+        **_settlement_environment_kwargs(),
+    ) is True
+
+    state = client.get_session_state()
+    assert native_calls == [("9999", "account", 2)]
+    assert client.get_request_counts()["settlement_confirm"] == 1
+    assert state["settlement_state"] == "confirmed"
+    assert state["settlement_proof_source"] == "direct_confirmation"
+    assert state["settlement_readback_verified"] is False
+    assert state["trading_ready"] is False
+
+    readback = client.verify_settlement_confirmation(timeout=0)
+
+    state = client.get_session_state()
+    assert readback.complete is True
+    assert query_calls == [readback.request_id]
+    assert native_calls == [("9999", "account", 2)]
+    assert client.get_request_counts()["settlement_confirm"] == 1
+    assert state["settlement_state"] == "confirmed"
+    assert state["settlement_proof_source"] == "confirmation_query"
+    assert state["settlement_readback_verified"] is True
+    assert state["trading_ready"] is True
+
+
 def test_managed_settlement_rejects_auto_confirmation_mode_before_write() -> None:
     native_calls = []
     client = TraderClient(

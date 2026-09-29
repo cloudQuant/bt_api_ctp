@@ -402,6 +402,71 @@ def test_store_binding_sends_detached_insert_and_consumes_one_lease(monkeypatch)
         client.stop()
 
 
+def test_store_command_id_cannot_acquire_a_second_lease_after_insert(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        field = _field(CThostFtdcInputOrderField, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+
+        assert client.submit_order_insert_with_lease(lease, field, 41) == 0
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_call_binding_reused",
+        ):
+            client.acquire_managed_native_call_lease(owner, binding)
+
+        assert len([call for call in api.calls if call[0] == "ReqOrderInsert"]) == 1
+    finally:
+        client.stop()
+
+
+def test_source_replacement_after_lease_acquisition_fences_native_insert(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(CThostFtdcInputOrderField, payload)
+        replacement_api = _FakeTraderApi()
+
+        client._api = replacement_api
+
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_call_lease_invalid",
+        ):
+            client.submit_order_insert_with_lease(lease, field, 41)
+
+        assert not any(call[0] == "ReqOrderInsert" for call in api.calls)
+        assert not any(call[0] == "ReqOrderInsert" for call in replacement_api.calls)
+    finally:
+        client.stop()
+
+
+def test_managed_insert_rejects_caller_field_that_differs_from_store_binding(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        field = _field(
+            CThostFtdcInputOrderField,
+            {**payload, "OrderRef": "000000000018"},
+        )
+
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_field_binding_mismatch",
+        ):
+            client.submit_order_insert_with_lease(lease, field, 41)
+
+        assert not any(call[0] == "ReqOrderInsert" for call in api.calls)
+    finally:
+        client.stop()
+
+
 def test_official_simnow_front_blocks_store_lease_before_native_insert(monkeypatch):
     from bt_api_ctp.ctp_env_selector import official_simnow_fronts
 
