@@ -488,7 +488,8 @@ class TestCtpOrderThreadingRegression:
         assert error_event["field"]["OrderRef"] == "105"
         assert seen_errors == [(32, "order rejected")]
 
-    def test_make_order_sets_required_ctp_fields(self):
+    @pytest.mark.parametrize("hedge_flag", ("1", "2"))
+    def test_make_order_sets_required_ctp_fields(self, hedge_flag):
         from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
         class FakeApi:
@@ -560,6 +561,7 @@ class TestCtpOrderThreadingRegression:
             order_type="buy-limit",
             offset="open",
             exchange_id="CFFEX",
+            hedge_flag=hedge_flag,
             client_order_id="000000000108",
             _execution_capability=capability,
         )
@@ -568,6 +570,7 @@ class TestCtpOrderThreadingRegression:
         assert sent_field is not None
         assert sent_field.OrderRef == "000000000108"
         assert sent_field.UserID == "demo"
+        assert sent_field.CombHedgeFlag == hedge_flag
         assert sent_field.MinVolume == 1
         assert sent_field.RequestID == 8
         assert feed._trader.api.req_id == 8

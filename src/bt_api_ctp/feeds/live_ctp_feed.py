@@ -983,6 +983,9 @@ class CtpRequestData(Feed):
         if offset_text not in CTP_OFFSET_FLAG:
             raise ValueError(f"CTP order offset {offset!r} is unsupported.")
         order_volume = _positive_int_lot(volume, "volume")
+        hedge_flag = kwargs.get("hedge_flag", "1")
+        if type(hedge_flag) is not str or hedge_flag not in {"1", "2", "3", "5", "6", "7"}:
+            raise ValueError("CTP hedge_flag must be a supported single-character CTP flag")
         direction = CTP_DIRECTION_FLAG[side]
         offset_flag = CTP_OFFSET_FLAG[offset_text]
         field = CThostFtdcInputOrderField()
@@ -994,7 +997,7 @@ class CtpRequestData(Feed):
             field.ExchangeID = exchange_id
         field.Direction = direction
         field.CombOffsetFlag = offset_flag
-        field.CombHedgeFlag = "1"
+        field.CombHedgeFlag = hedge_flag
         field.VolumeTotalOriginal = order_volume
         field.MinVolume = 1
         field.ForceCloseReason = "0"
