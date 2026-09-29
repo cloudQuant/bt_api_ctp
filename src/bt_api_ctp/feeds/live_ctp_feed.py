@@ -610,6 +610,59 @@ class CtpRequestData(Feed):
                 return dict(method(capability))
         return self.get_execution_gate_state()
 
+    def configure_runtime_simnow_credential_binding(
+        self,
+        capability: object,
+        binding: ctp_client.CtpRuntimeSimNowCredentialBinding,
+    ) -> dict[str, Any]:
+        """Forward an owner-sealed exact pair binding to this feed's TraderClient."""
+
+        if type(binding) is not ctp_client.CtpRuntimeSimNowCredentialBinding:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_simnow_credential_binding_required"
+            )
+        with self._connect_lock:
+            if (
+                capability is not self._execution_gate_capability
+                or not ctp_client._is_ctp_core_execution_authority(capability)
+            ):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_capability_mismatch"
+                )
+            if (
+                self._execution_bound_profile != "config_front_pair"
+                or not self._execution_bound_td_front
+                or not self._execution_bound_md_front
+                or self.ctp_env_profile != self._execution_bound_profile
+                or str(self.td_front or "").strip() != self._execution_bound_td_front
+                or str(self.md_front or "").strip() != self._execution_bound_md_front
+                or str(self.broker_id or "").strip() != self._execution_bound_broker_id
+                or str(self.user_id or "").strip() != self._execution_bound_user_id
+                or binding.environment_profile != self._execution_bound_profile
+                or binding.td_front != self._execution_bound_td_front
+                or binding.md_front != self._execution_bound_md_front
+            ):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_simnow_credential_binding_rejected"
+                )
+            trader = self._trader
+            method = getattr(trader, "configure_runtime_simnow_credential_binding", None)
+            if trader is None or not callable(method):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            state_reader = getattr(trader, "get_execution_gate_state", None)
+            if not callable(state_reader):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_execution_gate_native_contract_unavailable"
+                )
+            state = state_reader()
+            if not isinstance(state, dict) or state.get("armed") is not False:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_simnow_credential_binding_requires_disarmed_gate"
+                )
+            return dict(method(capability, binding))
+
     def _issue_execution_capability_for_core(self) -> object:
         """Return the private capability consumed by the parent SDK only.
 
@@ -798,7 +851,9 @@ class CtpRequestData(Feed):
         symbol: Any,
         exchange_id: Any = None,
     ) -> None:
-        self._reject_official_simnow_write()
+        managed_pair = self._execution_bound_profile == "config_front_pair"
+        if not managed_pair:
+            self._reject_official_simnow_write()
         installed = self._execution_gate_capability
         if installed is None:
             # A CTP request feed may stay connected for read-only discovery,
@@ -816,6 +871,21 @@ class CtpRequestData(Feed):
         state = state_reader()
         if not isinstance(state, dict) or state.get("managed") is not True:
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
+        if managed_pair:
+            if (
+                not self._execution_bound_td_front
+                or not self._execution_bound_md_front
+                or self.ctp_env_profile != self._execution_bound_profile
+                or str(self.td_front or "").strip() != self._execution_bound_td_front
+                or str(self.md_front or "").strip() != self._execution_bound_md_front
+                or str(self.broker_id or "").strip() != self._execution_bound_broker_id
+                or str(self.user_id or "").strip() != self._execution_bound_user_id
+                or state.get("armed") is not False
+                or state.get("runtime_simnow_credential_binding_configured") is not True
+                or state.get("runtime_simnow_write_verifier_configured") is not True
+            ):
+                raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
+            return
         if state.get("armed") is not True:
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_unarmed")
         method(capability, symbol, exchange_id)
@@ -1077,10 +1147,16 @@ class CtpRequestData(Feed):
         field.RequestID = next_req_id
         submit = getattr(trader, "submit_order_insert", None)
         if callable(submit):
+            submit_kwargs = {"execution_capability": execution_capability}
+            if self._execution_bound_profile == "config_front_pair":
+                submit_kwargs.update(
+                    runtime_order_id=kwargs.get("runtime_order_id"),
+                    managed_intent_id=kwargs.get("managed_intent_id"),
+                )
             ret = submit(
                 field,
                 next_req_id,
-                execution_capability=execution_capability,
+                **submit_kwargs,
             )
         else:
             # Do not preserve a raw ``ReqOrderInsert`` compatibility fallback:

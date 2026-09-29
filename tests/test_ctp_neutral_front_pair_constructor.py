@@ -1,7 +1,10 @@
+import sys
+
 import pytest
 
 from bt_api_ctp.ctp.client import (
     CtpExecutionGateError,
+    CtpRuntimeSimNowCredentialBinding,
     TraderClient,
     _issue_ctp_execution_authority_for_core,
 )
@@ -11,6 +14,32 @@ from bt_api_ctp.feeds.live_ctp_feed import _resolve_ctp_runtime_kwargs
 _PROFILE = "config_front_pair"
 _TD_FRONT = "tcp://configured-td.invalid:41001"
 _MD_FRONT = "tcp://configured-md.invalid:41002"
+
+
+def test_missing_parent_approval_api_fails_closed_without_import_time_dependency(monkeypatch):
+    client = TraderClient(
+        _TD_FRONT,
+        "broker",
+        "account",
+        "password",
+        md_front=_MD_FRONT,
+        ctp_env_profile=_PROFILE,
+    )
+    capability = _issue_ctp_execution_authority_for_core()
+    client.configure_execution_gate(capability)
+    binding = CtpRuntimeSimNowCredentialBinding(
+        owner=object(),
+        approval_context=object(),
+        approval=object(),
+        credential_binding_verifier=object(),
+        td_front=_TD_FRONT,
+        md_front=_MD_FRONT,
+        environment_profile=_PROFILE,
+    )
+    monkeypatch.setitem(sys.modules, "bt_api_py", None)
+
+    with pytest.raises(CtpExecutionGateError, match="ctp_simnow_credential_binding_rejected"):
+        client.configure_runtime_simnow_credential_binding(capability, binding)
 
 
 def test_legacy_trader_client_constructor_keeps_its_existing_positional_shape():

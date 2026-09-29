@@ -50,7 +50,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Literal
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Callable, Literal
 from urllib.parse import urlsplit
 
 from bt_api_ctp.ctp_env_selector import is_official_simnow_td_front
@@ -65,6 +66,13 @@ from bt_api_ctp.query import (
     _query_records_digest,
     _QuerySessionScope,
 )
+
+if TYPE_CHECKING:
+    from bt_api_py._ctp_credential_binding import CtpCredentialBindingVerifier
+    from bt_api_py._ctp_execution_authorization import (
+        CtpExecutionApproval,
+        CtpExecutionApprovalContext,
+    )
 
 from . import _ctp_base
 from ._ctp_base import (
@@ -656,6 +664,7 @@ _CTP_MANAGED_ACTION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _CTP_MANAGED_ORDER_REF_RE = re.compile(r"^[0-9]{12}$")
 _CTP_MANAGED_ORDER_SYS_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 _CTP_MANAGED_NATIVE_ACTION_REF_RE = re.compile(r"^[0-9]{1,12}$")
+_CTP_MANAGED_SIMNOW_PROFILES = frozenset({"config_front_pair"})
 # The public API view is intentionally much narrower than the SWIG object.
 # Raw lifecycle calls can change the effective native connection while leaving
 # the Python-side immutable front binding unchanged.  Keep the tiny allowlist
@@ -669,6 +678,120 @@ class CtpExecutionGateError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+@dataclass(frozen=True)
+class CtpRuntimeSimNowCredentialBinding:
+    """Owner-bound approval handle for one configured SimNow TD/MD pair.
+
+    The handle contains no credential material or native execution capability.
+    An installed verifier must refresh the exact pair and approval before
+    every native write.
+    """
+
+    owner: object = dataclass_field(repr=False, compare=False)
+    approval_context: CtpExecutionApprovalContext = dataclass_field(repr=False, compare=False)
+    approval: CtpExecutionApproval = dataclass_field(repr=False, compare=False)
+    credential_binding_verifier: CtpCredentialBindingVerifier = dataclass_field(
+        repr=False, compare=False
+    )
+    td_front: str = dataclass_field(repr=False)
+    md_front: str = dataclass_field(repr=False)
+    environment_profile: str
+    write_intent_verifier: Callable[[Mapping[str, Any]], object] | None = dataclass_field(
+        default=None, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        for name in ("td_front", "md_front", "environment_profile"):
+            value = getattr(self, name)
+            if type(value) is not str or not value or value != value.strip():
+                raise ValueError("invalid CTP SimNow credential binding")
+
+
+_CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL = object()
+
+
+class _CtpRuntimeSimNowWriteAuthorization:
+    """One-native-call SimNow grant minted after the installed verifier passes.
+
+    The grant is intentionally private and carries only the exact session and
+    managed intent identity.  It is created and consumed while the client's
+    request lock is held, immediately before the typed native request.
+    """
+
+    __slots__ = (
+        "_seal",
+        "_client_ref",
+        "_capability",
+        "_operation",
+        "_td_front",
+        "_md_front",
+        "_environment_profile",
+        "_account_fingerprint",
+        "_trading_day",
+        "_connection_generation",
+        "_instrument_id",
+        "_exchange_id",
+        "_runtime_order_id",
+        "_managed_intent_id",
+        "_runtime_action_id",
+        "_managed_cancel_intent_id",
+        "_preflight_epoch",
+        "_used",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: object,
+        capability: object,
+        operation: str,
+        binding: CtpRuntimeSimNowCredentialBinding,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str,
+        managed_intent_id: str,
+        runtime_action_id: str | None,
+        managed_cancel_intent_id: str | None,
+        preflight_epoch: int,
+    ) -> None:
+        self._seal = _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL
+        self._client_ref = weakref.ref(client)
+        self._capability = capability
+        self._operation = operation
+        self._td_front = binding.td_front
+        self._md_front = (
+            client._bound_md_front
+            if client._bound_md_front is not None
+            else binding.md_front
+        )
+        self._environment_profile = (
+            client.ctp_env_profile
+            if client.ctp_env_profile is not None
+            else binding.environment_profile
+        )
+        self._account_fingerprint = f"acct_{client._account_fingerprint}"
+        self._trading_day = client._trading_day
+        self._connection_generation = client._connection_generation
+        self._instrument_id = instrument_id
+        self._exchange_id = exchange_id
+        self._runtime_order_id = runtime_order_id
+        self._managed_intent_id = managed_intent_id
+        self._runtime_action_id = runtime_action_id
+        self._managed_cancel_intent_id = managed_cancel_intent_id
+        self._preflight_epoch = preflight_epoch
+        self._used = False
+
+def _parse_utc_timestamp(value: Any) -> datetime:
+    """Parse a canonical UTC timestamp from a reviewed CTP approval."""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError("approval timestamp invalid")
+    parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ValueError("approval timestamp not UTC")
+    return parsed
 
 
 def _validate_managed_cancel_identity(
@@ -1554,6 +1677,90 @@ def _order_action_identity(field: Any) -> _OrderActionIdentity:
         instrument_id=_native_text_field(field, "InstrumentID"),
     )
 
+
+@dataclass(frozen=True)
+class _OrderInsertIdentity:
+    broker_id: str
+    investor_id: str
+    user_id: str
+    instrument_id: str
+    exchange_id: str
+    order_ref: str
+    field_request_id: int | None
+
+
+def _order_insert_identity(field: Any) -> _OrderInsertIdentity:
+    return _OrderInsertIdentity(
+        broker_id=_native_text_field(field, "BrokerID"),
+        investor_id=_native_text_field(field, "InvestorID"),
+        user_id=_native_text_field(field, "UserID"),
+        instrument_id=_native_text_field(field, "InstrumentID"),
+        exchange_id=_native_text_field(field, "ExchangeID"),
+        order_ref=_native_text_field(field, "OrderRef"),
+        field_request_id=_native_int_field(field, "RequestID"),
+    )
+
+
+@dataclass(frozen=True)
+class CtpOrderInsertEvidence:
+    """Immutable evidence from one native CTP order-insert callback.
+
+    ``accepted`` records a successful, exact ``OnRspOrderInsert`` response
+    only. It is not an exchange order acknowledgement or fill; callers must
+    use native order/trade readback for those facts. A local ReqOrderInsert
+    return code without a matching callback remains ``unknown``.
+    """
+
+    request_id: int
+    order_ref: str
+    status: str
+    account_fingerprint: str = dataclass_field(repr=False)
+    trading_day: str
+    connection_generation: int
+    instrument_id: str
+    exchange_id: str
+    evidence_source: str
+    callback_received: bool
+    evidence_received: bool
+    error_code: int | None
+    error_message: str
+    reason: str
+    submitted_at_utc: datetime
+    observed_at_utc: datetime | None
+    submit_code: int | None
+
+    @property
+    def is_known(self) -> bool:
+        """Whether an exact callback produced a non-UNKNOWN result."""
+
+        return self.evidence_received and self.status != "unknown"
+
+    def as_dict(self, *, include_error_message: bool = False) -> dict[str, Any]:
+        """Return a detached JSON-friendly snapshot with secrets redacted."""
+
+        result = {
+            "request_id": self.request_id,
+            "order_ref": self.order_ref,
+            "status": self.status,
+            "account_fingerprint": "<redacted>",
+            "trading_day": self.trading_day,
+            "connection_generation": self.connection_generation,
+            "instrument_id": self.instrument_id,
+            "exchange_id": self.exchange_id,
+            "evidence_source": self.evidence_source,
+            "callback_received": self.callback_received,
+            "evidence_received": self.evidence_received,
+            "error_code": self.error_code,
+            "error_message": self.error_message if include_error_message else "",
+            "reason": self.reason,
+            "submitted_at_utc": self.submitted_at_utc.isoformat(),
+            "observed_at_utc": (
+                self.observed_at_utc.isoformat() if self.observed_at_utc is not None else None
+            ),
+            "submit_code": self.submit_code,
+            "is_known": self.is_known,
+        }
+        return result
 
 class _QueryRecordSnapshot(dict[str, Any]):
     """Detached CTP query row retaining legacy attribute-style reads."""
@@ -3550,6 +3757,14 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
         if not self._is_current():
             return
+        self._c._handle_order_insert_response(
+            pInputOrder,
+            pRspInfo,
+            nRequestID,
+            bIsLast,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
         self._c._push_error_event(
             event_type="order_insert_response",
             rsp_info=pRspInfo,
@@ -3561,6 +3776,12 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnErrRtnOrderInsert(self, pInputOrder, pRspInfo):
         if not self._is_current():
             return
+        self._c._handle_order_insert_error(
+            pInputOrder,
+            pRspInfo,
+            origin_api=self._native_api,
+            origin_spi=self,
+        )
         self._c._push_error_event(
             event_type="order_insert_error",
             rsp_info=pRspInfo,
@@ -3759,6 +3980,9 @@ class TraderClient:
         self._query_state_lock = threading.RLock()
         self._query_history: dict[int, _QueryAccumulator] = {}
         self._order_action_history: dict[tuple[int, str], CtpOrderActionEvidence] = {}
+        self._order_insert_history: dict[tuple[int, str], CtpOrderInsertEvidence] = {}
+        self._order_insert_identities: dict[tuple[int, str], _OrderInsertIdentity] = {}
+        self._order_insert_late_callback_count = 0
         self._order_action_identities: dict[tuple[int, str], _OrderActionIdentity] = {}
         self._managed_cancel_actions_seen: set[str] = set()
         self._order_action_late_callback_count = 0
@@ -3776,6 +4000,7 @@ class TraderClient:
         self._execution_gate_cycle_id: str | None = None
         self._execution_gate_revocation_reason: str | None = None
         self._execution_gate_native_api = None
+        self._runtime_simnow_credential_binding: CtpRuntimeSimNowCredentialBinding | None = None
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -4157,6 +4382,8 @@ class TraderClient:
         *args: Any,
         request_submitter: Callable[[Any, tuple[Any, ...]], Any] | None = None,
         settlement_authorization: Any = None,
+        simnow_write_authorization: _CtpRuntimeSimNowWriteAuthorization | None = None,
+        pre_dispatch: Callable[[], None] | None = None,
     ) -> Any:
         """Invoke a pinned session Req with every SDK lock released.
 
@@ -4173,6 +4400,32 @@ class TraderClient:
                 if state is not None:
                     self._poison_callback_ingress_locked("source_identity_mismatch")
                 raise CtpExecutionGateError("ctp_managed_native_request_source_mismatch")
+            if method_name in {"ReqOrderInsert", "ReqOrderAction"}:
+                if self._is_simnow_write_restricted_locked():
+                    authorization = simnow_write_authorization
+                    if type(authorization) is not _CtpRuntimeSimNowWriteAuthorization:
+                        raise CtpExecutionGateError("ctp_simnow_write_authorization_required")
+                    if len(args) != 2:
+                        raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+                    self._consume_runtime_simnow_write_authorization_locked(
+                        authorization,
+                        capability=authorization._capability,
+                        operation=(
+                            "insert" if method_name == "ReqOrderInsert" else "cancel"
+                        ),
+                        native_field=args[0],
+                        request_id=args[1],
+                        instrument_id=authorization._instrument_id,
+                        exchange_id=authorization._exchange_id,
+                        runtime_order_id=authorization._runtime_order_id,
+                        managed_intent_id=authorization._managed_intent_id,
+                        runtime_action_id=authorization._runtime_action_id,
+                        managed_cancel_intent_id=authorization._managed_cancel_intent_id,
+                    )
+                elif simnow_write_authorization is not None:
+                    raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+            elif simnow_write_authorization is not None:
+                raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
             if state is not None:
                 if state.poisoned or state.phase not in {"PRE_LOGIN", "ACTIVE"}:
                     raise CtpExecutionGateError("ctp_callback_ingress_owner_poisoned")
@@ -4232,6 +4485,12 @@ class TraderClient:
                 if state is not None:
                     self._poison_callback_ingress_locked("native_call_lease_failure")
                 raise CtpExecutionGateError("ctp_native_request_submitter_unavailable")
+            if pre_dispatch is not None:
+                if method_name not in {"ReqOrderInsert", "ReqOrderAction"} or not callable(
+                    pre_dispatch
+                ):
+                    raise CtpExecutionGateError("ctp_native_request_dispatch_hook_invalid")
+                pre_dispatch()
             if state is not None:
                 state.native_call_refs += 1
             self._native_request_inflight_refs += 1
@@ -4505,9 +4764,14 @@ class TraderClient:
                     or request_id != envelope["native_request_id"]
                 ):
                     raise CtpExecutionGateError("ctp_managed_native_call_binding_changed")
+                if (
+                    self._is_simnow_write_restricted_locked()
+                    and self._runtime_simnow_credential_binding is None
+                ):
+                    raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
                 detached_extras: dict[str, Any] = {}
-                if envelope["operation"] == "CANCEL":
-                    detached_extras = {"RequestID": envelope["native_request_id"]}
+                if envelope["operation"] == "CANCEL" or self._is_simnow_write_restricted_locked():
+                    detached_extras["RequestID"] = envelope["native_request_id"]
                 for field_name, expected_identity in (
                     ("BrokerID", self._bound_broker_id),
                     ("InvestorID", self._bound_user_id),
@@ -4540,9 +4804,41 @@ class TraderClient:
                         or payload.get("ActionFlag") != "0"
                     ):
                         raise CtpExecutionGateError("ctp_managed_native_cancel_field_mismatch")
-                # The Store lease pins a native call, but a front classified as
-                # official SimNow also requires runtime credential admission.
-                self._reject_official_simnow_write_locked()
+                if self._is_simnow_write_restricted_locked():
+                    # V2 CANCEL does not carry a separate runtime action ID.
+                    # Never infer it from the managed intent or Store action ID.
+                    if envelope["operation"] != "SUBMIT":
+                        raise CtpExecutionGateError("ctp_simnow_runtime_action_id_required")
+                    self._require_native_field_identity_locked(
+                        detached, require_user_id=True
+                    )
+                    insert_identity = _order_insert_identity(detached)
+                    if (
+                        insert_identity.order_ref != envelope["order_ref"]
+                        or insert_identity.field_request_id != request_id
+                    ):
+                        raise CtpExecutionGateError("ctp_managed_native_insert_field_mismatch")
+                    authorization = self._require_execution_write_locked(
+                        self._execution_gate_capability,
+                        insert_identity.instrument_id,
+                        insert_identity.exchange_id,
+                        operation="insert",
+                        runtime_order_id=envelope["runtime_order_id"],
+                        managed_intent_id=envelope["reservation_managed_intent_id"],
+                    )
+                    self._consume_runtime_simnow_write_authorization_locked(
+                        authorization,
+                        capability=self._execution_gate_capability,
+                        operation="insert",
+                        native_field=detached,
+                        request_id=request_id,
+                        instrument_id=insert_identity.instrument_id,
+                        exchange_id=insert_identity.exchange_id,
+                        runtime_order_id=envelope["runtime_order_id"],
+                        managed_intent_id=envelope["reservation_managed_intent_id"],
+                        runtime_action_id=None,
+                        managed_cancel_intent_id=None,
+                    )
                 native_method = getattr(lease._api, method_name, None)
                 if not callable(native_method):
                     raise CtpExecutionGateError("ctp_managed_native_call_method_unavailable")
@@ -4938,6 +5234,7 @@ class TraderClient:
         return (
             is_official_simnow_td_front(self._bound_front)
             or self.ctp_env_profile == "config_front_pair"
+            or self._runtime_simnow_credential_binding is not None
         )
 
     def _reject_official_simnow_write_locked(self) -> None:
@@ -5074,6 +5371,13 @@ class TraderClient:
             "environment_profile": self._execution_gate_environment_profile,
             "proof_sha256": self._execution_gate_proof_sha256,
             "revocation_reason": self._execution_gate_revocation_reason,
+            "runtime_simnow_credential_binding_configured": (
+                self._runtime_simnow_credential_binding is not None
+            ),
+            "runtime_simnow_write_verifier_configured": bool(
+                self._runtime_simnow_credential_binding is not None
+                and callable(self._runtime_simnow_credential_binding.write_intent_verifier)
+            ),
         }
 
     def get_execution_gate_state(self) -> dict[str, Any]:
@@ -5081,6 +5385,577 @@ class TraderClient:
 
         with self._query_state_lock:
             return self._execution_gate_state_locked()
+
+    def configure_runtime_simnow_credential_binding(
+        self,
+        capability: object,
+        binding: CtpRuntimeSimNowCredentialBinding,
+    ) -> dict[str, Any]:
+        """Install a reviewed verifier handle for this exact runtime front pair."""
+
+        if type(binding) is not CtpRuntimeSimNowCredentialBinding:
+            raise CtpExecutionGateError("ctp_simnow_credential_binding_required")
+        with self._query_state_lock:
+            if (
+                not _is_ctp_core_execution_authority(capability)
+                or capability is not self._execution_gate_capability
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            if self._execution_gate_proof is not None:
+                raise CtpExecutionGateError(
+                    "ctp_simnow_credential_binding_requires_disarmed_gate"
+                )
+            if binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES:
+                raise CtpExecutionGateError("ctp_simnow_bounded_profile_required")
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            self._runtime_simnow_credential_binding = binding
+            return {
+                "configured": True,
+                "environment_profile": binding.environment_profile,
+                "connection_generation": self._connection_generation,
+            }
+
+    def _validate_runtime_simnow_credential_binding_locked(
+        self,
+        binding: CtpRuntimeSimNowCredentialBinding,
+    ) -> None:
+        """Refresh the SDK-sealed approval context and bind it to this client."""
+
+        try:
+            from bt_api_py import CtpExecutionApprovalContext
+            from bt_api_py._ctp_credential_binding import _is_verifier, _new_scope
+            from bt_api_py._ctp_execution_authorization import (
+                _CAPABILITY_SEAL,
+                SIMNOW_APPROVAL_SCHEMA_VERSION,
+                SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                _refresh_runtime_context,
+            )
+
+            if (
+                binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES
+                or binding.td_front != self._bound_front
+                or (
+                    binding.environment_profile == "config_front_pair"
+                    and (
+                        self._bound_md_front is None
+                        or self.ctp_env_profile != "config_front_pair"
+                    )
+                )
+                or (
+                    self._bound_md_front is not None
+                    and binding.md_front != self._bound_md_front
+                )
+                or (
+                    self.ctp_env_profile is not None
+                    and binding.environment_profile != self.ctp_env_profile
+                )
+                or _is_verifier(binding.credential_binding_verifier, owner=binding.owner)
+                is not True
+                or type(binding.approval_context) is not CtpExecutionApprovalContext
+                or getattr(binding.approval_context, "_owner", None) is not binding.owner
+            ):
+                raise ValueError("binding identity rejected")
+            approval = binding.approval
+            if (
+                type(approval).__module__ != "bt_api_py._ctp_execution_authorization"
+                or type(approval).__name__ != "CtpExecutionApproval"
+                or getattr(approval, "_seal", None) is not _CAPABILITY_SEAL
+                or getattr(approval, "schema_version", None)
+                not in {
+                    SIMNOW_APPROVAL_SCHEMA_VERSION,
+                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                }
+            ):
+                raise ValueError("approval type rejected")
+
+            context_refresh = getattr(binding.approval_context, "_refresh", None)
+            code = getattr(context_refresh, "__code__", None)
+            closure = getattr(context_refresh, "__closure__", None) or ()
+            closure_values = dict(zip(getattr(code, "co_freevars", ()), closure))
+            captured = {
+                name: getattr(cell, "cell_contents", None)
+                for name, cell in closure_values.items()
+            }
+            if (
+                captured.get("credential_binding_verifier")
+                is not binding.credential_binding_verifier
+                or captured.get("self") is not binding.owner
+            ):
+                raise ValueError("approval verifier owner mismatch")
+            refreshed = _refresh_runtime_context(binding.approval_context, binding.owner)
+            current = refreshed.as_dict()
+            payload = approval.payload
+            if not isinstance(payload, Mapping):
+                raise ValueError("approval payload rejected")
+
+            # This verifies the current key/config/front HMAC through the
+            # context's owner-bound refresh closure, then pins its result to
+            # the already signature-verified approval. No HMAC key or
+            # credential value crosses the SDK boundary.
+            binding_fields = (
+                "credential_binding_key_id",
+                "credential_binding_hmac_sha256",
+            )
+            if any(
+                not isinstance(current.get(name), str)
+                or not current.get(name)
+                or current.get(name) != payload.get(name)
+                for name in binding_fields
+            ):
+                raise ValueError("credential binding changed")
+
+            context_fields = (
+                "account_fingerprint",
+                "trading_day",
+                "connection_generation",
+                "environment_profile",
+                "strategy_identity_sha256",
+                "execution_cycle_id",
+                "configuration_sha256",
+                "backtrader_sha256",
+                "bt_api_py_sha256",
+                "bt_api_ctp_sha256",
+                "bt_api_base_sha256",
+                "native_sha256",
+                "dependency_hashes_sha256",
+                "preflight_sha256",
+                "evidence_sha256",
+            )
+            if any(current.get(name) != payload.get(name) for name in context_fields):
+                raise ValueError("approval scope changed")
+
+            # The signature/revocation list were checked when the approval
+            # was installed. This client has no fresh deployment trust root,
+            # but it still rejects expired approval and revocation windows.
+            now = datetime.now(timezone.utc)
+            revocation_snapshot = getattr(approval, "revocation_snapshot", None)
+            if (
+                now < _parse_utc_timestamp(payload.get("not_before"))
+                or now >= _parse_utc_timestamp(payload.get("expires_at"))
+                or not isinstance(revocation_snapshot, Mapping)
+                or revocation_snapshot.get("version")
+                != payload.get("revocation_snapshot_version")
+                or now >= _parse_utc_timestamp(revocation_snapshot.get("expires_at"))
+            ):
+                raise ValueError("approval or revocation snapshot expired")
+
+            expected_account = f"acct_{self._account_fingerprint}"
+            expected_account_sha256 = hashlib.sha256(
+                f"{self._bound_broker_id}:{self._bound_user_id}".encode("utf-8", "strict")
+            ).hexdigest()
+            if (
+                current.get("environment_profile") != binding.environment_profile
+                or current.get("account_fingerprint") != expected_account
+                or expected_account_sha256[:16] != self._account_fingerprint
+                or current.get("trading_day") != self._trading_day
+                or current.get("connection_generation") != self._connection_generation
+                or self.auto_settlement_confirm is not False
+                or self._connected is not True
+                or self._session_native_api is None
+                or self._session_native_api is not self._api
+                or self._current_login_identity_locked() is None
+                or self._bound_identity_is_current(require_active_front=True) is not True
+                or self._session_native_front != binding.td_front
+            ):
+                raise ValueError("live CTP identity changed")
+
+            feeds = getattr(binding.owner, "exchange_feeds", None)
+            if not isinstance(feeds, Mapping):
+                raise ValueError("approval owner feed unavailable")
+            matched_feeds = []
+            for name, feed in feeds.items():
+                if str(name).partition("___")[0].upper() != "CTP":
+                    continue
+                native_trader = getattr(feed, "_trader", None)
+                if native_trader is None:
+                    native_trader = getattr(feed, "trader_client", None)
+                if native_trader is self:
+                    matched_feeds.append((str(name), feed))
+            if len(matched_feeds) != 1:
+                raise ValueError("approval owner is not bound to this trader")
+            exchange_name, feed = matched_feeds[0]
+            test_verifier = bool(
+                getattr(
+                    binding.credential_binding_verifier,
+                    "_is_controlled_test_verifier",
+                    False,
+                )
+            )
+            if captured.get("exchange_name") != exchange_name and not test_verifier:
+                raise ValueError("approval context is bound to a different CTP feed")
+
+            # Bind both configured fronts to the currently active feed pair.
+            # The SDK address registry is not the authority for custom fronts;
+            # the owner-bound verifier below authenticates the exact pair and
+            # its environment/configuration at this native client boundary.
+            if test_verifier:
+                trader = getattr(feed, "_trader", None)
+                if trader is None:
+                    trader = getattr(feed, "trader_client", None)
+                md_client = getattr(feed, "_md_client", None)
+                front_scope = {
+                    "td_front": str(getattr(trader, "front", "") or "").strip(),
+                    "md_front": str(getattr(md_client, "front", "") or "").strip(),
+                    "md_connection_generation": getattr(
+                        md_client, "connection_generation", None
+                    ),
+                    "md_stream_generation": getattr(feed, "_md_stream_generation", None),
+                }
+                if (
+                    front_scope["td_front"]
+                    != str(getattr(trader, "_bound_front", "") or "").strip()
+                    or front_scope["td_front"]
+                    != str(getattr(feed, "_execution_bound_td_front", "") or "").strip()
+                    or front_scope["md_front"]
+                    != str(getattr(feed, "_execution_bound_md_front", "") or "").strip()
+                ):
+                    raise ValueError("test front scope mismatch")
+            else:
+                front_reader = getattr(binding.owner, "_ctp_credential_binding_fronts", None)
+                if not callable(front_reader):
+                    raise ValueError("runtime front proof unavailable")
+                front_scope = front_reader(
+                    exchange_name,
+                    feed,
+                    current,
+                    binding.credential_binding_verifier,
+                    operation="configure_runtime_simnow_credential_binding",
+                )
+            if (
+                not isinstance(front_scope, Mapping)
+                or front_scope.get("td_front") != binding.td_front
+                or front_scope.get("md_front") != binding.md_front
+                or binding.td_front != self._bound_front
+            ):
+                raise ValueError("runtime-selected front pair mismatch")
+
+            front_binding_scope = _new_scope(
+                {
+                    "account_fingerprint": current["account_fingerprint"],
+                    "account_fingerprint_sha256": expected_account_sha256,
+                    "trading_day": current["trading_day"],
+                    "connection_generation": current["connection_generation"],
+                    "environment_profile": current["environment_profile"],
+                    "td_front": binding.td_front,
+                    "md_front": binding.md_front,
+                    "td_front_sha256": hashlib.sha256(
+                        binding.td_front.encode("utf-8", "strict")
+                    ).hexdigest(),
+                    "md_front_sha256": hashlib.sha256(
+                        binding.md_front.encode("utf-8", "strict")
+                    ).hexdigest(),
+                    "backtrader_sha256": payload["backtrader_sha256"],
+                    "backtrader_runtime_sha256": (
+                        binding.credential_binding_verifier.package_sha256
+                    ),
+                    "bt_api_py_sha256": payload["bt_api_py_sha256"],
+                    "bt_api_ctp_sha256": payload["bt_api_ctp_sha256"],
+                    "bt_api_base_sha256": payload["bt_api_base_sha256"],
+                    "native_sha256": payload["native_sha256"],
+                    "dependency_hashes_sha256": payload["dependency_hashes_sha256"],
+                    "configuration_sha256": payload["configuration_sha256"],
+                    "strategy_identity_sha256": payload["strategy_identity_sha256"],
+                    "preflight_sha256": payload["preflight_sha256"],
+                    "evidence_sha256": payload["evidence_sha256"],
+                    "md_connection_generation": front_scope[
+                        "md_connection_generation"
+                    ],
+                    "md_stream_generation": front_scope["md_stream_generation"],
+                }
+            )
+            selected_pair_binding = binding.credential_binding_verifier.refresh(
+                front_binding_scope,
+                owner=binding.owner,
+                operation="configure_runtime_simnow_credential_binding",
+            )
+            if any(
+                selected_pair_binding.get(name) != payload.get(name)
+                for name in binding_fields
+            ):
+                raise ValueError("selected front pair credential binding mismatch")
+        except CtpExecutionGateError:
+            raise
+        except Exception as exc:
+            raise CtpExecutionGateError(
+                "ctp_simnow_credential_binding_rejected"
+            ) from exc
+
+    def _require_runtime_simnow_credential_binding_locked(
+        self,
+        *,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
+    ) -> None:
+        """Revalidate SimNow approval scope/HMAC at the last Python boundary."""
+
+        binding = self._runtime_simnow_credential_binding
+        if binding is None:
+            raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+        try:
+            if (
+                not isinstance(runtime_order_id, str)
+                or not runtime_order_id.startswith("bt-managed-v1:")
+                or len(runtime_order_id) != len("bt-managed-v1:") + 64
+                or any(char not in "0123456789abcdef" for char in runtime_order_id[14:])
+                or not isinstance(managed_intent_id, str)
+                or not managed_intent_id
+                or managed_intent_id != managed_intent_id.strip()
+                or len(managed_intent_id) > 256
+                or not managed_intent_id.isascii()
+                or any(not (char.isalnum() or char in "._:-") for char in managed_intent_id)
+                or (runtime_action_id is not None and (
+                    not isinstance(runtime_action_id, str)
+                    or not runtime_action_id
+                    or runtime_action_id != runtime_action_id.strip()
+                    or len(runtime_action_id) > 256
+                    or not runtime_action_id.isascii()
+                    or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
+                ))
+                or (managed_cancel_intent_id is not None and (
+                    not isinstance(managed_cancel_intent_id, str)
+                    or not managed_cancel_intent_id
+                    or managed_cancel_intent_id != managed_cancel_intent_id.strip()
+                    or len(managed_cancel_intent_id) > 256
+                    or not managed_cancel_intent_id.isascii()
+                    or any(
+                        not (char.isalnum() or char in "._:-")
+                        for char in managed_cancel_intent_id
+                    )
+                ))
+            ):
+                raise ValueError("managed CTP identity invalid")
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            payload = binding.approval.payload
+            if runtime_action_id is None:
+                from bt_api_py._ctp_execution_authorization import (
+                    APPROVAL_PURPOSE,
+                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
+                )
+
+                instrument = {"instrument_id": instrument_id, "exchange_id": exchange_id}
+                authorized = payload.get("authorized_instruments")
+                if (
+                    payload.get("purpose") != APPROVAL_PURPOSE
+                    or payload.get("schema_version")
+                    != SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION
+                    or instrument not in authorized
+                    or payload.get("primary_instrument") != instrument
+                    or managed_cancel_intent_id is not None
+                ):
+                    raise ValueError("entry approval scope mismatch")
+            else:
+                from bt_api_py._ctp_execution_authorization import (
+                    RECOVERY_APPROVAL_PURPOSE,
+                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
+                )
+
+                now = datetime.now(timezone.utc)
+                actions = payload.get("recovery_actions")
+                matching = [
+                    action
+                    for action in actions or ()
+                    if isinstance(action, Mapping)
+                    and action.get("action_id") == managed_cancel_intent_id
+                ]
+                if (
+                    payload.get("purpose") != RECOVERY_APPROVAL_PURPOSE
+                    or payload.get("schema_version")
+                    != SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION
+                    or len(matching) != 1
+                    or matching[0].get("action_kind") != "cancel"
+                    or matching[0].get("instrument_id") != instrument_id
+                    or matching[0].get("exchange_id") != exchange_id
+                    or matching[0].get("account_fingerprint")
+                    != payload.get("account_fingerprint")
+                    or matching[0].get("trading_day") != payload.get("trading_day")
+                    or matching[0].get("connection_generation")
+                    != payload.get("connection_generation")
+                    or matching[0].get("environment_profile")
+                    != payload.get("environment_profile")
+                    or now >= _parse_utc_timestamp(matching[0].get("expires_at"))
+                ):
+                    raise ValueError("recovery approval scope mismatch")
+        except CtpExecutionGateError:
+            self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
+            raise
+        except Exception as exc:
+            self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
+            raise CtpExecutionGateError(
+                "ctp_simnow_credential_binding_rejected"
+            ) from exc
+
+    def _consume_runtime_simnow_write_authorization_locked(
+        self,
+        authorization: _CtpRuntimeSimNowWriteAuthorization | None,
+        *,
+        capability: object,
+        operation: str,
+        native_field: Any,
+        request_id: int,
+        instrument_id: str,
+        exchange_id: str,
+        runtime_order_id: str | None,
+        managed_intent_id: str | None,
+        runtime_action_id: str | None,
+        managed_cancel_intent_id: str | None,
+    ) -> None:
+        """Consume a SimNow grant at the final typed native request boundary."""
+
+        if not self._is_simnow_write_restricted_locked():
+            if authorization is not None:
+                raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+            return
+        if (
+            type(authorization) is not _CtpRuntimeSimNowWriteAuthorization
+            or authorization._seal is not _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL
+            or authorization._client_ref() is not self
+            or authorization._capability is not capability
+            or authorization._used
+        ):
+            raise CtpExecutionGateError("ctp_simnow_write_authorization_required")
+        binding = self._runtime_simnow_credential_binding
+        if (
+            binding is None
+            or authorization._preflight_epoch != self._execution_preflight_epoch
+            or authorization._operation != operation
+            or authorization._td_front != self._bound_front
+            or authorization._td_front != binding.td_front
+            or authorization._md_front != binding.md_front
+            or authorization._environment_profile != binding.environment_profile
+            or binding.environment_profile not in _CTP_MANAGED_SIMNOW_PROFILES
+            or authorization._account_fingerprint != f"acct_{self._account_fingerprint}"
+            or authorization._trading_day != self._trading_day
+            or authorization._connection_generation != self._connection_generation
+            or authorization._instrument_id != instrument_id
+            or authorization._exchange_id != exchange_id
+            or authorization._runtime_order_id != (runtime_order_id or "")
+            or authorization._managed_intent_id != (managed_intent_id or "")
+            or authorization._runtime_action_id != runtime_action_id
+            or authorization._managed_cancel_intent_id != managed_cancel_intent_id
+            or capability is not self._execution_gate_capability
+            or not self._bound_identity_is_current(require_active_front=True)
+            or not self.is_trading_ready
+            or self.auto_settlement_confirm is not False
+            or self._api is None
+            or self._api is not self._session_native_api
+        ):
+            authorization._used = True
+            self._revoke_execution_gate_locked("ctp_simnow_write_authorization_scope_mismatch")
+            raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+        verifier = binding.write_intent_verifier
+        if not callable(verifier):
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_required")
+
+        try:
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+            if operation == "insert":
+                identity = _order_insert_identity(native_field)
+                raw_volume = getattr(native_field, "VolumeTotalOriginal", None)
+                if isinstance(raw_volume, bool) or type(raw_volume) is not int or raw_volume <= 0:
+                    raise ValueError("native order volume invalid")
+                try:
+                    price = Decimal(str(getattr(native_field, "LimitPrice", "")))
+                except (InvalidOperation, TypeError, ValueError):
+                    raise ValueError("native limit price invalid") from None
+                if not price.is_finite() or price <= 0:
+                    raise ValueError("native limit price invalid")
+                direction = _native_text_field(native_field, "Direction")
+                offset = _native_text_field(native_field, "CombOffsetFlag")
+                hedge = _native_text_field(native_field, "CombHedgeFlag")
+                order_price_type = _native_text_field(native_field, "OrderPriceType")
+                time_condition = _native_text_field(native_field, "TimeCondition")
+                volume_condition = _native_text_field(native_field, "VolumeCondition")
+                if (
+                    direction not in {"0", "1"}
+                    or offset not in {"0", "1", "2", "3", "4", "5", "6"}
+                    or hedge not in {"1", "2", "3", "5", "6", "7"}
+                    or order_price_type != "2"
+                    or time_condition != "3"
+                    or volume_condition != "1"
+                    or identity.instrument_id != instrument_id
+                    or identity.exchange_id != exchange_id
+                    or identity.field_request_id != request_id
+                ):
+                    raise ValueError("native order fields invalid")
+                operation_scope: dict[str, Any] = {
+                    "order_ref": identity.order_ref,
+                    "direction": direction,
+                    "offset_flag": offset,
+                    "hedge_flag": hedge,
+                    "volume_total_original": raw_volume,
+                    "limit_price": format(price.normalize(), "f"),
+                    "order_price_type": order_price_type,
+                    "time_condition": time_condition,
+                    "volume_condition": volume_condition,
+                }
+            else:
+                identity = _order_action_identity(native_field)
+                if (
+                    identity.action_flag != "0"
+                    or not identity.order_action_ref
+                    or not (
+                        (identity.order_ref and identity.front_id and identity.session_id)
+                        or (identity.order_sys_id and identity.exchange_id)
+                    )
+                ):
+                    raise ValueError("native cancel target invalid")
+                operation_scope = {
+                    "order_action_ref": identity.order_action_ref,
+                    "action_flag": identity.action_flag,
+                    "target_order_ref": identity.order_ref,
+                    "target_front_id": identity.front_id or 0,
+                    "target_session_id": identity.session_id or 0,
+                    "target_order_sys_id": identity.order_sys_id,
+                }
+            scope = MappingProxyType(
+                {
+                    "schema_version": "ctp-simnow-managed-write-v1",
+                    "operation": operation,
+                    "td_front": authorization._td_front,
+                    "md_front": authorization._md_front,
+                    "environment_profile": authorization._environment_profile,
+                    "account_fingerprint": authorization._account_fingerprint,
+                    "trading_day": authorization._trading_day,
+                    "connection_generation": authorization._connection_generation,
+                    "instrument_id": authorization._instrument_id,
+                    "exchange_id": authorization._exchange_id,
+                    "runtime_order_id": authorization._runtime_order_id,
+                    "managed_intent_id": authorization._managed_intent_id,
+                    "runtime_action_id": authorization._runtime_action_id,
+                    "managed_cancel_intent_id": authorization._managed_cancel_intent_id,
+                    "request_id": request_id,
+                    "approval_id": str(binding.approval.approval_id),
+                    "approval_nonce": str(binding.approval.nonce),
+                    "approval_payload_sha256": str(binding.approval.payload_sha256),
+                    **operation_scope,
+                }
+            )
+            approved = verifier(scope)
+        except CtpExecutionGateError:
+            authorization._used = True
+            raise
+        except Exception as exc:
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_rejected") from exc
+        if approved is not True:
+            authorization._used = True
+            raise CtpExecutionGateError("ctp_simnow_write_verifier_rejected")
+        try:
+            # The risk callback is trusted application code but may take time.
+            # Refresh the signed environment/account/front binding once more
+            # after it returns, immediately before native dispatch.
+            self._validate_runtime_simnow_credential_binding_locked(binding)
+        except CtpExecutionGateError:
+            authorization._used = True
+            raise
+        authorization._used = True
 
     def configure_execution_gate(self, capability: object) -> dict[str, Any]:
         """Install the SDK-owned opaque capability and start disarmed."""
@@ -5268,6 +6143,7 @@ class TraderClient:
         self._execution_gate_strategy_identity_sha256 = None
         self._execution_gate_cycle_id = None
         self._execution_gate_native_api = None
+        self._runtime_simnow_credential_binding = None
         self._execution_gate_revocation_reason = _execution_gate_reason(reason)
 
     def _require_execution_write_locked(
@@ -5275,8 +6151,66 @@ class TraderClient:
         capability: object | None,
         instrument: Any,
         exchange_id: Any = None,
-    ) -> None:
-        self._reject_official_simnow_write_locked()
+        *,
+        operation: str | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
+    ) -> _CtpRuntimeSimNowWriteAuthorization | None:
+        if self._is_simnow_write_restricted_locked():
+            if operation not in {"insert", "cancel"}:
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_required")
+            if operation == "insert" and (
+                runtime_action_id is not None or managed_cancel_intent_id is not None
+            ):
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
+            if operation == "cancel" and (
+                not runtime_action_id or not managed_cancel_intent_id
+            ):
+                raise CtpExecutionGateError("ctp_simnow_managed_operation_scope_mismatch")
+            installed = self._execution_gate_capability
+            if (
+                not _is_ctp_core_execution_authority(capability)
+                or installed is None
+                or capability is not installed
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            self._require_bound_identity_locked(require_active_front=True)
+            if (
+                self.auto_settlement_confirm is not False
+                or not self.is_trading_ready
+                or self._api is None
+                or self._api is not self._session_native_api
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_session_not_trading_ready")
+            self._require_runtime_simnow_credential_binding_locked(
+                instrument_id=str(instrument or ""),
+                exchange_id=str(exchange_id or ""),
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+            )
+            binding = self._runtime_simnow_credential_binding
+            if binding is None:
+                raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+            canonical_instrument = canonical_ctp_instrument(instrument, exchange_id)
+            if not canonical_instrument:
+                raise CtpExecutionGateError("ctp_execution_gate_instrument_mismatch")
+            return _CtpRuntimeSimNowWriteAuthorization(
+                client=self,
+                capability=capability,
+                operation=operation,
+                binding=binding,
+                instrument_id=str(instrument or ""),
+                exchange_id=str(exchange_id or ""),
+                runtime_order_id=str(runtime_order_id or ""),
+                managed_intent_id=str(managed_intent_id or ""),
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+                preflight_epoch=self._execution_preflight_epoch,
+            )
         installed = self._execution_gate_capability
         if installed is None:
             raise CtpExecutionGateError("ctp_execution_gate_capability_required")
@@ -5639,23 +6573,310 @@ class TraderClient:
         request_id: int,
         *,
         execution_capability: object | None = None,
+        runtime_order_id: str | None = None,
+        managed_intent_id: str | None = None,
     ) -> Any:
-        """Submit one order under the same lock as the final managed-gate check."""
+        """Submit one order and retain its exact native callback evidence."""
 
         with self._query_state_lock:
             if self._callback_ingress is not None:
                 raise CtpExecutionGateError("ctp_managed_native_call_lease_required")
-            self._require_execution_write_locked(
+            authorization = self._require_execution_write_locked(
                 execution_capability,
                 getattr(field, "InstrumentID", ""),
                 getattr(field, "ExchangeID", ""),
+                operation="insert",
+                runtime_order_id=runtime_order_id,
+                managed_intent_id=managed_intent_id,
             )
             self._require_native_field_identity_locked(field, require_user_id=True)
             api = self._api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
+            if type(request_id) is not int or request_id <= 0:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_invalid")
+            if type(getattr(field, "RequestID", None)) is not int:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_field_request_id_invalid")
+            identity = _order_insert_identity(field)
+            if identity.field_request_id != request_id:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_field_request_id_mismatch")
+            if not identity.order_ref:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_order_ref_missing")
+            if not all(
+                (
+                    identity.broker_id,
+                    identity.investor_id,
+                    identity.user_id,
+                    identity.instrument_id,
+                    identity.exchange_id,
+                )
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_native_identity_incomplete")
+            if (
+                type(self._connection_generation) is not int
+                or self._connection_generation <= 0
+                or type(self._trading_day) is not str
+                or len(self._trading_day) != 8
+                or not self._trading_day.isascii()
+                or not self._trading_day.isdigit()
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_session_identity_incomplete")
+            key = (request_id, identity.order_ref)
+            if key in self._order_insert_history:
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_identity_reused")
+            if any(
+                known_request_id == request_id for known_request_id, _ in self._order_insert_history
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
+        def record_dispatch() -> None:
+            # Called under the final native-request lock only after the
+            # SimNow verifier has accepted the exact outgoing field.
+            if key in self._order_insert_history or any(
+                known_request_id == request_id for known_request_id, _ in self._order_insert_history
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
+            self._order_insert_history[key] = CtpOrderInsertEvidence(
+                request_id=request_id,
+                order_ref=identity.order_ref,
+                status="unknown",
+                account_fingerprint=f"acct_{self._account_fingerprint}",
+                trading_day=self._trading_day,
+                connection_generation=self._connection_generation,
+                instrument_id=identity.instrument_id,
+                exchange_id=identity.exchange_id,
+                evidence_source="",
+                callback_received=False,
+                evidence_received=False,
+                error_code=None,
+                error_message="",
+                reason="awaiting_native_callback",
+                submitted_at_utc=datetime.now(timezone.utc),
+                observed_at_utc=None,
+                submit_code=None,
+            )
+            self._order_insert_identities[key] = identity
             self._record_request("order_insert")
-        return self._invoke_session_native_request(api, "ReqOrderInsert", field, request_id)
+        try:
+            result = self._invoke_session_native_request(
+                api,
+                "ReqOrderInsert",
+                field,
+                request_id,
+                simnow_write_authorization=authorization,
+                pre_dispatch=record_dispatch,
+            )
+        except BaseException:
+            with self._query_state_lock:
+                if key in self._order_insert_history:
+                    self._order_insert_history[key] = replace(
+                        self._order_insert_history[key], reason="native_submit_exception"
+                    )
+            raise
+        with self._query_state_lock:
+            if key in self._order_insert_history:
+                self._order_insert_history[key] = replace(
+                    self._order_insert_history[key],
+                    submit_code=result if type(result) is int else None,
+                )
+        return result
+
+    def get_order_insert_evidence(
+        self,
+        request_id: int,
+        *,
+        order_ref: str | int | None = None,
+    ) -> CtpOrderInsertEvidence | None:
+        """Return the immutable evidence snapshot for one insert request.
+
+        ``None`` means this client has no matching recorded request. A
+        recorded request without a matched native callback returns an explicit
+        ``unknown`` snapshot.
+        """
+
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        with self._query_state_lock:
+            if order_ref is None:
+                matches = [
+                    evidence
+                    for (known_request_id, _), evidence in self._order_insert_history.items()
+                    if known_request_id == normalized_request_id
+                ]
+                return matches[0] if len(matches) == 1 else None
+            key = (normalized_request_id, str(order_ref))
+            return self._order_insert_history.get(key)
+
+    def _record_order_insert_callback(
+        self,
+        *,
+        source: str,
+        field: Any,
+        rsp_info: Any,
+        request_id: int | None,
+        is_last: bool | None,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        identity = _order_insert_identity(field)
+        error_code, error_message = _rsp_error(rsp_info)
+        with self._query_state_lock:
+            # The SPI decorator fences callback entry, but API replacement can
+            # happen after that check and before this recorder acquires the
+            # lock. Revalidate the originating SPI/API atomically with the
+            # evidence mutation so a stale callback cannot resolve a request.
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+
+            if source == "OnRspOrderInsert":
+                candidates = [
+                    key
+                    for key in self._order_insert_history
+                    if request_id is not None and key[0] == request_id
+                ]
+                if len(candidates) != 1:
+                    candidates = [key for key in candidates if key[1] == identity.order_ref]
+            else:
+                candidates = [
+                    key
+                    for key in self._order_insert_history
+                    if key[1] == identity.order_ref
+                ]
+                if identity.field_request_id not in (None, 0):
+                    candidates = [
+                        key for key in candidates if key[0] == identity.field_request_id
+                    ]
+                exact_candidates = [
+                    key for key in candidates if self._order_insert_identities[key] == identity
+                ]
+                if exact_candidates:
+                    candidates = exact_candidates
+
+            if len(candidates) != 1:
+                self._order_insert_late_callback_count += 1
+                return
+
+            key = candidates[0]
+            evidence = self._order_insert_history[key]
+            expected_identity = self._order_insert_identities[key]
+            observed_at = datetime.now(timezone.utc)
+            identity_matches = expected_identity == identity
+            scope_matches = (
+                evidence.account_fingerprint == f"acct_{self._account_fingerprint}"
+                and evidence.connection_generation == self._connection_generation
+                and evidence.trading_day == self._trading_day
+            )
+            identity_present = bool(
+                identity.order_ref
+                and identity.broker_id
+                and identity.investor_id
+                and identity.user_id
+                and identity.instrument_id
+                and identity.exchange_id
+            )
+            if evidence.status != "unknown" and (not identity_matches or not scope_matches):
+                self._order_insert_late_callback_count += 1
+                return
+            callback_evidence = replace(
+                evidence,
+                evidence_source=source,
+                callback_received=True,
+                evidence_received=identity_matches and scope_matches,
+                error_code=error_code,
+                error_message=error_message,
+                observed_at_utc=observed_at,
+            )
+            if not identity_matches:
+                reason = "callback_identity_mismatch"
+                status = "unknown"
+            elif identity.field_request_id != evidence.request_id:
+                reason = "native_request_id_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not scope_matches:
+                reason = "callback_session_scope_mismatch"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif not identity_present:
+                reason = "native_order_identity_incomplete"
+                status = "unknown"
+                callback_evidence = replace(callback_evidence, evidence_received=False)
+            elif error_code is None:
+                reason = "native_response_info_missing"
+                status = "unknown"
+            elif source == "OnRspOrderInsert" and is_last is not True:
+                reason = "native_response_not_terminal"
+                status = "unknown"
+            elif error_code != 0:
+                reason = "native_order_insert_rejected"
+                status = "rejected"
+            elif source == "OnErrRtnOrderInsert":
+                reason = "native_error_return_without_error_code"
+                status = "unknown"
+            else:
+                reason = "order_insert_request_accepted"
+                status = "accepted"
+
+            # A later matching error return may downgrade request acceptance
+            # to rejection. Unmatched callbacks cannot replace known evidence.
+            if evidence.status == "rejected" and status == "accepted":
+                status = "rejected"
+                reason = evidence.reason
+            elif evidence.status == "accepted" and status == "unknown":
+                status = evidence.status
+                reason = evidence.reason
+            self._order_insert_history[key] = replace(
+                callback_evidence,
+                status=status,
+                reason=reason,
+            )
+
+    def _handle_order_insert_response(
+        self,
+        field: Any,
+        rsp_info: Any,
+        request_id: Any,
+        is_last: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        try:
+            normalized_request_id = int(request_id)
+        except (TypeError, ValueError, OverflowError):
+            normalized_request_id = None
+        self._record_order_insert_callback(
+            source="OnRspOrderInsert",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=normalized_request_id,
+            is_last=is_last if type(is_last) is bool else None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
+
+    def _handle_order_insert_error(
+        self,
+        field: Any,
+        rsp_info: Any,
+        *,
+        origin_api: Any = None,
+        origin_spi: _TraderSpi | None = None,
+    ) -> None:
+        self._record_order_insert_callback(
+            source="OnErrRtnOrderInsert",
+            field=field,
+            rsp_info=rsp_info,
+            request_id=_native_int_field(field, "RequestID"),
+            is_last=None,
+            origin_api=origin_api,
+            origin_spi=origin_spi,
+        )
 
     def submit_order_action(
         self,
@@ -5690,10 +6911,15 @@ class TraderClient:
             if managed_cancel:
                 snapshot = _managed_order_action_field_snapshot(field)
                 identity = snapshot.identity
-                self._require_execution_write_locked(
+                authorization = self._require_execution_write_locked(
                     execution_capability,
                     identity.instrument_id,
                     identity.exchange_id,
+                    operation="cancel",
+                    runtime_order_id=runtime_order_id,
+                    managed_intent_id=managed_intent_id,
+                    runtime_action_id=runtime_action_id,
+                    managed_cancel_intent_id=managed_cancel_intent_id,
                 )
                 self._require_native_field_identity_snapshot_locked(
                     snapshot,
@@ -5705,10 +6931,15 @@ class TraderClient:
                 _validate_managed_cancel_native_fields(snapshot, request_id)
                 request_field = _copy_managed_order_action_field(field, snapshot)
             else:
-                self._require_execution_write_locked(
+                authorization = self._require_execution_write_locked(
                     execution_capability,
                     getattr(field, "InstrumentID", ""),
                     getattr(field, "ExchangeID", ""),
+                    operation="cancel",
+                    runtime_order_id=runtime_order_id,
+                    managed_intent_id=managed_intent_id,
+                    runtime_action_id=runtime_action_id,
+                    managed_cancel_intent_id=managed_cancel_intent_id,
                 )
                 self._require_native_field_identity_locked(field, require_user_id=False)
                 api = self._api
@@ -5779,6 +7010,7 @@ class TraderClient:
                 "ReqOrderAction",
                 request_field,
                 request_id,
+                simnow_write_authorization=authorization,
             )
         except Exception:
             with self._query_state_lock:
