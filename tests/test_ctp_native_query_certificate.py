@@ -472,12 +472,66 @@ def test_instrument_query_certifies_exchange_rows_without_claiming_filter_was_ap
     public = certificate_builder.finish().as_public_dict()
     query = next(query for query in public["queries"] if query["request_type"] == "instruments")
 
-    assert public["schema"] == "ctp_native_query_certificate.v4"
+    assert public["schema"] == "ctp_native_query_certificate.v5"
     assert query["record_count"] == 83
     assert query["records_sha256"] == result.query_source.records_sha256
     assert query["instrument_row_scope"] == "same_exchange"
     assert query["instrument_filter_application"] == "unverified"
     assert query["target_instrument_match_count"] == 1
+
+
+@pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
+def test_rate_response_with_blank_exchange_is_recorded_as_unverified(request_type):
+    client = offline_client()
+    queries = issue_all(client)
+    row = dict(query_records(request_type)[0])
+    row["ExchangeID"] = ""
+    queries[request_type] = issue_query(client, request_type, records=(row,))
+
+    certificate_builder = builder(client)
+    add_all(certificate_builder, queries)
+    public = certificate_builder.finish().as_public_dict()
+    rate = next(query for query in public["queries"] if query["request_type"] == request_type)
+
+    assert rate["rate_exchange_scope"] == "unverified"
+    assert rate["record_count"] == 1
+    assert public["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
+def test_rate_response_with_exact_exchange_is_recorded_as_exact(request_type):
+    client = offline_client()
+    queries = issue_all(client)
+    certificate_builder = builder(client)
+    add_all(certificate_builder, queries)
+    public = certificate_builder.finish().as_public_dict()
+    rate = next(query for query in public["queries"] if query["request_type"] == request_type)
+
+    assert rate["rate_exchange_scope"] == "exact"
+
+
+@pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
+def test_rate_response_missing_exchange_is_rejected(request_type):
+    client = offline_client()
+    certificate_builder = builder(client)
+    row = dict(query_records(request_type)[0])
+    row.pop("ExchangeID")
+    result = issue_query(client, request_type, records=(row,))
+
+    with pytest.raises(CtpNativeQueryCertificateError, match="query_row_exchange_missing"):
+        certificate_builder.add(result)
+
+
+@pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
+def test_rate_response_none_exchange_is_rejected(request_type):
+    client = offline_client()
+    certificate_builder = builder(client)
+    row = dict(query_records(request_type)[0])
+    row["ExchangeID"] = None
+    result = issue_query(client, request_type, records=(row,))
+
+    with pytest.raises(CtpNativeQueryCertificateError, match="query_row_exchange_mismatch"):
+        certificate_builder.add(result)
 
 
 def test_instrument_superset_without_target_is_rejected():

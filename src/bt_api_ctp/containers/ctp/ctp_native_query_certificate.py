@@ -40,7 +40,7 @@ _REQUIRED_QUERY_TYPES = (
     "margin_rate",
     "commission_rate",
 )
-_CERTIFICATE_SCHEMA = "ctp_native_query_certificate.v4"
+_CERTIFICATE_SCHEMA = "ctp_native_query_certificate.v5"
 _CERTIFICATE_SEAL = object()
 
 
@@ -64,6 +64,7 @@ class _QueryDigest:
     instrument_row_scope: str | None
     instrument_filter_application: str | None
     target_instrument_match_count: int | None
+    rate_exchange_scope: str | None
     source_provenance_validated: bool
     complete: bool
     is_last_seen: bool
@@ -90,6 +91,7 @@ class _QueryDigest:
             "instrument_row_scope": self.instrument_row_scope,
             "instrument_filter_application": self.instrument_filter_application,
             "target_instrument_match_count": self.target_instrument_match_count,
+            "rate_exchange_scope": self.rate_exchange_scope,
             "source_provenance_validated": self.source_provenance_validated,
             "complete": self.complete,
             "is_last_seen": self.is_last_seen,
@@ -403,7 +405,7 @@ def _validate_returned_rows(
     instrument_id: str,
     exchange_id: str,
     hedge_flag: str,
-) -> int | None:
+) -> tuple[int | None, str | None]:
     if result.request_type == "account" and len(result.records) != 1:
         raise CtpNativeQueryCertificateError("query_account_row_count_invalid")
     if (
@@ -412,6 +414,7 @@ def _validate_returned_rows(
     ):
         raise CtpNativeQueryCertificateError("query_required_rows_missing")
     target_instrument_match_count = 0
+    rate_exchange_unverified = False
     for record in result.records:
         for name, expected in (
             ("BrokerID", scope.broker_id),
@@ -447,7 +450,11 @@ def _validate_returned_rows(
             if not present or value != instrument_id:
                 raise CtpNativeQueryCertificateError("query_row_instrument_mismatch")
             exchange_present, row_exchange = _record_value(record, "ExchangeID")
-            if exchange_present and row_exchange != exchange_id:
+            if not exchange_present:
+                raise CtpNativeQueryCertificateError("query_row_exchange_missing")
+            if row_exchange == "":
+                rate_exchange_unverified = True
+            elif type(row_exchange) is not str or row_exchange != exchange_id:
                 raise CtpNativeQueryCertificateError("query_row_exchange_mismatch")
         if result.request_type == "margin_rate":
             hedge_present, row_hedge = _record_value(record, "HedgeFlag")
@@ -458,8 +465,10 @@ def _validate_returned_rows(
             raise CtpNativeQueryCertificateError("query_target_instrument_missing")
         if target_instrument_match_count != 1:
             raise CtpNativeQueryCertificateError("query_target_instrument_duplicate")
-        return target_instrument_match_count
-    return None
+        return target_instrument_match_count, None
+    if result.request_type in ("margin_rate", "commission_rate"):
+        return None, "unverified" if rate_exchange_unverified else "exact"
+    return None, None
 
 
 def _validate_bound_filters(
@@ -612,7 +621,7 @@ class CtpNativeQueryCertificateBuilder:
             self._exchange_id,
             self._hedge_flag,
         )
-        target_instrument_match_count = _validate_returned_rows(
+        target_instrument_match_count, rate_exchange_scope = _validate_returned_rows(
             result,
             scope,
             self._instrument_id,
@@ -635,6 +644,7 @@ class CtpNativeQueryCertificateBuilder:
             instrument_row_scope=("same_exchange" if request_type == "instruments" else None),
             instrument_filter_application=("unverified" if request_type == "instruments" else None),
             target_instrument_match_count=target_instrument_match_count,
+            rate_exchange_scope=rate_exchange_scope,
             source_provenance_validated=True,
             complete=result.complete,
             is_last_seen=result.is_last_seen,
