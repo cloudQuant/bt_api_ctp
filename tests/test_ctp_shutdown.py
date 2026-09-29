@@ -94,12 +94,20 @@ class _RegisterSpiBarrierApi(_NativeApi):
         super().__init__(retained_spi)
         self.register_spi_entered = threading.Event()
         self.allow_register_spi_return = threading.Event()
+        self.cleanup_detached = threading.Event()
+        self.cleanup_released = threading.Event()
 
     def RegisterSpi(self, spi: object | None) -> None:
         super().RegisterSpi(spi)
         if spi is not None:
             self.register_spi_entered.set()
             assert self.allow_register_spi_return.wait(1.0)
+        else:
+            self.cleanup_detached.set()
+
+    def Release(self) -> None:
+        super().Release()
+        self.cleanup_released.set()
 
     def SubscribePrivateTopic(self, mode: int) -> None:
         self.calls.append(("private_topic", mode))
@@ -1161,6 +1169,11 @@ def test_stop_during_first_register_spi_blocks_all_later_startup_calls(
     assert not start_thread.is_alive()
     assert not stop_thread.is_alive()
     assert errors == []
+    # Trader startup can defer native teardown until RegisterSpi returns.  The
+    # starter only schedules that cleanup, so synchronize on the fake API calls
+    # themselves before asserting their exact order.
+    assert api.cleanup_detached.wait(1.0)
+    assert api.cleanup_released.wait(1.0)
     assert api.calls == [("register", spi), ("register", None), ("release", None)]
     assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
 

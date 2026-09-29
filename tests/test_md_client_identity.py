@@ -99,6 +99,13 @@ def test_stale_request_and_nonterminal_success_do_not_publish_identity():
     client, api, spi = _wired_client()
     _, request_id = _connect(client, api, spi)
 
+    # The historical I2 callback carried request ID zero.  It must remain an
+    # unrelated callback rather than being treated as a wildcard for the
+    # current login request.
+    _login_response(spi, 0)
+    assert client.active_md_identity is None
+    assert client._login_request_pending is True
+
     _login_response(spi, request_id + 1)
     assert client.active_md_identity is None
     assert client._login_request_pending is True
