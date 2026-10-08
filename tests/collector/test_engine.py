@@ -33,7 +33,6 @@ def _tick(instrument_id: str = "rb2510", exchange_id: str = "SHFE", **overrides)
     return TickRecord(**base)
 
 
-
 class _FakeProvider:
     def __init__(self, specs):
         self._specs = list(specs)
@@ -89,6 +88,41 @@ def _engine(tmp_path, specs, subscriber, **config_overrides):
 
 
 class TestTickCollectionEngine:
+    def test_cancelled_subscription_flushes_and_finalizes(self, tmp_path):
+        from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+        class Subscriber(_FakeSubscriber):
+            def subscribe(self, instruments):
+                raise CollectionCancelled()
+
+            def close(self):
+                # A final callback during shutdown must reach the last drain.
+                self.handler.on_tick(_tick(update_millisec=2))
+                super().close()
+
+        subscriber = Subscriber(ticks_on_connect=[_tick(update_millisec=1)])
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        report = engine.run_once(duration_sec=60)
+
+        assert subscriber.closed
+        assert report.instruments[0].rows == 2
+        assert pq.read_table(tmp_path / "20260916" / "SHFE" / "rb2510.parquet").num_rows == 2
+        assert (tmp_path / "20260916" / "report.json").is_file()
+
+    def test_failed_login_closes_partially_opened_subscriber(self, tmp_path):
+        class Subscriber(_FakeSubscriber):
+            def connect(self):
+                super().connect()
+                raise RuntimeError("ctp_md_login_timeout")
+
+        subscriber = Subscriber()
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE")], subscriber)
+
+        with pytest.raises(RuntimeError, match="ctp_md_login_timeout"):
+            engine.run_once(duration_sec=60)
+        assert subscriber.closed
+
     def test_collects_and_persists_ticks(self, tmp_path):
         ticks = [_tick(update_millisec=index) for index in range(3)]
         subscriber = _FakeSubscriber(ticks_on_connect=ticks)
@@ -510,9 +544,7 @@ class TestSubscriptionLogging:
                 return {"ok": 0, "failed": 2, "last_error_id": 42}
 
         subscriber = _FailedAckSubscriber()
-        engine, _ = _engine(
-            tmp_path, [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")], subscriber
-        )
+        engine, _ = _engine(tmp_path, [_spec("rb2510", "SHFE"), _spec("m2701", "DCE")], subscriber)
 
         with caplog.at_level(logging.INFO):
             engine.run_once(duration_sec=0.02)

@@ -12,9 +12,8 @@ from bt_api_ctp.collector_ctp.instrument_provider import CtpInstrumentProvider
 @pytest.fixture(autouse=True)
 def _no_retry_sleep(monkeypatch):
     """重试退避不应让单元测试真实等待。"""
-    monkeypatch.setattr(
-        "bt_api_ctp.collector_ctp.instrument_provider.time.sleep", lambda *_: None
-    )
+    monkeypatch.setattr("bt_api_ctp.collector_ctp.instrument_provider.time.sleep", lambda *_: None)
+
 
 FUTURE = {"InstrumentID": "rb2510", "ExchangeID": "SHFE", "ProductClass": "1"}
 OPTION = {
@@ -72,6 +71,44 @@ class TestSessionLogging:
 
 
 class TestCtpInstrumentProvider:
+    def test_cancelled_query_does_not_retry_or_start_next_exchange(self):
+        import threading
+
+        from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+        event = threading.Event()
+        calls = []
+
+        def query(**kwargs):
+            calls.append(kwargs["exchange_id"])
+            event.set()
+            assert kwargs["should_stop"]()
+            return SimpleNamespace(complete=False, records=(), error_message="query_cancelled")
+
+        provider = CtpInstrumentProvider(
+            SimpleNamespace(query_instruments_result=query), stop_event=event
+        )
+        with pytest.raises(CollectionCancelled):
+            provider.fetch_instruments()
+        assert calls == ["SHFE"]
+
+    def test_retry_backoff_is_cancellable(self, monkeypatch):
+        import threading
+
+        from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+        event = threading.Event()
+        trader = _trader([], complete=False)
+        provider = CtpInstrumentProvider(trader, stop_event=event)
+        monkeypatch.setattr(
+            "bt_api_ctp.collector_ctp.instrument_provider.time.sleep",
+            lambda _timeout: event.set(),
+        )
+
+        with pytest.raises(CollectionCancelled):
+            provider.fetch_instruments()
+        assert trader.calls == ["SHFE"]
+
     def test_keeps_futures_and_options_only(self):
         provider = CtpInstrumentProvider(_trader([FUTURE, OPTION, COMBINATION]))
         specs = provider.fetch_instruments()
@@ -150,10 +187,12 @@ class TestCtpInstrumentProvider:
             SimpleNamespace(query_instruments_result=query_instruments_result),
             exchanges=("SHFE",),
             query_timeout_sec=42.0,
+            query_max_duration_sec=84.0,
         )
         provider.fetch_instruments()
 
         assert captured["timeout"] == 42.0
+        assert captured["max_duration"] == 84.0
         assert captured["exchange_id"] == "SHFE"
 
     def test_empty_records_return_empty_list(self):
@@ -255,7 +294,8 @@ class TestQueryProgressLogging:
 
         first = caplog.records[0].getMessage()
         assert "exchanges=SHFE,DCE" in first
-        assert "timeout=60.0s" in first
+        assert "idle_timeout=60.0s" in first
+        assert "max_duration=600.0s" in first
         assert "retries=3" in first
 
     def test_logs_each_exchange_result(self, caplog):
@@ -283,7 +323,7 @@ class TestQueryProgressLogging:
                     complete=False,
                     records=(),
                     error_code=-2,
-                    error_message="query_timeout",
+                    error_message="connection_lost",
                 )
             return SimpleNamespace(complete=True, records=(FUTURE,))
 
@@ -303,7 +343,7 @@ class TestQueryProgressLogging:
         assert any(
             "attempt 1/4" in message
             and "error_code=-2" in message
-            and "query_timeout" in message
+            and "connection_lost" in message
             for message in warnings
         )
 
@@ -312,7 +352,7 @@ class TestQueryProgressLogging:
 
         def query(**_kwargs):
             return SimpleNamespace(
-                complete=False, records=(), error_code=-2, error_message="query_timeout"
+                complete=False, records=(), error_code=-2, error_message="connection_lost"
             )
 
         provider = CtpInstrumentProvider(
@@ -329,6 +369,51 @@ class TestQueryProgressLogging:
             record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING
         ]
         assert any("instrument query SHFE exhausted: attempts=3" in message for message in warnings)
+
+    def test_timeout_with_partial_rows_is_logged_and_not_retried(self, caplog):
+        import logging
+
+        partial = {"InstrumentID": "rb2510", "ExchangeID": "SHFE", "ProductClass": "1"}
+        calls = []
+
+        def query(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                complete=False,
+                records=(partial,),
+                error_code=None,
+                error_message="query_timeout",
+                timed_out=True,
+                is_last_seen=False,
+            )
+
+        provider = CtpInstrumentProvider(
+            SimpleNamespace(query_instruments_result=query),
+            exchanges=("SHFE", "DCE"),
+            query_retries=3,
+        )
+
+        with caplog.at_level(logging.INFO), pytest.raises(
+            RuntimeError, match="ctp_instrument_query_incomplete:SHFE"
+        ):
+            provider.fetch_instruments()
+
+        assert len(calls) == 1
+        assert calls[0]["timeout"] == 60.0
+        assert calls[0]["max_duration"] == 600.0
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(
+            "timed out: partial_records=1" in message
+            and "terminal=False" in message
+            and "idle_timeout=60.0s max_duration=600.0s" in message
+            for message in messages
+        )
+        assert any(
+            "summary: exchanges=2 complete=0 complete_records=0" in message
+            and "partial_records={'SHFE': 1}" in message
+            and "unqueried=DCE" in message
+            for message in messages
+        )
 
     def test_close_announces_the_release_before_stop_blocks(self, caplog):
         """stop() 可能被原生 Join 卡住数分钟，释放动作必须先留痕。"""

@@ -41,13 +41,27 @@ class TestValidateConfig:
 
     def test_zero_batch_interval_is_flagged(self):
         """契约要求批间限速不得为 0（整改方案 P1-3）。"""
-        errors = validate_config(
-            {"data_root": "/tmp/x", "subscription": {"batch_interval_sec": 0}}
-        )
+        errors = validate_config({"data_root": "/tmp/x", "subscription": {"batch_interval_sec": 0}})
         assert any("batch_interval_sec" in error for error in errors)
 
     def test_default_subscription_settings_are_valid(self):
         assert validate_config({"data_root": "/tmp/x", "subscription": {}}) == []
+
+    def test_instrument_query_timeouts_and_retries_are_validated(self):
+        errors = validate_config(
+            {
+                "data_root": "/tmp/x",
+                "ctp": {
+                    "instrument_query_timeout_sec": 60,
+                    "instrument_query_max_duration_sec": 30,
+                    "instrument_query_retries": -1,
+                    "instrument_query_retry_backoff_sec": -0.5,
+                },
+            }
+        )
+        assert any("max_duration_sec must be >=" in error for error in errors)
+        assert any("retries must be a non-negative integer" in error for error in errors)
+        assert any("retry_backoff_sec must be finite and >= 0" in error for error in errors)
 
     def test_non_numeric_subscription_settings_are_flagged(self):
         """非法类型必须走配置错误分支，不得直接把异常抛给调用方。"""
@@ -187,9 +201,7 @@ class TestDataQualityConfig:
         assert any("heartbeat" in error for error in errors)
 
     def test_calendar_is_passed_to_the_collection_config(self):
-        config = build_collection_config(
-            {"data_root": "/tmp/x", "calendar": {"holidays_file": ""}}
-        )
+        config = build_collection_config({"data_root": "/tmp/x", "calendar": {"holidays_file": ""}})
 
         assert config.calendar is not None
 
@@ -333,9 +345,7 @@ class TestUntilCloseMode:
         from bt_api_ctp.collector.cli import SessionClosedError, resolve_duration
 
         with pytest.raises(SessionClosedError):
-            resolve_duration(
-                duration=None, until_close=True, now=datetime(2026, 9, 16, 12, 0, 0)
-            )
+            resolve_duration(duration=None, until_close=True, now=datetime(2026, 9, 16, 12, 0, 0))
 
     def test_explicit_duration_is_returned_unchanged(self):
         from bt_api_ctp.collector.cli import resolve_duration
@@ -351,9 +361,7 @@ class TestUntilCloseMode:
     def test_until_close_outside_session_exit_code(self, tmp_path, capsys):
         path = _write_config(tmp_path, {"data_root": str(tmp_path / "data")})
         # 12:00 为午休，不在任何交易时段
-        code = main(
-            ["--config", str(path), "--until-close", "--now", "20260916T12:00:00"]
-        )
+        code = main(["--config", str(path), "--until-close", "--now", "20260916T12:00:00"])
         assert code == EXIT_NOT_TRADING_DAY
 
     def test_wait_open_covers_wait_plus_full_session(self):
@@ -370,6 +378,38 @@ class TestUntilCloseMode:
             wait_for_open=True,
         )
         assert duration == pytest.approx(900.0 + 22500.0)
+
+    def test_wait_open_during_morning_break_runs_only_until_day_close(self):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import resolve_duration
+
+        # 10:16 waits 14 minutes for the 10:30 resume, then runs to 15:15.
+        duration = resolve_duration(
+            duration=None,
+            until_close=True,
+            now=datetime(2026, 9, 16, 10, 16, 0),
+            grace_sec=0.0,
+            wait_for_open=True,
+        )
+
+        assert duration == pytest.approx(840.0 + 17100.0)
+
+    def test_wait_open_during_lunch_runs_only_until_day_close(self):
+        from datetime import datetime
+
+        from bt_api_ctp.collector.cli import resolve_duration
+
+        # Noon waits for the 13:00 resume, then runs to 15:15.
+        duration = resolve_duration(
+            duration=None,
+            until_close=True,
+            now=datetime(2026, 9, 16, 12, 0, 0),
+            grace_sec=0.0,
+            wait_for_open=True,
+        )
+
+        assert duration == pytest.approx(3600.0 + 8100.0)
 
     def test_wait_open_before_night_session(self):
         from datetime import datetime
@@ -522,13 +562,17 @@ class TestBuildEngineLogging:
             def __init__(self, *_args, **_kwargs):
                 pass
 
+        subscriber_kwargs = {}
+
         class _FakeSubscriber:
             def __init__(self, *_args, **_kwargs):
-                pass
+                subscriber_kwargs.update(_kwargs)
+
+        provider_kwargs = {}
 
         class _FakeProvider:
             def __init__(self, *_args, **_kwargs):
-                pass
+                provider_kwargs.update(_kwargs)
 
         monkeypatch.setattr("bt_api_ctp.ctp.client.TraderClient", _FakeTrader)
         monkeypatch.setattr("bt_api_ctp.ctp.client.MdClient", _FakeMd)
@@ -545,16 +589,26 @@ class TestBuildEngineLogging:
                 "broker_id": "9999",
                 "user_id": "u1",
                 "password": "p1",
+                "login_timeout_sec": 45,
+                "instrument_query_timeout_sec": 30,
+                "instrument_query_max_duration_sec": 300,
+                "instrument_query_retries": 0,
+                "instrument_query_retry_backoff_sec": 0.5,
             },
         }
 
         with caplog.at_level(logging.INFO):
-            cli.build_engine(config)
+            engine = cli.build_engine(config)
 
         messages = " ".join(r.getMessage() for r in caplog.records)
         assert "trader" in messages
         assert "login" in messages
         assert "tcp://td.example:1" in messages
+        assert subscriber_kwargs["login_timeout_sec"] == 45.0
+        assert provider_kwargs["query_timeout_sec"] == 30.0
+        assert provider_kwargs["query_max_duration_sec"] == 300.0
+        assert provider_kwargs["query_retries"] == 0
+        assert provider_kwargs["retry_backoff_sec"] == 0.5
 
     def test_trader_login_timeout_is_logged(self, tmp_path, monkeypatch, caplog):
         import logging
@@ -673,15 +727,15 @@ class TestResolveLogFile:
         from bt_api_ctp.collector.cli import _resolve_log_file
         from bt_api_ctp.collector.schedule import TradingCalendar
 
-        assert _resolve_log_file({}, "20260916", TradingCalendar(), night=False, moment=None) is None
+        assert (
+            _resolve_log_file({}, "20260916", TradingCalendar(), night=False, moment=None) is None
+        )
 
 
 class TestCollectionFailureLogging:
     """采集链路失败必须进日志文件：无人值守时日志只会"突然停住"。"""
 
-    def test_build_failure_is_logged_and_still_printed(
-        self, tmp_path, monkeypatch, capsys, caplog
-    ):
+    def test_build_failure_is_logged_and_still_printed(self, tmp_path, monkeypatch, capsys, caplog):
         import logging
 
         from bt_api_ctp.collector import cli
@@ -689,7 +743,7 @@ class TestCollectionFailureLogging:
 
         path = _write_config(tmp_path, {"data_root": str(tmp_path / "data")})
 
-        def _boom(_config):
+        def _boom(_config, **_kwargs):
             raise RuntimeError("ctp_instrument_query_incomplete:CFFEX")
 
         monkeypatch.setattr(cli, "build_engine", _boom)
@@ -703,3 +757,82 @@ class TestCollectionFailureLogging:
             record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR
         ]
         assert any("ctp_instrument_query_incomplete" in message for message in errors)
+
+
+class TestStartupCancellation:
+    def test_session_deadline_includes_startup_wait(self, monkeypatch):
+        from bt_api_ctp.collector import lifecycle
+
+        clock = [100.0]
+        monkeypatch.setattr(lifecycle.time, "monotonic", lambda: clock[0])
+        event = lifecycle.CollectionStopEvent(deadline_monotonic=120.0)
+        assert not event.is_set()
+        clock[0] = 120.0
+        assert event.is_set()
+
+    def test_background_stop_marker_cancels_startup(self, tmp_path):
+        from bt_api_ctp.collector.lifecycle import (
+            CollectionCancelled,
+            CollectionStopEvent,
+            check_stop,
+        )
+
+        marker = tmp_path / "collector.stop"
+        event = CollectionStopEvent(marker)
+        assert not event.is_set()
+        marker.touch()
+        with pytest.raises(CollectionCancelled):
+            check_stop(event)
+
+    def test_cancelled_trader_login_closes_session(self, monkeypatch):
+        import threading
+
+        from bt_api_ctp.collector import cli
+        from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+        event = threading.Event()
+        stopped = []
+
+        class Trader:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self, **_kwargs):
+                pass
+
+            def wait_ready(self, *, timeout, should_stop):
+                event.set()
+                assert should_stop()
+                return False
+
+            def stop(self):
+                stopped.append(True)
+
+        monkeypatch.setattr("bt_api_ctp.ctp.client.TraderClient", Trader)
+        with pytest.raises(CollectionCancelled):
+            cli.build_engine({"data_root": "unused"}, stop_event=event)
+        assert stopped == [True]
+
+    def test_sigint_cancels_startup_and_restores_handlers(self, tmp_path, monkeypatch):
+        import signal
+
+        from bt_api_ctp.collector import cli
+        from bt_api_ctp.collector.lifecycle import check_stop
+
+        path = _write_config(tmp_path, {"data_root": str(tmp_path / "data")})
+        signals = [signal.SIGINT, signal.SIGTERM]
+        if hasattr(signal, "SIGBREAK"):
+            signals.append(signal.SIGBREAK)
+        previous = {signum: signal.getsignal(signum) for signum in signals}
+
+        def build(_config, *, stop_event):
+            # Invoke the installed handler directly in this unit test. Actual
+            # Windows console delivery is covered in an isolated subprocess.
+            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+            check_stop(stop_event)
+
+        monkeypatch.setattr(cli, "build_engine", build)
+        code = cli.main(["--config", str(path), "--date", "20260918"])
+
+        assert code == EXIT_OK
+        assert {signum: signal.getsignal(signum) for signum in signals} == previous

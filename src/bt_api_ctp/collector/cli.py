@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import signal
 import sys
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +24,11 @@ import yaml
 
 from bt_api_ctp.collector.engine import CollectionConfig, TickCollectionEngine
 from bt_api_ctp.collector.health import HealthThresholds
+from bt_api_ctp.collector.lifecycle import CollectionCancelled, CollectionStopEvent, check_stop
 from bt_api_ctp.collector.protocols import DEFAULT_ASSET_TYPES, EXCHANGES
 from bt_api_ctp.collector.schedule import (
     TradingCalendar,
     group_index,
-    group_length_seconds,
-    next_open_group_index,
     seconds_until_close,
     seconds_until_next_open,
 )
@@ -73,10 +74,13 @@ def resolve_duration(
     if not wait_for_open:
         raise SessionClosedError(moment.strftime("%Y-%m-%d %H:%M:%S"))
     wait = seconds_until_next_open(moment)
-    group = next_open_group_index(moment)
-    if wait is None or group is None:
+    if wait is None:
         raise SessionClosedError(moment.strftime("%Y-%m-%d %H:%M:%S"))
-    return wait + group_length_seconds(group) + float(grace_sec)
+    next_open = moment + timedelta(seconds=wait)
+    remaining = seconds_until_close(next_open)
+    if remaining is None:
+        raise SessionClosedError(moment.strftime("%Y-%m-%d %H:%M:%S"))
+    return wait + remaining + float(grace_sec)
 
 
 def load_config(path: Path | str) -> dict[str, Any]:
@@ -94,6 +98,46 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not config.get("data_root"):
         errors.append("data_root is required")
+
+    ctp = config.get("ctp") or {}
+    if not isinstance(ctp, dict):
+        errors.append("ctp must be a mapping")
+        ctp = {}
+
+    def ctp_float_setting(name: str, default: float, *, minimum: float) -> float | None:
+        try:
+            value = float(ctp.get(name, default))
+        except (TypeError, ValueError):
+            errors.append(f"ctp.{name} must be numeric")
+            return None
+        if not math.isfinite(value) or value < minimum:
+            relation = "> 0" if minimum > 0 else ">= 0"
+            errors.append(f"ctp.{name} must be finite and {relation}")
+            return None
+        return value
+
+    query_timeout = ctp_float_setting("instrument_query_timeout_sec", 60.0, minimum=0.001)
+    query_max_duration = ctp_float_setting(
+        "instrument_query_max_duration_sec", 600.0, minimum=0.001
+    )
+    ctp_float_setting("instrument_query_retry_backoff_sec", 2.0, minimum=0.0)
+    if query_timeout is not None and query_max_duration is not None:
+        if query_max_duration < query_timeout:
+            errors.append(
+                "ctp.instrument_query_max_duration_sec must be >= ctp.instrument_query_timeout_sec"
+            )
+    try:
+        raw_retries = ctp.get("instrument_query_retries", 1)
+        retries_number = float(raw_retries)
+        if (
+            isinstance(raw_retries, bool)
+            or not math.isfinite(retries_number)
+            or retries_number < 0
+            or not retries_number.is_integer()
+        ):
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("ctp.instrument_query_retries must be a non-negative integer")
 
     shard = config.get("shard") or {}
     strategy = shard.get("strategy", "by_exchange")
@@ -227,7 +271,12 @@ def _today() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
-def build_engine(config: dict[str, Any], *, env: dict[str, str] | None = None):
+def build_engine(
+    config: dict[str, Any],
+    *,
+    env: dict[str, str] | None = None,
+    stop_event: threading.Event | None = None,
+):
     """Wire the real CTP provider and subscriber into the engine."""
     from bt_api_ctp.collector_ctp.instrument_provider import CtpInstrumentProvider
     from bt_api_ctp.collector_ctp.subscriber import CtpMdSubscriber
@@ -254,38 +303,59 @@ def build_engine(config: dict[str, Any], *, env: dict[str, str] | None = None):
         app_id=field("app_id", "CTP_APP_ID", "simnow_client_test"),
         auth_code=field("auth_code", "CTP_AUTH_CODE", "0000000000000000"),
     )
-    trader.start(block=False)
-    login_timeout_sec = float(ctp.get("login_timeout_sec", 30))
-    _logger.info("CTP trader login: front=%s broker=%s user=%s", td_front, broker_id, user_id)
-    if trader.wait_ready(timeout=login_timeout_sec) is not True:
-        trader.stop()
-        _logger.error(
-            "CTP trader login timeout after %ss (front=%s)", login_timeout_sec, td_front
-        )
-        raise RuntimeError("ctp_trader_login_timeout")
-    _logger.info("CTP trader login OK (front=%s)", td_front)
+    try:
+        check_stop(stop_event)
+        trader.start(block=False)
+        login_timeout_sec = float(ctp.get("login_timeout_sec", 30))
+        _logger.info("CTP trader login: front=%s broker=%s user=%s", td_front, broker_id, user_id)
+        wait_kwargs = {"timeout": login_timeout_sec}
+        if stop_event is not None:
+            wait_kwargs["should_stop"] = stop_event.is_set
+        ready = trader.wait_ready(**wait_kwargs)
+        check_stop(stop_event)
+        if ready is not True:
+            _logger.error(
+                "CTP trader login timeout after %ss (front=%s)", login_timeout_sec, td_front
+            )
+            raise RuntimeError("ctp_trader_login_timeout")
+        _logger.info("CTP trader login OK (front=%s)", td_front)
 
-    md_client = MdClient(md_front, broker_id, user_id, password)
-    subscriber = CtpMdSubscriber(
-        md_client,
-        batch_size=int(subscription.get("batch_size", 100)),
-        batch_interval_sec=float(subscription.get("batch_interval_sec", 0.1)),
-    )
-    collection_config = build_collection_config(config)
-    # An exchange shard only needs its own exchanges: querying the whole
-    # market per process is slow and can be rate-limited by the counter.
-    shard = collection_config.shard
-    provider_exchanges = (
-        tuple(shard.exchanges)
-        if shard.strategy == "by_exchange" and shard.exchanges
-        else EXCHANGES
-    )
-    provider = CtpInstrumentProvider(trader, exchanges=provider_exchanges)
-    return TickCollectionEngine(
-        provider=provider,
-        subscriber=subscriber,
-        config=collection_config,
-    )
+        md_client = MdClient(
+            md_front, broker_id, user_id, password, allow_zero_login_response=True
+        )
+        subscriber = CtpMdSubscriber(
+            md_client,
+            batch_size=int(subscription.get("batch_size", 100)),
+            batch_interval_sec=float(subscription.get("batch_interval_sec", 0.1)),
+            login_timeout_sec=login_timeout_sec,
+            stop_event=stop_event,
+        )
+        collection_config = build_collection_config(config)
+        # Query only the exchanges assigned to this process.
+        shard = collection_config.shard
+        provider_exchanges = (
+            tuple(shard.exchanges)
+            if shard.strategy == "by_exchange" and shard.exchanges
+            else EXCHANGES
+        )
+        provider = CtpInstrumentProvider(
+            trader,
+            exchanges=provider_exchanges,
+            query_timeout_sec=float(ctp.get("instrument_query_timeout_sec", 60.0)),
+            query_max_duration_sec=float(ctp.get("instrument_query_max_duration_sec", 600.0)),
+            query_retries=int(ctp.get("instrument_query_retries", 1)),
+            retry_backoff_sec=float(ctp.get("instrument_query_retry_backoff_sec", 2.0)),
+            stop_event=stop_event,
+        )
+        return TickCollectionEngine(
+            provider=provider,
+            subscriber=subscriber,
+            config=collection_config,
+        )
+    except BaseException:
+        # Ownership transfers to the provider only after wiring succeeds.
+        trader.stop()
+        raise
 
 
 def validate_shard_configs(configs: list[dict[str, Any]]) -> ShardValidationReport:
@@ -329,11 +399,17 @@ def _report_shards(config: dict[str, Any]) -> int:
     return EXIT_OK if report.ok else EXIT_SHARD_MISMATCH
 
 
-def _install_sigint_handler(stop_event: threading.Event) -> None:
+def _install_sigint_handler(stop_event: threading.Event) -> dict[int, Any]:
     def handler(_signum, _frame):
         stop_event.set()
 
-    signal.signal(signal.SIGINT, handler)
+    previous = {}
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):
+        signals.append(signal.SIGBREAK)
+    for signum in signals:
+        previous[signum] = signal.signal(signum, handler)
+    return previous
 
 
 def _print_report(report: SinkReport) -> None:
@@ -416,6 +492,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Collect CTP depth-market ticks into Parquet files.",
     )
     parser.add_argument("--config", required=True, help="path to the YAML collector config")
+    parser.add_argument(
+        "--stop-file", type=Path, help="gracefully stop when this marker file exists"
+    )
     parser.add_argument("--once", action="store_true", help="run a single collection window")
     parser.add_argument(
         "--duration",
@@ -540,16 +619,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"not in a trading session: {exc}", file=sys.stderr)
         return EXIT_NOT_TRADING_DAY
 
-    stop_event = threading.Event()
-    _install_sigint_handler(stop_event)
+    # --until-close is a wall-clock boundary. Bulk discovery and subscription
+    # time must not push the run past that close by extending its duration.
+    close_deadline = time.monotonic() + duration if args.until_close else None
+    stop_event = CollectionStopEvent(args.stop_file, deadline_monotonic=close_deadline)
+    previous_handlers = _install_sigint_handler(stop_event)
     try:
-        engine = build_engine(config)
+        engine = build_engine(config, stop_event=stop_event)
         report = engine.run_once(duration_sec=duration, stop_event=stop_event)
+    except CollectionCancelled:
+        _logger.info("collection stopped during startup; CTP sessions closed")
+        return EXIT_OK
     except Exception as exc:  # 采集链路任一环节失败
         # 同时写日志：无人值守时只有日志文件留存，print 不会进日志。
         _logger.error("collection failed: %s", exc)
         print(f"collection failed: {exc}", file=sys.stderr)
         return EXIT_COLLECTION_FAILED
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
     _print_report(report)
     return EXIT_OK

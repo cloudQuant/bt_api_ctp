@@ -66,6 +66,7 @@ def test_md_identity_is_frozen_and_request_is_distinct_from_connection_generatio
         {"trading_day": None},
         {"trading_day": "20260230"},
         {"trading_day": "2026092"},
+        {"request_id": 0},
     ],
 )
 def test_incomplete_or_mismatched_callback_identity_is_not_current(changes) -> None:
@@ -84,7 +85,6 @@ def test_incomplete_or_mismatched_callback_identity_is_not_current(changes) -> N
         ("connection_generation", 0),
         ("connection_generation", -1),
         ("request_id", True),
-        ("request_id", 0),
         ("request_id", -1),
         ("authenticated", 1),
     ],

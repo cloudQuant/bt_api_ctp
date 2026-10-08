@@ -20,6 +20,7 @@ class MdLoginCallbackDisposition(str, Enum):
     REQUEST_ID_MISMATCH = "request_id_mismatch"
     NONTERMINAL = "nonterminal"
     ACCEPTED = "accepted"
+    READ_ONLY_ACCEPTED = "read_only_accepted"
     PROVIDER_REJECTED = "provider_rejected"
     IDENTITY_REJECTED = "identity_rejected"
     TERMINAL = "terminal"

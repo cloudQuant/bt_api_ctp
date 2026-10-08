@@ -56,6 +56,40 @@ class _FakeMdClient:
         return 0 if not instruments else -(-len(instruments) // batch_size)
 
 
+def test_external_stop_cancels_pending_md_login():
+    from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+    event = threading.Event()
+
+    class Client(_FakeMdClient):
+        def wait_ready(self, *, timeout, should_stop):
+            event.set()
+            assert should_stop()
+            return False
+
+    client = Client()
+    subscriber = CtpMdSubscriber(client, stop_event=event)
+    with pytest.raises(CollectionCancelled):
+        subscriber.connect()
+    subscriber.close()
+    assert client.stop_calls == 1
+
+
+def test_external_stop_cancels_remaining_subscription_batches():
+    from bt_api_ctp.collector.lifecycle import CollectionCancelled
+
+    event = threading.Event()
+
+    class Client(_FakeMdClient):
+        def subscribe_batched(self, instruments, *, should_stop, **kwargs):
+            event.set()
+            assert should_stop()
+
+    subscriber = CtpMdSubscriber(Client(), stop_event=event)
+    with pytest.raises(CollectionCancelled):
+        subscriber.subscribe(["rb2510", "m2701"])
+
+
 class _MdClientWithoutWaitReady:
     """兼容不支持 wait_ready 的宿主（connect 不得因此崩溃）。"""
 
@@ -82,9 +116,7 @@ class _DeferrableFakeMdClient(_FakeMdClient):
         self.batches: list[list[str]] = []
         self.should_stop_provided: list[bool] = []
 
-    def subscribe_batched(
-        self, instruments, *, batch_size, interval_sec, should_stop=None
-    ) -> int:
+    def subscribe_batched(self, instruments, *, batch_size, interval_sec, should_stop=None) -> int:
         self.subscribed = list(instruments)
         self.batch_kwargs = (batch_size, interval_sec)
         self.batch_calls.append((list(instruments), threading.current_thread().name))

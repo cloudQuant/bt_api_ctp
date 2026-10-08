@@ -216,6 +216,7 @@ _RELEASED_CTP_NATIVE_SESSION_APIS: weakref.WeakSet[Any] = weakref.WeakSet()
 _RELEASED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
 _MAX_NATIVE_JOIN_WAIT_SECONDS = 60.0
 _MAX_CTP_STOP_WAIT_SECONDS = 30.0
+_CTP_STOP_POLL_SECONDS = 0.1
 _NO_EXPECTED_NATIVE_API = object()
 
 
@@ -1857,6 +1858,29 @@ def _query_parameter_items(
     return tuple(sorted(parameters.items()))
 
 
+def _progressive_query_wait_limits(
+    timeout: Any,
+    max_duration: Any,
+) -> tuple[float | None, float | None]:
+    """Validate the opt-in idle timeout and total query duration."""
+    if max_duration is None:
+        return None, None
+    if type(timeout) not in (int, float):
+        raise ValueError("invalid progressive CTP query idle timeout")
+    if type(max_duration) not in (int, float):
+        raise ValueError("invalid progressive CTP query maximum duration")
+    try:
+        idle_timeout = float(timeout)
+        hard_duration = float(max_duration)
+    except (OverflowError, ValueError):
+        raise ValueError("invalid progressive CTP query wait limits") from None
+    if not math.isfinite(idle_timeout) or idle_timeout <= 0:
+        raise ValueError("invalid progressive CTP query idle timeout")
+    if not math.isfinite(hard_duration) or hard_duration <= 0:
+        raise ValueError("invalid progressive CTP query maximum duration")
+    return idle_timeout, hard_duration
+
+
 def _read_native_query_parameter_items(
     field: Any,
     request_intent_items: tuple[tuple[str, float], ...],
@@ -1906,6 +1930,7 @@ class _QueryAccumulator:
     broker_id: str = ""
     investor_id: str = ""
     started_monotonic: float = 0.0
+    last_callback_monotonic: float | None = None
     completed_monotonic: float | None = None
     source_records_sha256: str | None = None
 
@@ -2077,9 +2102,7 @@ class _MdSpi(CThostFtdcMdSpi):
         with self._c._state_lock:
             self._c._login_callback_count += 1
             self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.NOT_OBSERVED
-            self._c._login_callback_response_error_status = (
-                MdLoginResponseErrorStatus.NOT_OBSERVED
-            )
+            self._c._login_callback_response_error_status = MdLoginResponseErrorStatus.NOT_OBSERVED
             self._c._login_callback_disposition = MdLoginCallbackDisposition.NONE
             if not self._is_current_locked():
                 self._c._login_callback_disposition = MdLoginCallbackDisposition.STALE_SPI
@@ -2089,6 +2112,16 @@ class _MdSpi(CThostFtdcMdSpi):
             self._c._login_callback_request_id_relation = request_id_relation(nRequestID, expected)
             status, error_id = response_error_status(pRspInfo)
             self._c._login_callback_response_error_status = status
+            broker_id, broker_readable = source_text(pRspUserLogin, "BrokerID")
+            user_id, user_readable = source_text(pRspUserLogin, "UserID")
+            trading_day, day_readable = source_text(pRspUserLogin, "TradingDay")
+            self._c._login_callback_broker_id_shape = identity_shape(
+                broker_id, broker_readable, self._c._bound_broker_id, MdLoginBrokerIdShape
+            )
+            self._c._login_callback_user_id_shape = identity_shape(
+                user_id, user_readable, self._c._bound_user_id, MdLoginUserIdShape
+            )
+            self._c._login_callback_trading_day_shape = trading_day_shape(trading_day, day_readable)
             if (
                 not self._c._connected
                 or type(generation) is not int
@@ -2097,15 +2130,16 @@ class _MdSpi(CThostFtdcMdSpi):
                 or self._c._login_request_generation != generation
                 or type(expected) is not int
             ):
-                self._c._login_callback_disposition = (
-                    MdLoginCallbackDisposition.GENERATION_MISMATCH
-                )
+                self._c._login_callback_disposition = MdLoginCallbackDisposition.GENERATION_MISMATCH
                 return
             terminal = bIsLast is True
+            zero_response = (
+                type(nRequestID) is int and nRequestID == 0 and self._c._allow_zero_login_response
+            )
             current_request = (
                 type(nRequestID) is int
                 and self._c._login_request_pending
-                and self._c._login_request_id == nRequestID
+                and (self._c._login_request_id == nRequestID or zero_response)
                 and self._c._login_request_generation == generation
             )
             if type(nRequestID) is not int:
@@ -2121,14 +2155,19 @@ class _MdSpi(CThostFtdcMdSpi):
                 return
             self._c._login_request_pending = False
             if status is MdLoginResponseErrorStatus.ZERO:
-                broker_id, broker_readable = source_text(pRspUserLogin, "BrokerID")
-                user_id, user_readable = source_text(pRspUserLogin, "UserID")
-                trading_day, day_readable = source_text(pRspUserLogin, "TradingDay")
-                if not broker_readable or broker_id != self._c._bound_broker_id:
+                if not broker_readable or (
+                    broker_id != self._c._bound_broker_id
+                    and not (zero_response and broker_id == "")
+                ):
                     failure_reason = "broker_id_mismatch"
-                elif not user_readable or user_id != self._c._bound_user_id:
+                elif not user_readable or (
+                    user_id != self._c._bound_user_id and not (zero_response and user_id == "")
+                ):
                     failure_reason = "user_id_mismatch"
-                elif not day_readable or trading_day_shape(trading_day, True) is not MdLoginTradingDayShape.VALID:
+                elif (
+                    not day_readable
+                    or trading_day_shape(trading_day, True) is not MdLoginTradingDayShape.VALID
+                ):
                     failure_reason = "trading_day_invalid"
                 else:
                     failure_reason = ""
@@ -2143,20 +2182,30 @@ class _MdSpi(CThostFtdcMdSpi):
                 else:
                     self._c._loggedin = True
                     login_ok = True
-                    self._c._login_callback_disposition = MdLoginCallbackDisposition.ACCEPTED
-                    self._c._active_md_identity = MdIdentityObservation(
-                        front=self._c._bound_front,
-                        broker_id=broker_id,
-                        user_id=user_id,
-                        connection_generation=generation,
-                        request_id=nRequestID,
-                        trading_day=trading_day,
-                        authenticated=True,
+                    self._c._login_callback_disposition = (
+                        MdLoginCallbackDisposition.READ_ONLY_ACCEPTED
+                        if zero_response
+                        else MdLoginCallbackDisposition.ACCEPTED
                     )
-                    self._c._active_md_identity_api = (
-                        self._native_api if self._native_api is not None else self._c._api
-                    )
-                    self._c._active_md_identity_spi = self
+                    if zero_response:
+                        # Some MD fronts do not echo the request ID. Allow
+                        # quote collection only; this is not a correlated
+                        # identity observation for execution authorization.
+                        self._c._clear_active_md_identity_locked()
+                    else:
+                        self._c._active_md_identity = MdIdentityObservation(
+                            front=self._c._bound_front,
+                            broker_id=broker_id,
+                            user_id=user_id,
+                            connection_generation=generation,
+                            request_id=nRequestID,
+                            trading_day=trading_day,
+                            authenticated=True,
+                        )
+                        self._c._active_md_identity_api = (
+                            self._native_api if self._native_api is not None else self._c._api
+                        )
+                        self._c._active_md_identity_spi = self
                     pending = len(self._c._pending_instruments)
                     if self._c._pending_instruments and self._c.auto_resubscribe_on_login:
                         subscribe = (self._c._api, list(self._c._pending_instruments))
@@ -2168,6 +2217,11 @@ class _MdSpi(CThostFtdcMdSpi):
                 error_callback = self._c.on_error
                 error_info = _MdLoginError(error_id if error_id not in (None, 0) else -1, "provider_login_rejected")
         if login_ok:
+            if zero_response:
+                _logger.info(
+                    "CTP market-data read-only login compatibility: response_id=0; "
+                    "correlated identity unavailable"
+                )
             _logger.info(
                 "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d)",
                 generation,
@@ -2227,9 +2281,14 @@ class MdClient:
         broker_id: 经纪商代码
         user_id: 投资者代码
         password: 密码
+        allow_zero_login_response: 行情采集兼容返回编号 0、账号字段为空的前置；
+            成功时仅开放行情订阅，不生成可供执行授权使用的已关联身份。
+            非空账号字段必须匹配。默认严格匹配请求编号和账号字段。
     """
 
-    def __init__(self, front, broker_id, user_id, password):
+    def __init__(self, front, broker_id, user_id, password, *, allow_zero_login_response=False):
+        if type(allow_zero_login_response) is not bool:
+            raise ValueError("allow_zero_login_response must be an exact bool")
         self.front = front
         self.broker_id = broker_id
         self.user_id = user_id
@@ -2238,6 +2297,7 @@ class MdClient:
         self.__bound_front = front if type(front) is str else None
         self.__bound_broker_id = broker_id if type(broker_id) is str else None
         self.__bound_user_id = user_id if type(user_id) is str else None
+        self.__allow_zero_login_response = allow_zero_login_response
 
         self.on_tick = None  # callback(CThostFtdcDepthMarketDataField)
         self.on_login = None  # callback(CThostFtdcRspUserLoginField)
@@ -2297,6 +2357,10 @@ class MdClient:
     @property
     def _bound_user_id(self):
         return self.__bound_user_id
+
+    @property
+    def _allow_zero_login_response(self):
+        return self.__allow_zero_login_response
 
     @property
     def active_md_identity(self):
@@ -2803,14 +2867,20 @@ class MdClient:
     def _native_flow_dir(self) -> str:
         return _flow_dir(f"md_{self._bound_broker_id}_{self._bound_user_id}")
 
-    def wait_ready(self, timeout=15):
+    def wait_ready(self, timeout=15, *, should_stop: Callable[[], bool] | None = None):
         """等待登录就绪"""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if should_stop is not None and should_stop():
+                return False
             with self._state_lock:
                 if self._loggedin:
                     return True
-            time.sleep(0.2)
+            remaining = max(0.0, deadline - time.monotonic())
+            interval = _CTP_STOP_POLL_SECONDS if should_stop is not None else 0.2
+            time.sleep(min(interval, remaining))
+        if should_stop is not None and should_stop():
+            return False
         with self._state_lock:
             return self._loggedin
 
@@ -3029,15 +3099,26 @@ class _OneShotMdDiagnosticSpi(_MdSpi):
                 or not self._c._login_request_pending
                 or self._c._login_request_generation != self._c._connection_generation
             ):
-                failure = ("unexpected_login_callback", MdLoginCallbackDisposition.GENERATION_MISMATCH)
+                failure = (
+                    "unexpected_login_callback",
+                    MdLoginCallbackDisposition.GENERATION_MISMATCH,
+                )
             elif type(nRequestID) is not int:
                 self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.INVALID
-                failure = ("login_request_id_type_invalid", MdLoginCallbackDisposition.REQUEST_ID_TYPE_INVALID)
+                failure = (
+                    "login_request_id_type_invalid",
+                    MdLoginCallbackDisposition.REQUEST_ID_TYPE_INVALID,
+                )
             elif nRequestID != 0:
                 self._c._login_callback_request_id_relation = (
-                    MdLoginRequestIdRelation.LOWER if nRequestID < 0 else MdLoginRequestIdRelation.HIGHER
+                    MdLoginRequestIdRelation.LOWER
+                    if nRequestID < 0
+                    else MdLoginRequestIdRelation.HIGHER
                 )
-                failure = ("login_request_id_mismatch", MdLoginCallbackDisposition.REQUEST_ID_MISMATCH)
+                failure = (
+                    "login_request_id_mismatch",
+                    MdLoginCallbackDisposition.REQUEST_ID_MISMATCH,
+                )
             else:
                 self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.ZERO
                 status, error_id = response_error_status(pRspInfo)
@@ -3045,7 +3126,11 @@ class _OneShotMdDiagnosticSpi(_MdSpi):
                 if bIsLast is not True:
                     failure = ("login_response_nonterminal", MdLoginCallbackDisposition.NONTERMINAL)
                 elif status is not MdLoginResponseErrorStatus.ZERO:
-                    reason = "provider_login_rejected" if error_id not in (None, 0) else "login_response_invalid"
+                    reason = (
+                        "provider_login_rejected"
+                        if error_id not in (None, 0)
+                        else "login_response_invalid"
+                    )
                     failure = (reason, MdLoginCallbackDisposition.PROVIDER_REJECTED)
                 else:
                     broker, broker_readable = source_text(pRspUserLogin, "BrokerID")
@@ -3055,7 +3140,9 @@ class _OneShotMdDiagnosticSpi(_MdSpi):
                         self._c._login_callback_disposition = MdLoginCallbackDisposition.STALE_SPI
                         return
                     if self._c._login_request_generation != self._c._connection_generation:
-                        self._c._login_callback_disposition = MdLoginCallbackDisposition.GENERATION_MISMATCH
+                        self._c._login_callback_disposition = (
+                            MdLoginCallbackDisposition.GENERATION_MISMATCH
+                        )
                         return
                     self._c._login_callback_broker_id_shape = identity_shape(
                         broker, broker_readable, self._c._bound_broker_id, MdLoginBrokerIdShape
@@ -3065,11 +3152,20 @@ class _OneShotMdDiagnosticSpi(_MdSpi):
                     )
                     self._c._login_callback_trading_day_shape = trading_day_shape(day, day_readable)
                     if broker != self._c._bound_broker_id or not broker_readable:
-                        failure = ("broker_id_mismatch", MdLoginCallbackDisposition.IDENTITY_REJECTED)
+                        failure = (
+                            "broker_id_mismatch",
+                            MdLoginCallbackDisposition.IDENTITY_REJECTED,
+                        )
                     elif user != self._c._bound_user_id or not user_readable:
                         failure = ("user_id_mismatch", MdLoginCallbackDisposition.IDENTITY_REJECTED)
-                    elif self._c._login_callback_trading_day_shape is not MdLoginTradingDayShape.VALID:
-                        failure = ("trading_day_invalid", MdLoginCallbackDisposition.IDENTITY_REJECTED)
+                    elif (
+                        self._c._login_callback_trading_day_shape
+                        is not MdLoginTradingDayShape.VALID
+                    ):
+                        failure = (
+                            "trading_day_invalid",
+                            MdLoginCallbackDisposition.IDENTITY_REJECTED,
+                        )
                     else:
                         self._c._diagnostic_login_completed = True
                         self._c._login_request_pending = False
@@ -3105,7 +3201,11 @@ class _OneShotMdDiagnosticSpi(_MdSpi):
                 failure = "unexpected_subscription_callback"
             elif self._c._diagnostic_subscription_acknowledged:
                 failure = "duplicate_subscription_callback"
-            elif type(nRequestID) is not int or bIsLast is not True or status is not MdLoginResponseErrorStatus.ZERO:
+            elif (
+                type(nRequestID) is not int
+                or bIsLast is not True
+                or status is not MdLoginResponseErrorStatus.ZERO
+            ):
                 failure = "subscription_response_invalid"
             elif not readable or instrument != self._c._diagnostic_subscription_instrument:
                 failure = "subscription_instrument_mismatch"
@@ -3182,7 +3282,9 @@ class OneShotMdDiagnosticClient(MdClient):
         return self._diagnostic_flow_directory.name + os.sep
 
     def _terminalize_diagnostic_locked(
-        self, reason: str, disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL
+        self,
+        reason: str,
+        disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL,
     ) -> None:
         if self._diagnostic_terminal:
             return
@@ -3196,7 +3298,9 @@ class OneShotMdDiagnosticClient(MdClient):
         self._login_callback_disposition = disposition
 
     def _fail_diagnostic(
-        self, reason: str, disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL
+        self,
+        reason: str,
+        disposition: MdLoginCallbackDisposition = MdLoginCallbackDisposition.TERMINAL,
     ):
         with self._state_lock:
             if self._diagnostic_terminal:
@@ -3215,7 +3319,9 @@ class OneShotMdDiagnosticClient(MdClient):
             self._fail_diagnostic("callback_failed")
 
     def _enter_diagnostic_callback(self) -> None:
-        self._diagnostic_callback_local.depth = getattr(self._diagnostic_callback_local, "depth", 0) + 1
+        self._diagnostic_callback_local.depth = (
+            getattr(self._diagnostic_callback_local, "depth", 0) + 1
+        )
         with self._state_lock:
             self._diagnostic_callbacks_active += 1
             self._diagnostic_callbacks_idle.clear()
@@ -3597,9 +3703,10 @@ def _managed_native_binding_payload(
         or envelope.get("operation") not in {"SUBMIT", "CANCEL"}
     ):
         raise CtpExecutionGateError("ctp_managed_native_binding_identity_invalid")
-    if type(envelope.get("managed_action_id")) is not str or not envelope[
-        "managed_action_id"
-    ].strip():
+    if (
+        type(envelope.get("managed_action_id")) is not str
+        or not envelope["managed_action_id"].strip()
+    ):
         raise CtpExecutionGateError("ctp_managed_native_binding_action_invalid")
     for name in (
         "owner_intent_id",
@@ -4071,11 +4178,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 failure_reason = "broker_id_mismatch"
             elif not user_id or user_id != self._c._bound_user_id:
                 failure_reason = "user_id_mismatch"
-            elif (
-                len(trading_day) != 8
-                or not trading_day.isascii()
-                or not trading_day.isdigit()
-            ):
+            elif len(trading_day) != 8 or not trading_day.isascii() or not trading_day.isdigit():
                 failure_reason = "trading_day_invalid"
             else:
                 try:
@@ -4893,17 +4996,20 @@ class TraderClient:
                 self._poison_callback_ingress_locked("lifecycle_transition")
                 raise CtpExecutionGateError("ctp_callback_ingress_session_bind_unconfirmed")
             source_tags_tuple = expected_tags
-            if tuple(
-                getattr(session, name, None)
-                for name in (
-                    "source_instance_id",
-                    "native_client_epoch",
-                    "native_api_source_id",
-                    "native_spi_source_id",
-                    "native_api_generation",
-                    "source_connection_generation",
+            if (
+                tuple(
+                    getattr(session, name, None)
+                    for name in (
+                        "source_instance_id",
+                        "native_client_epoch",
+                        "native_api_source_id",
+                        "native_spi_source_id",
+                        "native_api_generation",
+                        "source_connection_generation",
+                    )
                 )
-            ) != source_tags_tuple:
+                != source_tags_tuple
+            ):
                 self._poison_callback_ingress_locked("source_identity_mismatch")
                 raise CtpExecutionGateError("ctp_callback_ingress_session_source_mismatch")
             state.active_session = session
@@ -6245,25 +6351,31 @@ class TraderClient:
                 or len(managed_intent_id) > 256
                 or not managed_intent_id.isascii()
                 or any(not (char.isalnum() or char in "._:-") for char in managed_intent_id)
-                or (runtime_action_id is not None and (
-                    not isinstance(runtime_action_id, str)
-                    or not runtime_action_id
-                    or runtime_action_id != runtime_action_id.strip()
-                    or len(runtime_action_id) > 256
-                    or not runtime_action_id.isascii()
-                    or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
-                ))
-                or (managed_cancel_intent_id is not None and (
-                    not isinstance(managed_cancel_intent_id, str)
-                    or not managed_cancel_intent_id
-                    or managed_cancel_intent_id != managed_cancel_intent_id.strip()
-                    or len(managed_cancel_intent_id) > 256
-                    or not managed_cancel_intent_id.isascii()
-                    or any(
-                        not (char.isalnum() or char in "._:-")
-                        for char in managed_cancel_intent_id
+                or (
+                    runtime_action_id is not None
+                    and (
+                        not isinstance(runtime_action_id, str)
+                        or not runtime_action_id
+                        or runtime_action_id != runtime_action_id.strip()
+                        or len(runtime_action_id) > 256
+                        or not runtime_action_id.isascii()
+                        or any(not (char.isalnum() or char in "._:-") for char in runtime_action_id)
                     )
-                ))
+                )
+                or (
+                    managed_cancel_intent_id is not None
+                    and (
+                        not isinstance(managed_cancel_intent_id, str)
+                        or not managed_cancel_intent_id
+                        or managed_cancel_intent_id != managed_cancel_intent_id.strip()
+                        or len(managed_cancel_intent_id) > 256
+                        or not managed_cancel_intent_id.isascii()
+                        or any(
+                            not (char.isalnum() or char in "._:-")
+                            for char in managed_cancel_intent_id
+                        )
+                    )
+                )
             ):
                 raise ValueError("managed CTP identity invalid")
             self._validate_runtime_simnow_credential_binding_locked(binding)
@@ -7503,10 +7615,7 @@ class TraderClient:
                 known_request_id == request_id for known_request_id, _ in self._order_action_history
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_reused")
-            if (
-                managed_cancel
-                and managed_cancel_intent_id in self._managed_cancel_actions_seen
-            ):
+            if managed_cancel and managed_cancel_intent_id in self._managed_cancel_actions_seen:
                 raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_action_reused")
 
             now = datetime.now(timezone.utc)
@@ -8413,9 +8522,7 @@ class TraderClient:
                         spi._callback_source_tags.native_api_generation,
                         spi._callback_source_tags.connection_generation,
                     )
-                    self._callback_ingress.current_source_tags_object = (
-                        spi._callback_source_tags
-                    )
+                    self._callback_ingress.current_source_tags_object = spi._callback_source_tags
                     self._callback_ingress.phase = "PRE_LOGIN"
                 self._native_init_started = False
                 self._join_active = False
@@ -8508,10 +8615,12 @@ class TraderClient:
 
         self._start_join_observer(api)
 
-    def wait_ready(self, timeout=15):
+    def wait_ready(self, timeout=15, *, should_stop: Callable[[], bool] | None = None):
         """Wait for login, direct confirmation and matching server readback."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if should_stop is not None and should_stop():
+                return False
             if self.is_ready:
                 return True
             with self._query_state_lock:
@@ -8523,10 +8632,20 @@ class TraderClient:
                     and not self._has_current_settlement_readback_locked()
                 )
             if should_read_back:
-                remaining = max(0.0, deadline - time.time())
-                self.verify_settlement_confirmation(timeout=min(5.0, remaining))
+                remaining = max(0.0, deadline - time.monotonic())
+                if should_stop is None:
+                    self.verify_settlement_confirmation(timeout=min(5.0, remaining))
+                else:
+                    self.verify_settlement_confirmation(
+                        timeout=min(5.0, remaining),
+                        should_stop=should_stop,
+                    )
                 continue
-            time.sleep(min(0.2, max(0.0, deadline - time.time())))
+            remaining = max(0.0, deadline - time.monotonic())
+            interval = _CTP_STOP_POLL_SECONDS if should_stop is not None else 0.2
+            time.sleep(min(interval, remaining))
+        if should_stop is not None and should_stop():
+            return False
         return self.is_ready
 
     def _new_query_accumulator(
@@ -8659,6 +8778,10 @@ class TraderClient:
             ):
                 accumulator.late_callback_count += 1
                 return
+            # Retain callback progress even when a valid response packet has
+            # no row (for example, an empty nonterminal response). Progressive
+            # waits read this timestamp under the same lock before timing out.
+            accumulator.last_callback_monotonic = time.monotonic()
             if record is not None:
                 snapshot = _snapshot_query_record(record)
                 if request_type == "instruments":
@@ -8715,7 +8838,14 @@ class TraderClient:
         request_intent_filters: Mapping[str, str] | None = None,
         request_intent_parameters: Mapping[str, float] | None = None,
         explicit_request_filters: tuple[str, ...] = (),
+        should_stop: Callable[[], bool] | None = None,
+        max_duration: float | None = None,
     ) -> QueryResult[Any]:
+        progressive_idle_timeout, progressive_max_duration = _progressive_query_wait_limits(
+            timeout, max_duration
+        )
+        if should_stop is not None and should_stop():
+            return self._local_query_failure(request_type, "query_cancelled")
         if not self.is_read_only_ready:
             return self._local_query_failure(request_type, "trader_not_logged_in")
         if not callable(submit):
@@ -8728,7 +8858,18 @@ class TraderClient:
             elapsed = time.monotonic() - self._last_query_submitted_at
             wait_time = self._query_interval - elapsed
             if wait_time > 0:
-                time.sleep(wait_time)
+                if should_stop is None:
+                    time.sleep(wait_time)
+                else:
+                    stop_wait = threading.Event()
+                    wait_deadline = time.monotonic() + wait_time
+                    while True:
+                        if should_stop():
+                            return self._local_query_failure(request_type, "query_cancelled")
+                        remaining = wait_deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        stop_wait.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
             try:
                 request_intent_items = _query_filter_items(request_intent_filters)
                 request_filter_items = _read_native_query_filter_items(
@@ -8757,6 +8898,8 @@ class TraderClient:
                     unsupported=True,
                     include_query_source=False,
                 )
+            if should_stop is not None and should_stop():
+                return self._local_query_failure(request_type, "query_cancelled")
             accumulator = self._new_query_accumulator(
                 request_type,
                 dict(request_filter_items),
@@ -8765,12 +8908,22 @@ class TraderClient:
                 request_parameters=dict(request_parameter_items),
                 request_intent_parameters=dict(request_intent_parameter_items),
             )
-            self._record_request(f"query_{request_type}")
             self._last_query_submitted_at = time.monotonic()
 
         # Release the query-rate lock before entering native code. A vendor
         # Req may synchronously invoke a callback on this thread or wait for a
         # callback thread that must acquire SDK state locks.
+        if should_stop is not None and should_stop():
+            with self._query_state_lock:
+                if not accumulator.event.is_set() and not accumulator.is_last_seen:
+                    accumulator.error_code = -1
+                    accumulator.error_message = "query_cancelled"
+                    accumulator.completed_at_utc = datetime.now(timezone.utc)
+                    accumulator.completed_monotonic = time.monotonic()
+                    accumulator.sealed = True
+                    accumulator.event.set()
+                return accumulator.result()
+        self._record_request(f"query_{request_type}")
         try:
             ret = submit(accumulator.request_id)
         except Exception as exc:
@@ -8790,17 +8943,99 @@ class TraderClient:
             accumulator.sealed = True
             accumulator.event.set()
             return accumulator.result()
-        observed = accumulator.event.wait(max(float(timeout), 0.0))
+        cancelled = False
+        if progressive_idle_timeout is not None and progressive_max_duration is not None:
+            # The idle timeout bounds silence between response packets; valid
+            # callback progress extends it, while the total duration remains
+            # a hard cap measured from the query's native submission window.
+            hard_deadline = accumulator.started_monotonic + progressive_max_duration
+            idle_deadline = accumulator.started_monotonic + progressive_idle_timeout
+            last_progress: float | None = None
+            while True:
+                if accumulator.event.is_set():
+                    observed = True
+                    break
+                if should_stop is not None and should_stop():
+                    cancelled = True
+
+                with self._query_state_lock:
+                    terminal_observed = (
+                        accumulator.event.is_set()
+                        or accumulator.is_last_seen
+                        or accumulator.error_code not in (None, 0)
+                    )
+                    if terminal_observed:
+                        observed = True
+                        break
+
+                    callback_at = accumulator.last_callback_monotonic
+                    now = time.monotonic()
+                    if callback_at is not None and (
+                        last_progress is None or callback_at > last_progress
+                    ):
+                        last_progress = callback_at
+                        idle_deadline = min(
+                            callback_at + progressive_idle_timeout,
+                            hard_deadline,
+                        )
+
+                    if cancelled:
+                        accumulator.error_code = -1
+                        accumulator.error_message = "query_cancelled"
+                        accumulator.completed_at_utc = datetime.now(timezone.utc)
+                        accumulator.completed_monotonic = now
+                        accumulator.sealed = True
+                        accumulator.event.set()
+                        return accumulator.result()
+
+                    deadline = min(idle_deadline, hard_deadline)
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        # Reaching this decision while holding the callback
+                        # lock seals the request atomically against later
+                        # packets. A terminal callback already recorded above
+                        # still wins the deadline race.
+                        accumulator.timed_out = True
+                        accumulator.error_message = "query_timeout"
+                        accumulator.completed_at_utc = datetime.now(timezone.utc)
+                        accumulator.completed_monotonic = now
+                        accumulator.sealed = True
+                        accumulator.event.set()
+                        return accumulator.result()
+
+                accumulator.event.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
+        elif should_stop is None:
+            observed = accumulator.event.wait(max(float(timeout), 0.0))
+        else:
+            wait_deadline = time.monotonic() + max(float(timeout), 0.0)
+            while True:
+                if accumulator.event.is_set():
+                    observed = True
+                    break
+                if should_stop():
+                    observed = False
+                    cancelled = True
+                    break
+                remaining = wait_deadline - time.monotonic()
+                if remaining <= 0:
+                    observed = False
+                    break
+                accumulator.event.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
         with self._query_state_lock:
-            # If the terminal callback acquired the state lock at the
-            # timeout boundary, it wins the race and remains complete.
-            if (
-                not observed
-                and not accumulator.is_last_seen
-                and accumulator.error_code in (None, 0)
-            ):
-                accumulator.timed_out = True
-                accumulator.error_message = "query_timeout"
+            # If a terminal callback acquired the state lock at the timeout
+            # or cancellation boundary, its result wins the race.
+            terminal_observed = (
+                accumulator.event.is_set()
+                or accumulator.is_last_seen
+                or accumulator.error_code not in (None, 0)
+            )
+            if not observed and not terminal_observed:
+                if cancelled:
+                    accumulator.error_code = -1
+                    accumulator.error_message = "query_cancelled"
+                else:
+                    accumulator.timed_out = True
+                    accumulator.error_message = "query_timeout"
             if accumulator.completed_at_utc is None:
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
                 accumulator.completed_monotonic = time.monotonic()
@@ -8982,14 +9217,26 @@ class TraderClient:
         return list(result.records) if result.complete else []
 
     def query_instruments_result(
-        self, instrument_id="", exchange_id="", product_id="", timeout=5
+        self,
+        instrument_id="",
+        exchange_id="",
+        product_id="",
+        timeout=5,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+        max_duration: float | None = None,
     ) -> QueryResult[Any]:
         """Read all visible instruments with empty filters, including options.
 
         Native fields are preserved alongside normalized reference metadata.
         Only ``complete=True`` proves the matching terminal packet; visibility
-        is limited to the connected front, account and trading day.
+        is limited to the connected front, account and trading day. When
+        ``max_duration`` is set, ``timeout`` bounds packet silence and the
+        maximum duration remains a hard cap for the whole query.
         """
+        _progressive_query_wait_limits(timeout, max_duration)
+        if should_stop is not None and should_stop():
+            return self._local_query_failure("instruments", "query_cancelled")
         field = CThostFtdcQryInstrumentField()
         intent_filters = {"InstrumentID": str(instrument_id or "")}
         field.InstrumentID = intent_filters["InstrumentID"]
@@ -9024,6 +9271,8 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            should_stop=should_stop,
+            max_duration=max_duration,
         )
 
     def query_instrument(self, instrument_id, exchange_id="", timeout=5):
@@ -9235,7 +9484,14 @@ class TraderClient:
             timeout,
         )
 
-    def query_settlement_confirmation_result(self, timeout=5) -> QueryResult[Any]:
+    def query_settlement_confirmation_result(
+        self,
+        timeout=5,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> QueryResult[Any]:
+        if should_stop is not None and should_stop():
+            return self._local_query_failure("settlement_confirmation", "query_cancelled")
         field = CThostFtdcQrySettlementInfoConfirmField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
@@ -9265,16 +9521,32 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            should_stop=should_stop,
         )
 
-    def verify_settlement_confirmation(self, timeout=5) -> QueryResult[Any]:
+    def verify_settlement_confirmation(
+        self,
+        timeout=5,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> QueryResult[Any]:
         """Read server confirmation and promote this matching session to trading ready."""
+        if should_stop is not None and should_stop():
+            return self._local_query_failure("settlement_confirmation", "query_cancelled")
         with self._query_state_lock:
             expected_generation = self._connection_generation
             expected_fingerprint = self._account_fingerprint
             expected_trading_day = self._trading_day
             self._clear_settlement_readback_locked("ctp_execution_gate_settlement_readback_refresh")
-        result = self.query_settlement_confirmation_result(timeout=timeout)
+        if should_stop is None:
+            result = self.query_settlement_confirmation_result(timeout=timeout)
+        else:
+            result = self.query_settlement_confirmation_result(
+                timeout=timeout,
+                should_stop=should_stop,
+            )
+        if result.error_message == "query_cancelled":
+            return result
         failure_reason = ""
         if not result.complete:
             failure_reason = "ctp_execution_gate_settlement_readback_incomplete"

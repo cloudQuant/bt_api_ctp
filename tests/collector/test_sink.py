@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,6 +13,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
+from bt_api_ctp.collector import sink as sink_module
 from bt_api_ctp.collector.protocols import TickRecord
 from bt_api_ctp.collector.sink import TICK_ARROW_SCHEMA, ParquetSink
 
@@ -49,6 +52,22 @@ def _tick(
     }
     base.update(overrides)
     return TickRecord(**base)
+
+
+def _hold_instrument_lock(root: str, acquired, release) -> None:
+    root_path = Path(root)
+    final_path = root_path / "20260916" / "SHFE" / "rb2510.parquet"
+    with sink_module._instrument_lock(root_path, final_path):
+        acquired.set()
+        if not release.wait(timeout=10):
+            raise TimeoutError("test did not release the first instrument lock")
+
+
+def _acquire_instrument_lock(root: str, acquired) -> None:
+    root_path = Path(root)
+    final_path = root_path / "20260916" / "SHFE" / "rb2510.parquet"
+    with sink_module._instrument_lock(root_path, final_path):
+        acquired.set()
 
 
 class TestStagedWriting:
@@ -127,6 +146,38 @@ class TestStagedWriting:
 
         assert list((tmp_path / ".locks").rglob("*.lock"))
 
+    def test_windows_lock_releases_its_byte_when_compaction_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """Windows fallback must unlock on errors and keep its permanent lock file."""
+
+        class FakeMsvcrt:
+            LK_LOCK = 1
+            LK_UNLCK = 2
+
+            def __init__(self):
+                self.calls = []
+                self.positions = []
+
+            def locking(self, fd, mode, length):
+                self.calls.append((mode, length))
+                self.positions.append(os.lseek(fd, 0, os.SEEK_CUR))
+
+        fake_msvcrt = FakeMsvcrt()
+        monkeypatch.setattr(sink_module, "fcntl", None)
+        monkeypatch.setattr(sink_module, "msvcrt", fake_msvcrt)
+        root = Path(tmp_path)
+        final_path = root / "20260916" / "SHFE" / "rb2510.parquet"
+
+        with pytest.raises(RuntimeError, match="compaction failed"):
+            with sink_module._instrument_lock(root, final_path):
+                raise RuntimeError("compaction failed")
+
+        lock_path = root / ".locks" / "20260916" / "SHFE" / "rb2510.parquet.lock"
+        assert lock_path.read_bytes() == b"\0"
+        assert fake_msvcrt.calls == [(fake_msvcrt.LK_LOCK, 1), (fake_msvcrt.LK_UNLCK, 1)]
+        assert fake_msvcrt.positions == [0, 0]
+
     def test_finalize_twice_is_idempotent(self, tmp_path):
         sink = ParquetSink(tmp_path)
         sink.write({"rb2510": [_tick()]})
@@ -197,13 +248,22 @@ class TestStagingRecovery:
         assert list((tmp_path / ".staging").rglob("*.parquet")) == []
 
     def test_segments_from_a_live_run_are_left_alone(self, tmp_path):
-        # pid 1 在任何 POSIX 系统上都必然存活
-        staged = self._stage_as(tmp_path, "1-live")
+        staged = self._stage_as(tmp_path, f"{os.getpid()}-live")
 
         ParquetSink(tmp_path).finalize("20260916")
 
         assert not (tmp_path / "20260916" / "SHFE" / "rb2510.parquet").exists()
         assert staged.exists()
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows process checks must not signal PIDs")
+    def test_windows_pid_liveness_check_never_calls_os_kill(self, monkeypatch):
+        def unexpected_kill(*_args):
+            pytest.fail("Windows PID liveness checks must not call os.kill")
+
+        monkeypatch.setattr(os, "kill", unexpected_kill)
+
+        assert sink_module._pid_is_alive(f"{os.getpid()}-live")
+        assert not sink_module._pid_is_alive("999999-deadbeef")
 
     def test_repeated_finalize_does_not_inflate_pending_or_failures(self, tmp_path, monkeypatch):
         """反复 finalize + 持续失败时，pending 与失败计数不得单调虚增。"""
@@ -929,6 +989,41 @@ class TestConcurrentWriteProtection:
         assert errors == []
         rows = pq.read_table(tmp_path / "20260916" / "SHFE" / "rb2510.parquet").to_pylist()
         assert len(rows) == 10  # 两组各 5 条，无覆盖丢失
+
+    def test_instrument_lock_serializes_separate_processes(self, tmp_path):
+        context = multiprocessing.get_context("spawn")
+        first_acquired = context.Event()
+        release_first = context.Event()
+        second_acquired = context.Event()
+        first = context.Process(
+            target=_hold_instrument_lock,
+            args=(str(tmp_path), first_acquired, release_first),
+        )
+        second = context.Process(
+            target=_acquire_instrument_lock,
+            args=(str(tmp_path), second_acquired),
+        )
+
+        first.start()
+        try:
+            assert first_acquired.wait(timeout=10), "first process did not acquire the lock"
+            second.start()
+            assert not second_acquired.wait(timeout=0.3), (
+                "second process entered while the first still held the instrument lock"
+            )
+        finally:
+            release_first.set()
+            for process in (first, second):
+                if process.pid is None:
+                    continue
+                process.join(timeout=10)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+
+        assert first.exitcode == 0
+        assert second.exitcode == 0
+        assert second_acquired.is_set()
 
     def test_lock_files_do_not_pollute_parquet_scan(self, tmp_path):
         sink = ParquetSink(tmp_path)

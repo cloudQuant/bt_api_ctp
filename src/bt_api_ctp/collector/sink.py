@@ -41,6 +41,11 @@ try:  # pragma: no cover - Windows has no fcntl
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - POSIX has no msvcrt
+    import msvcrt
+except ImportError:  # pragma: no cover
+    msvcrt = None  # type: ignore[assignment]
+
 _logger = logging.getLogger(__name__)
 
 _LEVEL_COUNT = 5
@@ -325,8 +330,42 @@ def _pid_is_alive(run_id: str) -> bool:
     head = run_id.split("-", 1)[0]
     if not head.isdigit():
         return True
+    pid = int(head)
+    if os.name == "nt":
+        # On Windows, os.kill(pid, 0) maps signal 0 to CTRL_C_EVENT. During
+        # staging recovery that can interrupt every process attached to the
+        # console, so query process state without sending a signal.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        get_exit_code = kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        get_exit_code.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        # PROCESS_QUERY_LIMITED_INFORMATION is sufficient for GetExitCodeProcess.
+        handle = open_process(0x1000, False, pid)
+        if not handle:
+            # ERROR_INVALID_PARAMETER means the PID does not exist. Other
+            # failures (especially access denied) are treated as alive so we
+            # never consume staging owned by a process we cannot inspect.
+            return ctypes.get_last_error() != 87
+        try:
+            exit_code = wintypes.DWORD()
+            if not get_exit_code(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            close_handle(handle)
+
     try:
-        os.kill(int(head), 0)
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except OSError:  # pragma: no cover - 权限等异常时保守视为存活
@@ -349,18 +388,37 @@ def _instrument_lock(root: Path, path: Path):
     on an orphaned inode while a third process locks a freshly created file at
     the same path.
     """
-    if fcntl is None:  # pragma: no cover - Windows fallback
-        yield
-        return
     relative = path.relative_to(root)
     lock_path = root / ".locks" / relative.parent / f"{relative.name}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if fcntl is not None:
+        with open(lock_path, "w", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+
+    if msvcrt is None:  # pragma: no cover - both standard lock APIs unavailable
+        raise RuntimeError("cross-process instrument locking is unavailable")
+
+    # msvcrt locks byte ranges starting at the file's current position. Keep a
+    # permanent first byte in the lock file and always lock that same byte.
+    # LK_LOCK retries once per second up to ten times, then raises instead of
+    # waiting forever if another process has stalled while holding the lock.
+    with open(lock_path, "a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class ParquetSink:

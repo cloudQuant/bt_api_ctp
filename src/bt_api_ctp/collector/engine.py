@@ -18,6 +18,7 @@ from typing import Any
 
 from bt_api_ctp.collector.buffer import TickBuffer
 from bt_api_ctp.collector.health import CollectionHealthGuard, HealthThresholds
+from bt_api_ctp.collector.lifecycle import CollectionCancelled, check_stop
 from bt_api_ctp.collector.protocols import (
     DEFAULT_ASSET_TYPES,
     EXCHANGES,
@@ -111,13 +112,12 @@ class TickCollectionEngine:
             ]
         return select_instruments(instruments, self._config.shard)
 
-    def run_once(
-        self, *, duration_sec: float | None = None, stop_event: Any = None
-    ) -> SinkReport:
+    def run_once(self, *, duration_sec: float | None = None, stop_event: Any = None) -> SinkReport:
         """Collect for one window, then flush and report."""
         self._cumulative = {}
         self._reported = {}
         try:
+            check_stop(stop_event)
             instruments = self._provider.fetch_instruments()
         finally:
             # The reference query is done (or failed); release the venue's
@@ -125,6 +125,7 @@ class TickCollectionEngine:
             close_provider = getattr(self._provider, "close", None)
             if callable(close_provider):
                 close_provider()
+        check_stop(stop_event)
         selected = self._select(instruments)
         buffer = TickBuffer(
             per_instrument_cap=self._config.per_instrument_cap,
@@ -149,26 +150,28 @@ class TickCollectionEngine:
             if self._config.health_check_enabled
             else None
         )
-        self._subscriber.set_handler(handler)
-        self._subscriber.connect()
-        # CTP depth callbacks carry no ExchangeID; hand the venue the
-        # instrument -> exchange map so ticks keep their exchange directory.
-        set_exchanges = getattr(self._subscriber, "set_instrument_exchanges", None)
-        if callable(set_exchanges):
-            set_exchanges({spec.instrument_id: spec.exchange_id for spec in selected})
-        self._subscriber.subscribe([spec.instrument_id for spec in selected])
-        self._report_subscription(selected)
-
         poll_seconds = min(_MAX_POLL_SECONDS, max(self._config.flush_interval_sec, 0.001))
-        deadline = None
-        if duration_sec is not None:
-            deadline = time.monotonic() + float(duration_sec)
-        started = time.monotonic()
-        last_flush = started
-        last_heartbeat = started
         trading_day = ""
 
         try:
+            check_stop(stop_event)
+            self._subscriber.set_handler(handler)
+            self._subscriber.connect()
+            check_stop(stop_event)
+            # CTP depth callbacks carry no ExchangeID; use the reference map.
+            set_exchanges = getattr(self._subscriber, "set_instrument_exchanges", None)
+            if callable(set_exchanges):
+                set_exchanges({spec.instrument_id: spec.exchange_id for spec in selected})
+            self._subscriber.subscribe([spec.instrument_id for spec in selected])
+            check_stop(stop_event)
+            self._report_subscription(selected, stop_event=stop_event)
+
+            deadline = None
+            if duration_sec is not None:
+                deadline = time.monotonic() + float(duration_sec)
+            started = time.monotonic()
+            last_flush = started
+            last_heartbeat = started
             while True:
                 if stop_event is not None and stop_event.is_set():
                     break
@@ -196,14 +199,18 @@ class TickCollectionEngine:
                     )
                     last_heartbeat = now
                     self._report_health(guard, now=now, subscribed=len(selected))
+        except CollectionCancelled:
+            _logger.info("collection stopping: closing market data and finalizing buffered ticks")
         finally:
-            trading_day = self._flush(sink, buffer, trading_day, guard)
-            self._subscriber.close()
+            # Stop callbacks before the final drain so late ticks are retained.
+            # A startup/login error also owns a partially opened MD session.
+            try:
+                self._subscriber.close()
+            finally:
+                trading_day = self._flush(sink, buffer, trading_day, guard)
 
         if not trading_day:
-            _logger.info(
-                "collection finished: no data persisted (received=%d)", handler.accepted
-            )
+            _logger.info("collection finished: no data persisted (received=%d)", handler.accepted)
             return SinkReport(trading_day="", dropped_ticks=buffer.dropped_count())
         report = sink.finalize(
             trading_day,
@@ -233,9 +240,7 @@ class TickCollectionEngine:
         """
         if guard is None:
             return
-        verdict = guard.evaluate(
-            now=now, subscribed=subscribed, session=self._current_session()
-        )
+        verdict = guard.evaluate(now=now, subscribed=subscribed, session=self._current_session())
         _logger.info("health: %s", verdict.describe())
         for reason in verdict.alarm_reasons:
             _logger.error("collection health alarm: %s", reason)
@@ -266,7 +271,9 @@ class TickCollectionEngine:
             "resubscribes": read("resubscribe_events", []),
         }
 
-    def _report_subscription(self, selected: list[InstrumentSpec]) -> None:
+    def _report_subscription(
+        self, selected: list[InstrumentSpec], *, stop_event: Any = None
+    ) -> None:
         """Log the requested universe per asset type, then the acknowledgement."""
         counts = Counter(spec.asset_type for spec in selected)
         breakdown = ", ".join(f"{name}={counts[name]}" for name in sorted(counts))
@@ -277,7 +284,7 @@ class TickCollectionEngine:
             self._config.flush_interval_sec,
             breakdown,
         )
-        ack = self._await_subscription_ack(len(selected))
+        ack = self._await_subscription_ack(len(selected), stop_event=stop_event)
         if not ack:
             return
         # "ok" 只代表柜台 ACK 无错误码；只有 acked == requested 才算就绪。
@@ -301,7 +308,9 @@ class TickCollectionEngine:
                 ack["last_error_id"],
             )
 
-    def _await_subscription_ack(self, expected: int, timeout_sec: float = 15.0) -> dict[str, Any]:
+    def _await_subscription_ack(
+        self, expected: int, timeout_sec: float = 15.0, *, stop_event: Any = None
+    ) -> dict[str, Any]:
         """Wait briefly for the per-batch subscribe responses to come back.
 
         Responses arrive on the native callback thread *after* ``subscribe``
@@ -320,6 +329,7 @@ class TickCollectionEngine:
             int(stats.get("ok", 0) or 0) + int(stats.get("failed", 0) or 0) < expected
             and time.monotonic() < deadline
         ):
+            check_stop(stop_event)
             time.sleep(0.1)
             stats = stats_fn()
         acked = int(stats.get("ok", 0) or 0)

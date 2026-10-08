@@ -15,6 +15,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+from bt_api_ctp.collector.lifecycle import check_stop
 from bt_api_ctp.collector.protocols import TickHandler
 from bt_api_ctp.collector_ctp.normalizer import CtpTickNormalizer
 
@@ -42,6 +43,7 @@ class CtpMdSubscriber:
         batch_interval_sec: float = 0.1,
         login_timeout_sec: float = 15.0,
         instrument_exchanges: dict[str, str] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self._md_client = md_client
         self.normalizer = normalizer if normalizer is not None else CtpTickNormalizer()
@@ -55,6 +57,7 @@ class CtpMdSubscriber:
         self._subscribe_failed = 0
         self._last_subscribe_error_id: int | None = None
         self._stop_event = threading.Event()
+        self._collection_stop_event = stop_event
         self._last_generation: int | None = None
         self._generation_changes: list[dict[str, Any]] = []
         self._subscribed: list[str] = []
@@ -89,6 +92,7 @@ class CtpMdSubscriber:
         the pending set, and the post-login callback would submit everything
         in one native call.
         """
+        check_stop(self._collection_stop_event)
         self._stop_event.clear()
         self._last_generation = self._current_generation()
         self._md_client.on_tick = self._on_raw_tick
@@ -132,19 +136,34 @@ class CtpMdSubscriber:
         wait_ready = getattr(self._md_client, "wait_ready", None)
         if not callable(wait_ready):
             return  # host cannot report readiness; keep legacy behaviour
-        if wait_ready(timeout=self._login_timeout_sec) is not True:
+        kwargs = {"timeout": self._login_timeout_sec}
+        if self._collection_stop_event is not None:
+            kwargs["should_stop"] = self._should_stop
+        ready = wait_ready(**kwargs)
+        check_stop(self._collection_stop_event)
+        if ready is not True:
+            diagnostic = getattr(self._md_client, "login_callback_diagnostic", None)
+            if diagnostic is not None:
+                _logger.error("CTP market-data login diagnostic: %s", diagnostic)
             # Fail fast: a silent login failure would collect nothing for the
             # whole window while looking healthy in the heartbeat log.
             raise RuntimeError("ctp_md_login_timeout")
 
     def subscribe(self, instruments: list[str]) -> None:
         """Subscribe in batches while keeping the full set for reconnects."""
+        check_stop(self._collection_stop_event)
         self._subscribed = list(instruments)
         self._md_client.subscribe_batched(
             instruments,
             batch_size=self._batch_size,
             interval_sec=self._batch_interval_sec,
-            should_stop=self._stop_event.is_set,
+            should_stop=self._should_stop,
+        )
+        check_stop(self._collection_stop_event)
+
+    def _should_stop(self) -> bool:
+        return self._stop_event.is_set() or (
+            self._collection_stop_event is not None and self._collection_stop_event.is_set()
         )
 
     def run(self) -> None:
@@ -179,9 +198,7 @@ class CtpMdSubscriber:
         """
         windows = list(self._disconnect_windows)
         if self._pending_disconnect is not None:
-            windows.append(
-                {**self._pending_disconnect, "end": None, "generation_after": None}
-            )
+            windows.append({**self._pending_disconnect, "end": None, "generation_after": None})
         return windows
 
     def failed_instruments(self) -> dict[str, int]:
@@ -275,11 +292,11 @@ class CtpMdSubscriber:
         }
 
     def _resubscribe_loop(self) -> None:
-        while not self._stop_event.is_set():
+        while not self._should_stop():
             if not self._resubscribe_event.wait(_RUN_POLL_SECONDS):
                 continue
             self._resubscribe_event.clear()
-            if self._stop_event.is_set():
+            if self._should_stop():
                 return
             try:
                 self._resubscribe()
@@ -305,7 +322,7 @@ class CtpMdSubscriber:
                 instruments,
                 batch_size=self._batch_size,
                 interval_sec=self._batch_interval_sec,
-                should_stop=self._stop_event.is_set,
+                should_stop=self._should_stop,
             )
         except Exception:
             _logger.exception(
