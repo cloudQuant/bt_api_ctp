@@ -54,7 +54,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Literal
 from urllib.parse import urlsplit
 
-from bt_api_ctp.ctp_env_selector import is_official_simnow_td_front
+from bt_api_ctp.ctp_env_selector import (
+    is_official_simnow_td_front,
+    official_simnow_profile_for_td_front,
+    registered_broker_sim_profile_for_td_front,
+)
 from bt_api_ctp.instrument import normalize_ctp_instrument
 from bt_api_ctp.md_diagnostics import (
     MdLoginBrokerIdShape,
@@ -4640,6 +4644,11 @@ class TraderClient:
         self._execution_gate_revocation_reason: str | None = None
         self._execution_gate_native_api = None
         self._runtime_simnow_credential_binding: CtpRuntimeSimNowCredentialBinding | None = None
+        # Records the frozen simulation profile admitted through
+        # ``arm_execution_for_registered_sim``.  It is revalidated against the
+        # bound TD front on every use, so a mutated or rebound client cannot
+        # ride a stale admission.
+        self._direct_sim_admission_profile: str | None = None
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -5043,7 +5052,10 @@ class TraderClient:
                     self._poison_callback_ingress_locked("source_identity_mismatch")
                 raise CtpExecutionGateError("ctp_managed_native_request_source_mismatch")
             if method_name in {"ReqOrderInsert", "ReqOrderAction"}:
-                if self._is_simnow_write_restricted_locked():
+                if (
+                    self._is_simnow_write_restricted_locked()
+                    and not self._direct_sim_admission_is_current_locked()
+                ):
                     authorization = simnow_write_authorization
                     if type(authorization) is not _CtpRuntimeSimNowWriteAuthorization:
                         raise CtpExecutionGateError("ctp_simnow_write_authorization_required")
@@ -5880,8 +5892,28 @@ class TraderClient:
         )
 
     def _reject_official_simnow_write_locked(self) -> None:
-        if self._is_simnow_write_restricted_locked():
+        if (
+            self._is_simnow_write_restricted_locked()
+            and not self._direct_sim_admission_is_current_locked()
+        ):
             raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
+
+    def _direct_sim_admission_is_current_locked(self) -> bool:
+        """True while an admitted frozen simulation front is still bound.
+
+        ``arm_execution_for_registered_sim`` records the exact profile after
+        the bound TD front matched a frozen simulation registry (a registered
+        broker simulation or the official SimNow whitelist).  Production
+        fronts can never match either registry; the admission is revalidated
+        here on every use instead of trusting a stale flag.
+        """
+        profile = self._direct_sim_admission_profile
+        if not profile:
+            return False
+        expected = registered_broker_sim_profile_for_td_front(
+            self._bound_front
+        ) or official_simnow_profile_for_td_front(self._bound_front)
+        return bool(expected) and expected == profile
 
     def _require_bound_identity_locked(self, *, require_active_front: bool = False) -> None:
         """Fail closed before a managed native write can use mutable identity."""
@@ -6455,7 +6487,10 @@ class TraderClient:
     ) -> None:
         """Consume a SimNow grant at the final typed native request boundary."""
 
-        if not self._is_simnow_write_restricted_locked():
+        if (
+            not self._is_simnow_write_restricted_locked()
+            or self._direct_sim_admission_is_current_locked()
+        ):
             if authorization is not None:
                 raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
             return
@@ -6806,7 +6841,10 @@ class TraderClient:
         runtime_action_id: str | None = None,
         managed_cancel_intent_id: str | None = None,
     ) -> _CtpRuntimeSimNowWriteAuthorization | None:
-        if self._is_simnow_write_restricted_locked():
+        if (
+            self._is_simnow_write_restricted_locked()
+            and not self._direct_sim_admission_is_current_locked()
+        ):
             if operation not in {"insert", "cancel"}:
                 raise CtpExecutionGateError("ctp_simnow_managed_operation_required")
             if operation == "insert" and (
@@ -7025,16 +7063,16 @@ class TraderClient:
         preflight_sha256: str,
         settlement_timeout: float = 15.0,
     ) -> tuple[object, dict[str, Any]]:
-        """Arm native order writes for a registered broker simulation front.
+        """Arm native order writes for a frozen simulation front.
 
         This is the typed admission entry for direct (non-SDK-managed) CTP
-        callers that run against a broker-provided *simulation* front whose
-        endpoint pair is frozen in ``ctp_env_selector``'s registered broker
-        simulation registry.  It grants the same invariants the SimNow demo
-        path grants — bound identity, settlement-confirm disabled, a
-        trading-ready session, a one-shot arm, and per-write revalidation —
-        and can never arm a production front because the session's TD front
-        must match a frozen registry entry exactly.
+        callers that run against a *simulation* front whose endpoint pair is
+        frozen in ``ctp_env_selector``: either a registered broker simulation
+        or an official SimNow whitelist pair.  It grants the same invariants
+        the SimNow demo path grants — bound identity, settlement-confirm
+        disabled, a trading-ready session, a one-shot arm, and per-write
+        revalidation — and can never arm a production front because the
+        session's TD front must match a frozen registry entry exactly.
 
         Sequence (each step fail-closed):
           1. prove bound identity + registered front pair (disarmed);
@@ -7049,7 +7087,9 @@ class TraderClient:
         idempotent while the current arm already authorizes the instrument.
         """
         from bt_api_ctp.ctp_env_selector import (
+            official_simnow_profile_for_td_front,
             registered_broker_sim_profile_for_td_front,
+            verify_official_simnow_profile,
             verify_registered_broker_sim_profile,
         )
 
@@ -7063,12 +7103,25 @@ class TraderClient:
         with self._query_state_lock:
             self._require_bound_identity_locked(require_active_front=True)
             profile = registered_broker_sim_profile_for_td_front(self._bound_front)
+            official_simnow = False
+            if not profile:
+                profile = official_simnow_profile_for_td_front(self._bound_front)
+                official_simnow = bool(profile)
             if not profile:
                 raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
-            if md_front and not verify_registered_broker_sim_profile(
-                self._bound_front, md_front, profile
-            ):
-                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if md_front:
+                pair_ok = (
+                    verify_official_simnow_profile(self._bound_front, md_front, profile)
+                    if official_simnow
+                    else verify_registered_broker_sim_profile(
+                        self._bound_front, md_front, profile
+                    )
+                )
+                if not pair_ok:
+                    raise CtpExecutionGateError(
+                        "ctp_execution_gate_environment_unverified"
+                    )
+            self._direct_sim_admission_profile = profile
             if self.auto_settlement_confirm is not False:
                 raise CtpExecutionGateError(
                     "ctp_execution_gate_auto_settlement_confirm_enabled"
@@ -7119,7 +7172,12 @@ class TraderClient:
         # ---- Phase 3: one-shot execution authorization + arm ----
         with self._query_state_lock:
             self._require_bound_identity_locked(require_active_front=True)
-            if registered_broker_sim_profile_for_td_front(self._bound_front) != profile:
+            resolved_profile = registered_broker_sim_profile_for_td_front(self._bound_front)
+            if not resolved_profile:
+                resolved_profile = official_simnow_profile_for_td_front(
+                    self._bound_front
+                )
+            if resolved_profile != profile:
                 raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
             if not self.is_trading_ready:
                 raise CtpExecutionGateError(

@@ -28,6 +28,11 @@ _SET2_DEFAULT = ("tcp://180.168.146.187:10130", "tcp://180.168.146.187:10131")
 # process's public IP address.
 _SET1_GROUP1_VPN = ("tcp://182.254.243.31:30001", "tcp://182.254.243.31:30011")
 _SET2_7X24_4000X = ("tcp://182.254.243.31:40001", "tcp://182.254.243.31:40011")
+# Additional frozen VPN-family pairs for the same official SimNow set1
+# service.  Admission stays exact-pair only, so a renamed or re-pointed
+# endpoint invalidates the entry until this review table is updated.
+_SET1_GROUP2_VPN = ("tcp://182.254.243.31:30002", "tcp://182.254.243.31:30012")
+_SET1_GROUP3_VPN = ("tcp://182.254.243.31:30003", "tcp://182.254.243.31:30013")
 
 # Registered third-party broker simulation environments.
 #
@@ -54,6 +59,8 @@ _SIMNOW_PROFILE_FRONTS = MappingProxyType({
     "set1_group1": _SET1_DEFAULTS["1"],
     "set1_group1_vpn": _SET1_GROUP1_VPN,
     "set1_group2": _SET1_DEFAULTS["2"],
+    "set1_group2_vpn": _SET1_GROUP2_VPN,
+    "set1_group3_vpn": _SET1_GROUP3_VPN,
     "set2_7x24": _SET2_DEFAULT,
     # This is a separate, exact profile rather than a replacement for the
     # historical ``set2_7x24`` pair.  The suffix identifies the frozen port
@@ -69,7 +76,9 @@ _OFFICIAL_SIMNOW_TD_FRONTS = frozenset(
 _SIMNOW_PROFILE_FAMILIES = {
     "set1_group1": ("set1_group1", "set1_group1_vpn"),
     "set1_group1_vpn": ("set1_group1_vpn", "set1_group1"),
-    "set1_group2": ("set1_group2",),
+    "set1_group2": ("set1_group2", "set1_group2_vpn"),
+    "set1_group2_vpn": ("set1_group2_vpn", "set1_group2"),
+    "set1_group3_vpn": ("set1_group3_vpn",),
     "set2_7x24": ("set2_7x24", "set2_7x24_vpn"),
     "set2_7x24_4000x": ("set2_7x24_4000x",),
     "set2_7x24_vpn": ("set2_7x24_vpn", "set2_7x24"),
@@ -422,6 +431,15 @@ def is_official_simnow_td_front(td_front: str) -> bool:
 
     front = str(td_front or "").strip()
     return bool(front) and front in _OFFICIAL_SIMNOW_TD_FRONTS
+
+
+def official_simnow_profile_for_td_front(td_front: str) -> str:
+    """Return the frozen official SimNow profile whose TD front matches exactly."""
+    front = str(td_front or "").strip()
+    for name, (td_expected, _md_expected) in _SIMNOW_PROFILE_FRONTS.items():
+        if front == td_expected:
+            return name
+    return ""
 
 
 def registered_broker_sim_fronts(profile: str) -> tuple[str, str]:
