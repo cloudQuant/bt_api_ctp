@@ -1,4 +1,4 @@
-# CTP (China Futures)
+﻿# CTP (China Futures)
 
 CTP exchange plugin for bt_api, supporting Chinese futures market trading.
 
