@@ -13,6 +13,7 @@ from bt_api_base.gateway.adapters.base import BaseGatewayAdapter
 from bt_api_base.gateway.models import GatewayTick
 from bt_api_base.gateway.protocol import CHANNEL_EVENT, CHANNEL_MARKET
 
+from bt_api_ctp.containers.ctp._normalization import ctp_code
 from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
@@ -958,6 +959,75 @@ def _alias(aliases: dict[str, set[str]], instrument: str) -> str:
     return next(iter(aliases.get(instrument) or {instrument}), instrument)
 
 
+def _ctp_position_dimension_projection(
+    raw: object,
+    *,
+    direction_key: str,
+    offset_key: str,
+    normalized_side: object,
+    normalized_offset: object,
+    order_offset: bool,
+) -> dict[str, str]:
+    """Bind close ownership to the raw CTP direction and offset codes.
+
+    CTP order/trade data does not carry a separate position-side field.  The
+    only safe projection is therefore the venue's documented side/offset pair;
+    unknown codes and forced-close variants remain explicitly unresolved.
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+
+    def code(key: str) -> str:
+        value = raw.get(key)
+        if value is None:
+            return ""
+        text = str(value).strip().strip("\x00")
+        return ctp_code(text) if text else ""
+
+    direction_code = code(direction_key)
+    offset_text = code(offset_key)
+    offset_code = offset_text[:1] if order_offset else offset_text
+    direction = {"0": "buy", "1": "sell"}.get(direction_code)
+    normalized_direction = str(normalized_side or "").strip().lower()
+    if direction is None or normalized_direction != direction:
+        return {
+            "position_dimensions_source": "ctp_side_offset_unresolved_v1",
+            "ctp_direction_code": direction_code if direction_code in {"0", "1"} else "UNKNOWN",
+            "ctp_offset_code": offset_code if offset_code in {"0", "1", "2", "3", "4", "5", "6"} else "UNKNOWN",
+            "position_side": "UNRESOLVED",
+            "position_bucket": "UNRESOLVED",
+        }
+
+    if offset_code == "0":
+        # Opening fills acquire their bucket from the position ledger's
+        # trading-day snapshot, not from the order's open offset.
+        return {}
+
+    close_projection = {
+        "1": ("close", "ALL"),
+        "3": ("close_today", "TODAY"),
+        "4": ("close_yesterday", "YESTERDAY"),
+    }.get(offset_code)
+    expected_offset = None if close_projection is None else close_projection[0]
+    if close_projection is None or str(normalized_offset or "").strip().lower() != expected_offset:
+        return {
+            "position_dimensions_source": "ctp_side_offset_unresolved_v1",
+            "ctp_direction_code": direction_code,
+            "ctp_offset_code": offset_code if offset_code in {"0", "1", "2", "3", "4", "5", "6"} else "UNKNOWN",
+            "position_side": "UNRESOLVED",
+            "position_bucket": "UNRESOLVED",
+        }
+
+    return {
+        "position_dimensions_source": "ctp_side_offset_v1",
+        "ctp_direction_code": direction_code,
+        "ctp_offset_code": offset_code,
+        "position_side": "LONG" if direction == "sell" else "SHORT",
+        "position_bucket": close_projection[1],
+    }
+
+
 def _status(value: Any) -> str:
     raw = str(getattr(value, "value", value) or "submitted").lower()
     return {
@@ -973,7 +1043,7 @@ def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
     filled = int(row.get_executed_qty() or 0)
     order_sys_id = row.get_order_id() or ""
     order_ref = row.get_client_order_id() or ""
-    return {
+    result = {
         "kind": "order",
         "client_order_id": order_ref,
         "order_ref": order_ref,
@@ -996,6 +1066,17 @@ def _order(row: CtpOrderData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         "remaining": max(size - filled, 0),
         "id_source": "exchange" if order_sys_id else "local_pending",
     }
+    result.update(
+        _ctp_position_dimension_projection(
+            getattr(row, "order_info", None),
+            direction_key="Direction",
+            offset_key="CombOffsetFlag",
+            normalized_side=row.get_order_side(),
+            normalized_offset=row.get_order_offset(),
+            order_offset=True,
+        )
+    )
+    return result
 
 
 def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
@@ -1003,7 +1084,7 @@ def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
     order_sys_id = row.get_order_id() or ""
     order_ref = row.get_client_order_id() or ""
     trade_id = row.get_trade_id() or ""
-    return {
+    result = {
         "kind": "trade",
         "client_order_id": order_ref,
         "trade_id": trade_id,
@@ -1024,3 +1105,14 @@ def _trade(row: CtpTradeData, aliases: dict[str, set[str]]) -> dict[str, Any]:
         "fee_unresolved": not row.trade_fee_verified,
         "id_source": "exchange" if trade_id else "unknown",
     }
+    result.update(
+        _ctp_position_dimension_projection(
+            getattr(row, "trade_info", None),
+            direction_key="Direction",
+            offset_key="OffsetFlag",
+            normalized_side=row.get_trade_side(),
+            normalized_offset=row.get_trade_offset(),
+            order_offset=False,
+        )
+    )
+    return result
