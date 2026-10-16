@@ -290,3 +290,24 @@ class TestCtpTickerData:
         assert data["ingest_seq"] == 0
         assert data["subscription_epoch"] == 0
         assert data["execution_eligible"] is False
+
+    def test_quote_v2_uses_receive_time_when_action_day_is_unavailable(self):
+        received_at = datetime(2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc)
+        ticker = CtpTickerData(
+            {
+                "InstrumentID": "SA701P1080",
+                "ActionDay": "",
+                "UpdateTime": "",
+                "UpdateMillisec": 0,
+            },
+            recv_time_utc=received_at,
+        )
+
+        ticker.init_data()
+        ticker.resolve_event_time()
+        data = ticker.get_all_data()
+
+        assert data["event_time_utc"] == received_at
+        assert data["event_time_source"] == "receive_fallback"
+        assert data["quality_flags"] == ["AMBIGUOUS_EVENT_DATE"]
+        assert data["execution_eligible"] is False

@@ -24,7 +24,6 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpVolumeDeltaTracker,
     _get_ctp_managed_quote_v2_receipt,
 )
-from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
 from bt_api_ctp.query import QueryResult
 
 
@@ -1965,373 +1964,22 @@ def test_volume_delta_continues_across_action_day_midnight_within_trading_day() 
     assert second.volume_quality == "CONTINUOUS"
 
 
-def test_quote_v2_is_single_authoritative_cumulative_to_delta_conversion() -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter._volume_state = {}
-    adapter.aliases = {"IF2506": {"IF2506.CFFEX"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-
-    adapter._tick(_tick(100, 1))
-    adapter._tick(_tick(107, 2))
-    adapter._tick(_tick(110, 3, generation=2))
-
-    ticks = [item for _channel, item in emitted]
-    assert [tick.volume for tick in ticks] == [0, 7, 0]
-    assert [tick.cum_volume for tick in ticks] == [100, 107, 110]
-    assert [tick.volume_complete for tick in ticks] == [False, True, False]
-    assert [tick.continuity_status for tick in ticks] == ["gap", "continuous", "gap"]
-    assert [tick.lower_limit_price for tick in ticks] == [3600, 3600, 3600]
-    assert [tick.upper_limit_price for tick in ticks] == [4400, 4400, 4400]
-    assert all(tick.schema_version == "ctp.quote.v2" for tick in ticks)
-    assert all(tick.volume_semantics == "delta" for tick in ticks)
-    assert all(tick.action_day == "20260909" for tick in ticks)
 
 
-def _fully_evidenced_option_quote(*, last_price: float = 60) -> CtpTickerData:
-    row = CtpTickerData(
-        {
-            "InstrumentID": "SA701C1080",
-            "ExchangeID": "CZCE",
-            "LastPrice": last_price,
-            "BidPrice1": 59,
-            "AskPrice1": 61,
-            "BidVolume1": 2,
-            "AskVolume1": 3,
-            "OpenInterest": 1000,
-            "UpperLimitPrice": 100,
-            "LowerLimitPrice": 1,
-            "Volume": 107,
-            "TradingDay": "20260909",
-            "ActionDay": "20260909",
-            "UpdateTime": "09:30:01",
-            "UpdateMillisec": 0,
-        },
-        asset_type="OPTION",
-        connection_generation=3,
-        ingest_seq=8,
-        recv_time_utc=datetime(2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc),
-        recv_monotonic_ns=123,
-        subscription_epoch=2,
-        rules_hash="rules-sha256",
-        clock_domain_id="ctp-md-clock-a",
-        source="ctp.native.md",
-        source_clock_quality="verified",
-        receive_clock_quality="verified",
-        source_clock_error_ms=1,
-        receive_clock_error_ms=1,
-        freshness_verified=True,
-        product_class="2",
-        contract_type="option",
-        option_type="call",
-        underlying_instrument="SA701",
-        strike_price=1080,
-    )
-    row.init_data()
-    row.apply_volume_delta(7, complete=True, quality="CONTINUOUS")
-    return row
 
 
-def test_gateway_quote_v2_transports_option_evidence_and_eligibility() -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-
-    adapter._tick(_fully_evidenced_option_quote())
-
-    assert len(emitted) == 1
-    tick = emitted[0][1]
-    payload = tick.to_dict()
-    assert tick.asset_type == "option"
-    assert tick.execution_eligible is True
-    assert tick.quality_flags == ()
-    assert payload["schema_version"] == "ctp.quote.v2"
-    assert payload["subscription_epoch"] == 2
-    assert payload["rules_hash"] == "rules-sha256"
-    assert payload["source_clock_quality"] == "verified"
-    assert payload["receive_clock_quality"] == "verified"
-    assert payload["event_time_utc"].endswith("+00:00")
-    assert payload["lower_limit_price"] == 1.0
-    assert payload["upper_limit_price"] == 100.0
-    assert payload["bid_volume"] == 2.0
-    assert payload["ask_volume"] == 3.0
-    assert payload["product_class"] == "2"
-    assert payload["contract_type"] == "option"
-    assert payload["option_type"] == "call"
-    assert payload["underlying_instrument"] == "SA701"
-    assert payload["strike_price"] == 1080.0
 
 
-def test_gateway_quote_v2_metadata_cannot_authorize_adapter_order_or_cancel() -> None:
-    """Even a locally forged eligible V2 quote cannot reach a CTP write call."""
-
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    adapter.emit = lambda *_args, **_kwargs: None
-    adapter._tick(_fully_evidenced_option_quote())
-    assert adapter._quote_execution_eligible["SA701C1080"] is True
-
-    native_calls = []
-    adapter.feed = SimpleNamespace(
-        make_order=lambda *_args, **_kwargs: native_calls.append("insert"),
-        cancel_order=lambda *_args, **_kwargs: native_calls.append("cancel"),
-    )
-    payload = {
-        "symbol": "CZCE.SA701C1080",
-        "side": "buy",
-        "size": 1,
-        "price": 60,
-        "order_type": "limit",
-    }
-
-    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
-        adapter.place_order(payload)
-    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
-        adapter.cancel_order({"symbol": "CZCE.SA701C1080", "order_id": "SYS"})
-
-    assert native_calls == []
 
 
-@pytest.mark.parametrize(
-    (
-        "instrument",
-        "asset_type",
-        "product_class",
-        "contract_type",
-        "option_type",
-        "underlying_instrument",
-        "strike_price",
-        "last_price",
-        "lower_limit",
-        "upper_limit",
-    ),
-    (
-        ("SA701", "FUTURE", "1", "future", None, None, None, 1200, 1000, 2000),
-        (
-            "SA701C1080",
-            "OPTION",
-            "2",
-            "option",
-            "call",
-            "SA701",
-            1080,
-            60,
-            1,
-            100,
-        ),
-        (
-            "SA701P1080",
-            "OPTION",
-            "2",
-            "option",
-            "put",
-            "SA701",
-            1080,
-            60,
-            1,
-            100,
-        ),
-    ),
-)
-def test_gateway_quote_v2_payload_preserves_future_call_put_identity(
-    instrument: str,
-    asset_type: str,
-    product_class: str,
-    contract_type: str,
-    option_type: str | None,
-    underlying_instrument: str | None,
-    strike_price: float | None,
-    last_price: float,
-    lower_limit: float,
-    upper_limit: float,
-) -> None:
-    row = CtpTickerData(
-        {
-            "InstrumentID": instrument,
-            "ExchangeID": "CZCE",
-            "LastPrice": last_price,
-            "BidPrice1": last_price - 1,
-            "AskPrice1": last_price + 1,
-            "BidVolume1": 2,
-            "AskVolume1": 3,
-            "OpenInterest": 1000,
-            "UpperLimitPrice": upper_limit,
-            "LowerLimitPrice": lower_limit,
-            "Volume": 107,
-            "TradingDay": "20260909",
-            "ActionDay": "20260909",
-            "UpdateTime": "09:30:01",
-            "UpdateMillisec": 0,
-        },
-        asset_type=asset_type,
-        connection_generation=3,
-        ingest_seq=8,
-        recv_time_utc=datetime(2026, 9, 9, 1, 30, 2, tzinfo=timezone.utc),
-        recv_monotonic_ns=123,
-        subscription_epoch=2,
-        rules_hash="rules-sha256",
-        clock_domain_id="ctp-md-clock-a",
-        source="ctp.native.md",
-        source_clock_quality="verified",
-        receive_clock_quality="verified",
-        source_clock_error_ms=1,
-        receive_clock_error_ms=1,
-        freshness_verified=True,
-        product_class=product_class,
-        contract_type=contract_type,
-        option_type=option_type,
-        underlying_instrument=underlying_instrument,
-        strike_price=strike_price,
-    )
-    row.init_data()
-    row.apply_volume_delta(7, complete=True, quality="CONTINUOUS")
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {instrument: {f"CZCE.{instrument}"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-
-    adapter._tick(row)
-
-    assert len(emitted) == 1
-    payload = emitted[0][1].to_dict()
-    assert emitted[0][1].execution_eligible is True
-    assert payload["asset_type"] == asset_type.lower()
-    assert payload["product_class"] == product_class
-    assert payload["contract_type"] == contract_type
-    assert payload["option_type"] == option_type
-    assert payload["underlying_instrument"] == underlying_instrument
-    assert payload["strike_price"] == strike_price
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "quality_flag"),
-    (
-        ("product_class", "unknown", "PRODUCT_CLASS_UNKNOWN"),
-        ("product_class", "1", "PRODUCT_CLASS_MISMATCH"),
-        ("contract_type", "future", "CONTRACT_TYPE_MISMATCH"),
-        ("option_type", None, "OPTION_TYPE_UNKNOWN"),
-        ("underlying_instrument", "", "OPTION_UNDERLYING_UNKNOWN"),
-        ("strike_price", None, "OPTION_STRIKE_INVALID"),
-    ),
-)
-def test_gateway_quote_v2_identity_gaps_or_mismatch_are_not_execution_eligible(
-    field: str, value: object, quality_flag: str
-) -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-    row = _fully_evidenced_option_quote()
-    setattr(row, field, value)
-
-    adapter._tick(row)
-
-    assert len(emitted) == 1
-    assert emitted[0][1].execution_eligible is False
-    assert quality_flag in emitted[0][1].quality_flags
 
 
-def test_gateway_quote_v2_fails_closed_for_missing_freshness_or_outside_limit() -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-
-    incomplete = _tick(107, 8)
-    incomplete.init_data()
-    incomplete.apply_volume_delta(7, complete=True, quality="CONTINUOUS")
-    adapter._tick(incomplete)
-    adapter._tick(_fully_evidenced_option_quote(last_price=101))
-
-    missing, outside_limit = [item for _channel, item in emitted]
-    assert missing.execution_eligible is False
-    assert "ASSET_TYPE_UNKNOWN" in missing.quality_flags
-    assert "FRESHNESS_UNVERIFIED" in missing.quality_flags
-    assert outside_limit.execution_eligible is False
-    assert "QUOTE_OUTSIDE_DAILY_LIMIT" in outside_limit.quality_flags
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "quality_flag"),
-    [
-        ("source", "", "QUOTE_SOURCE_UNKNOWN"),
-        ("source", "unknown", "QUOTE_SOURCE_UNKNOWN"),
-        ("source", "unverified", "QUOTE_SOURCE_UNKNOWN"),
-        ("rules_hash", "", "RULES_HASH_UNKNOWN"),
-        ("rules_hash", "unknown", "RULES_HASH_UNKNOWN"),
-        ("rules_hash", "placeholder", "RULES_HASH_UNKNOWN"),
-        ("clock_domain_id", "", "CLOCK_DOMAIN_UNKNOWN"),
-        ("clock_domain_id", "unknown", "CLOCK_DOMAIN_UNKNOWN"),
-        ("clock_domain_id", "n/a", "CLOCK_DOMAIN_UNKNOWN"),
-    ],
-)
-def test_gateway_quote_v2_never_treats_placeholder_provenance_as_eligible(
-    field: str, value: str, quality_flag: str
-) -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-    row = _fully_evidenced_option_quote()
-    setattr(row, field, value)
-
-    adapter._tick(row)
-
-    assert len(emitted) == 1
-    tick = emitted[0][1]
-    assert tick.execution_eligible is False
-    assert quality_flag in tick.quality_flags
 
 
-def test_gateway_quote_v2_serialized_payload_reaches_parent_normalizer() -> None:
-    """Exercise the source adapter -> remote payload -> parent SDK boundary."""
-
-    from bt_api_py._normalization import normalize_event
-
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"SA701C1080": {"CZCE.SA701C1080"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-
-    adapter._tick(_fully_evidenced_option_quote())
-    payload = emitted[0][1].to_dict()
-    payload["kind"] = "tick"
-    event = normalize_event(payload, "CTP___FUTURE")
-
-    assert event["asset_type"] == "option"
-    assert event["schema_version"] == "ctp.quote.v2"
-    assert event["subscription_epoch"] == 2
-    assert event["rules_hash"] == "rules-sha256"
-    assert event["clock_domain_id"] == "ctp-md-clock-a"
-    assert event["source_clock_quality"] == "verified"
-    assert event["receive_clock_quality"] == "verified"
-    assert event["lower_limit_price"] == 1.0
-    assert event["upper_limit_price"] == 100.0
-    assert event["bid_volume"] == 2.0
-    assert event["ask_volume"] == 3.0
-    assert event["event_time_utc"] == datetime.fromisoformat(payload["event_time_utc"]).timestamp()
-    assert event["recv_time_utc"] == datetime.fromisoformat(payload["recv_time_utc"]).timestamp()
-    # A transport payload cannot self-attest eligibility.  Parent-owned direct
-    # ingress must issue the matching sealed attestation before this can turn
-    # true, even when the adapter evidence itself is complete.
-    assert event["execution_eligible"] is False
 
 
 def test_market_stream_keeps_per_subscription_option_and_future_metadata() -> None:
@@ -2740,7 +2388,7 @@ def test_market_stream_native_reconnect_advances_generation_epoch_and_volume_sco
     assert [row.volume_complete for row in rows] == [False, False]
 
 
-def test_market_stream_converts_volume_once_before_gateway_consumption() -> None:
+def test_market_stream_converts_cumulative_volume_to_delta_once() -> None:
     stream = CtpMarketStream(topics=[])
     stream._md_client = SimpleNamespace(connection_generation=11)
     rows = []
@@ -2770,15 +2418,7 @@ def test_market_stream_converts_volume_once_before_gateway_consumption() -> None
     assert [row.delta_volume for row in rows] == [0, 7]
     assert [row.volume_complete for row in rows] == [False, True]
 
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"IF2506": {"IF2506.CFFEX"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-    for row in rows:
-        adapter._tick(row)
-    assert [item.volume for _channel, item in emitted] == [0, 7]
+
 
 
 def test_invalid_market_snapshot_does_not_advance_volume_baseline() -> None:
@@ -2819,108 +2459,93 @@ def test_invalid_market_snapshot_does_not_advance_volume_baseline() -> None:
 @pytest.mark.parametrize(
     ("overrides", "quality_flag"),
     [
-        ({"LastPrice": float("nan")}, "INVALID_LAST_PRICE"),
-        ({"AskVolume1": float("nan")}, "INVALID_ASK_VOLUME"),
-        ({"BidPrice1": 4002, "AskPrice1": 4001}, "CROSSED_BOOK"),
+        ({"BidPrice1": float("nan")}, "INVALID_BID_PRICE"),
+        ({"AskPrice1": float("nan")}, "INVALID_ASK_PRICE"),
+        ({"AskVolume1": -1}, "INVALID_ASK_VOLUME"),
         ({"BidVolume1": -1}, "INVALID_BID_VOLUME"),
+        ({"Volume": -1}, "INVALID_CUM_VOLUME"),
+        ({"OpenInterest": -1}, "INVALID_OPEN_INTEREST"),
+        ({"BidPrice1": 4002, "AskPrice1": 4001}, "CROSSED_BOOK"),
     ],
 )
-def test_invalid_quote_is_published_as_ineligible_and_never_cached_or_traded(
+def test_direct_market_stream_rejects_invalid_quote_without_advancing_volume(
     overrides: dict[str, float], quality_flag: str
 ) -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"IF2506": {"IF2506.CFFEX"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
-    row = _tick(100, 1, **overrides)
+    stream = CtpMarketStream(topics=[])
+    stream._md_client = SimpleNamespace(connection_generation=12)
+    rows = []
+    stream.push_data = rows.append
 
-    adapter._tick(row)
+    def push(total: int, second: int, **changes) -> None:
+        fields = {
+            "InstrumentID": "IF2506",
+            "ExchangeID": "CFFEX",
+            "LastPrice": 4000,
+            "BidPrice1": 3999,
+            "AskPrice1": 4001,
+            "BidVolume1": 2,
+            "AskVolume1": 3,
+            "OpenInterest": 1000,
+            "Volume": total,
+            "TradingDay": "20260909",
+            "ActionDay": "20260909",
+            "UpdateTime": f"09:30:0{second}",
+            "UpdateMillisec": 0,
+        }
+        fields.update(changes)
+        stream._on_tick(SimpleNamespace(**fields))
 
-    assert len(emitted) == 1
-    assert emitted[0][1].execution_eligible is False
-    assert quality_flag in emitted[0][1].quality_flags
-    assert adapter.last_price == {} and adapter.last_volume == {}
-    assert quality_flag in row.quality_flags
-    adapter.feed = SimpleNamespace(
-        make_order=lambda *_args, **_kwargs: pytest.fail(
-            "quality-rejected quote must block native order submission"
-        )
-    )
-    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
-        adapter.place_order(
-            {
-                "symbol": "IF2506.CFFEX",
-                "side": "buy",
-                "size": 1,
-                "price": 4000,
-                "order_type": "limit",
-            }
-        )
+    push(100, 1)
+    push(105, 2, **overrides)
+    push(110, 3)
 
-
-@pytest.mark.parametrize(
-    "quote_eligibility",
-    [
-        pytest.param(None, id="eligibility_map_absent"),
-        pytest.param({}, id="instrument_eligibility_absent"),
-        pytest.param({"IF2506": None}, id="eligibility_none"),
-        pytest.param({"IF2506": False}, id="eligibility_false"),
-        pytest.param({"IF2506": "unknown"}, id="eligibility_unknown"),
-        pytest.param({"IF2506": 1}, id="eligibility_non_boolean_truthy"),
-        pytest.param({"IF2506": True}, id="eligibility_true"),
-    ],
-)
-def test_gateway_place_order_is_disabled_regardless_of_quote_eligibility(
-    quote_eligibility,
-) -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    if quote_eligibility is not None:
-        adapter._quote_execution_eligible = quote_eligibility
-    native_calls = []
-    adapter.feed = SimpleNamespace(
-        make_order=lambda *args, **kwargs: native_calls.append((args, kwargs))
-    )
-
-    with pytest.raises(RuntimeError, match="SDK-managed execution capability"):
-        adapter.place_order(
-            {
-                "symbol": "IF2506.CFFEX",
-                "side": "buy",
-                "size": 1,
-                "price": 4000,
-                "order_type": "limit",
-            }
-        )
-
-    assert native_calls == []
+    assert [row.delta_volume for row in rows] == [0, 0, 10]
+    assert rows[1].volume_quality == "INVALID_QUOTE"
+    assert quality_flag in rows[1].quality_flags
+    assert all(row.get_all_data()["execution_eligible"] is False for row in rows)
 
 
 @pytest.mark.parametrize(
     ("overrides", "quality_flag"),
     [
         ({"BidVolume1": 0}, "ZERO_DEPTH"),
-        ({"BidPrice1": 4001, "AskPrice1": 4001}, "LOCKED_BOOK"),
+        ({"BidPrice1": 4000, "AskPrice1": 4000}, "LOCKED_BOOK"),
     ],
 )
-def test_zero_depth_and_locked_books_are_recorded_but_not_execution_eligible(
+def test_direct_market_stream_records_thin_or_locked_book_without_self_eligibility(
     overrides: dict[str, float], quality_flag: str
 ) -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter.last_price = {}
-    adapter.last_volume = {}
-    adapter.aliases = {"IF2506": {"IF2506.CFFEX"}}
-    emitted = []
-    adapter.emit = lambda channel, item: emitted.append((channel, item))
+    stream = CtpMarketStream(topics=[])
+    stream._md_client = SimpleNamespace(connection_generation=13)
+    rows = []
+    stream.push_data = rows.append
+    fields = {
+        "InstrumentID": "IF2506",
+        "ExchangeID": "CFFEX",
+        "LastPrice": 4000,
+        "BidPrice1": 3999,
+        "AskPrice1": 4001,
+        "BidVolume1": 2,
+        "AskVolume1": 3,
+        "OpenInterest": 1000,
+        "Volume": 100,
+        "TradingDay": "20260909",
+        "ActionDay": "20260909",
+        "UpdateTime": "09:30:01",
+        "UpdateMillisec": 0,
+    }
+    fields.update(overrides)
+    stream._on_tick(SimpleNamespace(**fields))
 
-    adapter._tick(_tick(100, 1, **overrides))
+    assert len(rows) == 1
+    assert quality_flag in rows[0].quality_flags
+    assert rows[0].get_all_data()["execution_eligible"] is False
 
-    assert len(emitted) == 1
-    tick = emitted[0][1]
-    assert tick.execution_eligible is False
-    assert quality_flag in tick.quality_flags
-    assert adapter.last_price["IF2506"] == 4000
+
+
+
+
+
 
 
 def test_trade_stream_reuses_request_feed_trader_without_second_td_client(
@@ -3210,11 +2835,3 @@ def test_submit_trader_user_login_uses_mock_fallback(monkeypatch) -> None:
 
     assert client_module._submit_trader_user_login(api, field, 23) == 29
     assert api.calls == [(field, 23)]
-
-
-def test_missing_price_tick_never_falls_back_to_one() -> None:
-    adapter = object.__new__(CtpGatewayAdapter)
-    adapter._price_ticks = {}
-    adapter.get_symbol_info = lambda _symbol: {}
-    with pytest.raises(RuntimeError, match="positive PriceTick required"):
-        adapter._get_price_tick("IF2506")

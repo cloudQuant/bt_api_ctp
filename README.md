@@ -1,4 +1,4 @@
-﻿# CTP (China Futures)
+# CTP (China Futures)
 
 CTP exchange plugin for bt_api, supporting Chinese futures market trading.
 
@@ -125,120 +125,21 @@ df = pq.read_table("20260916/SHFE/rb2701.parquet").to_pandas()
 quote time and in-session gaps — scheduled breaks (10:15-10:30, lunch, overnight)
 are not counted as gaps.
 
-### CtpGatewayAdapter API
+### Native CTP market feed and QuoteV2
 
-The `CtpGatewayAdapter` provides direct access to CTP futures:
+Use the package's native CTP market feed for direct quote collection. QuoteV2 rows retain source, clock, cumulative-volume, depth, and quality evidence; execution eligibility remains controlled by parent authority.
 
-```python
-from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
+### Environment selection
 
-# Initialize adapter
-adapter = CtpGatewayAdapter(
-    md_front="tcp://182.254.243.31:30011",  # market data front
-    td_front="tcp://182.254.243.31:30001",  # trade front
-    user_id="your_user_id",
-    password="your_password",
-    broker_id="your_broker_id",
-    gateway_startup_timeout_sec=10.0,
-)
+Select the front pair with `CTP_ENV` or the `env` parameter. Leave `md_front` and `td_front` empty to use the selector's configured front pair.
 
-# Connect
-adapter.connect()
+| Value | Selection |
+| --- | --- |
+| `auto` | Default; select the configured front pair for the current session. |
+| `set1` | Production-session front pair. |
+| `set2` | 7×24 / non-trading-hours front pair. |
 
-# Subscribe to symbols
-adapter.subscribe_symbols(["rb2401.SHFE", "IF2404.CFFEX"])
-
-# Get balance and positions
-balance = adapter.get_balance()
-positions = adapter.get_positions()
-
-# Place an order
-order = adapter.place_order({
-    "symbol": "rb2401.SHFE",
-    "side": "buy",
-    "size": 1,
-    "price": 4000.0,
-    "offset": "open",
-})
-
-# Cancel an order
-adapter.cancel_order({
-    "symbol": "rb2401.SHFE",
-    "order_id": order["order_id"],
-    "front_id": order["front_id"],
-    "session_id": order["session_id"],
-    "order_ref": order["order_ref"],
-})
-
-# Disconnect
-adapter.disconnect()
-```
-
-### Constructor Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `md_front` | str | `""` | Market data front address (tcp://host:port) |
-| `td_front` | str | `""` | Trade front address (tcp://host:port) |
-| `user_id` | str | `""` | CTP user ID / investor ID |
-| `password` | str | `""` | CTP password |
-| `broker_id` | str | `""` | Broker ID |
-| `auth_code` | str | `"0000000000000000"` | Auth code (for production) |
-| `app_id` | str | `"simnow_client_test"` | App ID |
-| `gateway_startup_timeout_sec` | float | `10.0` | Connection timeout |
-
-### Supported Operations
-
-| Operation | Method | Status |
-|-----------|--------|--------|
-| Connect | `connect()` | ✅ |
-| Disconnect | `disconnect()` | ✅ |
-| Subscribe Symbols | `subscribe_symbols(symbols)` | ✅ |
-| Get Balance | `get_balance()` | ✅ |
-| Get Positions | `get_positions()` | ✅ |
-| Place Order | `place_order(payload)` | ✅ |
-| Cancel Order | `cancel_order(payload)` | ✅ |
-
-### Order Payload Format
-
-```python
-{
-    "symbol": "rb2401.SHFE",     # instrument.exchange or just instrument
-    "side": "buy",                # "buy" or "sell"
-    "size": 1,                   # order volume
-    "price": 4000.0,             # limit price (required for limit orders)
-    "offset": "open",             # "open", "close", "close_today"
-    "client_order_id": "...",    # optional, client-side order ref
-    "exchange_id": "SHFE",        # optional, exchange code
-}
-```
-
-### Order Response Format
-
-```python
-{
-    "id": "...",
-    "order_id": "...",
-    "external_order_id": "...",
-    "order_ref": "...",
-    "front_id": 1,
-    "session_id": 123456,
-    "exchange_id": "SHFE",
-    "details": {"bt_order_ref": "..."},
-}
-```
-
-### Environment Configuration
-
-CTP supports three environments via `CTP_ENV` or `env` parameter:
-
-| Environment | Description | Trading Hours |
-|-------------|-------------|---------------|
-| `auto` (default) | Auto-select based on time | Matches production |
-| `set1` | Production-like environment | Trading session only |
-| `set2` | 7x24 environment | Non-trading hours |
-
-For SimNow test accounts, leave `md_front`/`td_front` empty to auto-select the appropriate SimNow environment.
+Live order execution is managed through `ServiceExecutionSession` / service-v2 after this provider is integrated with ServiceHost.
 
 ### Online Documentation
 
@@ -261,7 +162,6 @@ bt_api_ctp/
 ├── src/bt_api_ctp/           # Source code
 │   ├── containers/ctp/       # Data containers (CtpTicker, CtpOrder, etc.)
 │   ├── feeds/                # Feed implementations (live_ctp_feed.py)
-│   ├── gateway/              # Gateway adapter (CtpGatewayAdapter)
 │   ├── ctp/                  # CTP protocol (structs, client, trader/md API)
 │   ├── errors/               # Error translators
 │   ├── exchange_data.py       # Exchange metadata
@@ -394,120 +294,21 @@ df = pq.read_table("20260916/SHFE/rb2701.parquet").to_pandas()
 `<data_root>/<交易日>/report.json` 记录每个合约的行数、首末行情时间与
 **交易时段内**的缺口 —— 小节休息（10:15-10:30）、午休、隔夜均不计为缺口。
 
-### CtpGatewayAdapter API
+### 原生 CTP 行情流与 QuoteV2
 
-`CtpGatewayAdapter` 提供对 CTP 期货的直接访问：
+直接采集行情请使用本包的原生 CTP 行情流。QuoteV2 行保留来源、时钟、累计成交量、盘口深度和质量证据；执行资格仍由父级权威决定。
 
-```python
-from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
+### 环境选择
 
-# 初始化适配器
-adapter = CtpGatewayAdapter(
-    md_front="tcp://182.254.243.31:30011",  # 行情前置地址
-    td_front="tcp://182.254.243.31:30001",  # 交易前置地址
-    user_id="your_user_id",
-    password="your_password",
-    broker_id="your_broker_id",
-    gateway_startup_timeout_sec=10.0,
-)
+可通过 `CTP_ENV` 环境变量或 `env` 参数选择前置地址。将 `md_front` 和 `td_front` 留空时，使用选择器配置的前置地址。
 
-# 连接
-adapter.connect()
+| 值 | 选择方式 |
+| --- | --- |
+| `auto` | 默认值；按当前时段选择已配置的前置地址。 |
+| `set1` | 交易时段使用的前置地址。 |
+| `set2` | 7×24 / 非交易时段使用的前置地址。 |
 
-# 订阅合约
-adapter.subscribe_symbols(["rb2401.SHFE", "IF2404.CFFEX"])
-
-# 获取资金和持仓
-balance = adapter.get_balance()
-positions = adapter.get_positions()
-
-# 下单
-order = adapter.place_order({
-    "symbol": "rb2401.SHFE",
-    "side": "buy",
-    "size": 1,
-    "price": 4000.0,
-    "offset": "open",
-})
-
-# 撤单
-adapter.cancel_order({
-    "symbol": "rb2401.SHFE",
-    "order_id": order["order_id"],
-    "front_id": order["front_id"],
-    "session_id": order["session_id"],
-    "order_ref": order["order_ref"],
-})
-
-# 断开连接
-adapter.disconnect()
-```
-
-### 构造函数参数
-
-| 参数 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `md_front` | str | `""` | 行情前置地址（tcp://host:port）|
-| `td_front` | str | `""` | 交易前置地址（tcp://host:port）|
-| `user_id` | str | `""` | CTP 用户 ID / 投资者 ID |
-| `password` | str | `""` | CTP 密码 |
-| `broker_id` | str | `""` | 经纪公司 ID |
-| `auth_code` | str | `"0000000000000000"` | 认证码（生产环境用）|
-| `app_id` | str | `"simnow_client_test"` | App ID |
-| `gateway_startup_timeout_sec` | float | `10.0` | 连接超时时间 |
-
-### 支持的操作
-
-| 操作 | 方法 | 状态 |
-|------|------|------|
-| 连接 | `connect()` | ✅ |
-| 断开 | `disconnect()` | ✅ |
-| 订阅合约 | `subscribe_symbols(symbols)` | ✅ |
-| 获取资金 | `get_balance()` | ✅ |
-| 获取持仓 | `get_positions()` | ✅ |
-| 下单 | `place_order(payload)` | ✅ |
-| 撤单 | `cancel_order(payload)` | ✅ |
-
-### 下单 Payload 格式
-
-```python
-{
-    "symbol": "rb2401.SHFE",     # 合约代码.交易所或仅合约代码
-    "side": "buy",               # "buy" 或 "sell"
-    "size": 1,                  # 委托数量
-    "price": 4000.0,           # 限价（限价单必须）
-    "offset": "open",           # "open", "close", "close_today"
-    "client_order_id": "...",   # 可选，客户端订单引用
-    "exchange_id": "SHFE",       # 可选，交易所代码
-}
-```
-
-### 订单响应格式
-
-```python
-{
-    "id": "...",
-    "order_id": "...",
-    "external_order_id": "...",
-    "order_ref": "...",
-    "front_id": 1,
-    "session_id": 123456,
-    "exchange_id": "SHFE",
-    "details": {"bt_order_ref": "..."},
-}
-```
-
-### 环境配置
-
-CTP 支持通过 `CTP_ENV` 或 `env` 参数配置三种环境：
-
-| 环境 | 描述 | 交易时段 |
-|------|------|----------|
-| `auto`（默认）| 根据时间自动选择 | 与生产一致 |
-| `set1` | 类生产环境 | 仅交易时段 |
-| `set2` | 7x24 环境 | 非交易时段 |
-
-使用 SimNow 测试账户时，留空 `md_front`/`td_front` 可自动选择合适的 SimNow 环境。
+接入 ServiceHost 后，实盘订单执行由 `ServiceExecutionSession` / service-v2 管理。
 
 ### 在线文档
 
@@ -530,7 +331,6 @@ bt_api_ctp/
 ├── src/bt_api_ctp/           # 源代码
 │   ├── containers/ctp/       # 数据容器 (CtpTicker, CtpOrder 等)
 │   ├── feeds/                # Feed 实现 (live_ctp_feed.py)
-│   ├── gateway/              # 网关适配器 (CtpGatewayAdapter)
 │   ├── ctp/                  # CTP 协议 (structs, client, trader/md API)
 │   ├── errors/               # 错误翻译器
 │   ├── exchange_data.py       # 交易所元数据

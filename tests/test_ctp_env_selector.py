@@ -16,7 +16,6 @@ from bt_api_ctp.ctp_env_selector import (
 )
 from bt_api_ctp.feeds import live_ctp_feed
 from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
-from bt_api_ctp.gateway import adapter as adapter_module
 
 
 def test_get_ctp_fronts_prefers_set1_during_weekday_session(monkeypatch) -> None:
@@ -437,94 +436,3 @@ def test_environment_profile_keeps_apply_result_verified_for_direct_feed(
     assert (feed.td_front, feed.md_front) == (td_front, md_front)
     assert feed.ctp_env_profile == "set2_7x24_vpn"
     assert feed.get_environment_info()["environment"] == "demo"
-
-
-def test_gateway_pins_one_auto_detected_pair_before_creating_streams(
-    monkeypatch,
-) -> None:
-    for name in ("CTP_ENV", "CTP_TD_FRONT", "CTP_MD_FRONT", "CTP_ENV_PROFILE"):
-        monkeypatch.delenv(name, raising=False)
-    selected_td, selected_md = official_simnow_fronts("set2_7x24_vpn")
-    selector_calls = []
-    stream_calls = []
-
-    def select_reachable(env: str, **kwargs):
-        selector_calls.append((env, kwargs))
-        return CtpEnvironmentSelection(
-            td_front=selected_td,
-            md_front=selected_md,
-            environment="simnow",
-            profile="set2_7x24_vpn",
-            readiness="tcp_pair_reachable",
-            reason="tcp_pair_reachable",
-            calendar_verified=False,
-            explicit=True,
-        )
-
-    class FakeMarketStream:
-        def __init__(self, _queue, **kwargs) -> None:
-            stream_calls.append(("market", kwargs))
-
-    class FakeTradeStream:
-        def __init__(self, _queue, **kwargs) -> None:
-            stream_calls.append(("trade", kwargs))
-
-    monkeypatch.setattr(live_ctp_feed, "select_reachable_ctp_environment", select_reachable)
-    monkeypatch.setattr(adapter_module, "CtpMarketStream", FakeMarketStream)
-    monkeypatch.setattr(adapter_module, "CtpTradeStream", FakeTradeStream)
-
-    adapter_module.CtpGatewayAdapter(
-        auto_detect_fronts="true",
-        ctp_env_profile="set2_7x24",
-        front_probe_timeout=0.25,
-    )
-
-    assert len(selector_calls) == 1
-    assert [name for name, _kwargs in stream_calls] == ["market", "trade"]
-    for _name, kwargs in stream_calls:
-        assert kwargs["td_front"] == selected_td
-        assert kwargs["md_front"] == selected_md
-        assert kwargs["ctp_env_profile"] == "set2_7x24_vpn"
-        assert kwargs["ctp_env_readiness"] == "tcp_pair_reachable"
-
-
-def test_gateway_never_pins_an_unverified_custom_request_pair(monkeypatch) -> None:
-    stream_calls = []
-
-    class UnverifiedRequestFeed:
-        td_front = "tcp://custom-td"
-        md_front = "tcp://custom-md"
-        ctp_env_profile = "custom_front_override"
-        ctp_env_readiness = "explicit_front_override"
-        ctp_environment = "custom"
-
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
-
-        def get_environment_info(self):
-            return {
-                "environment": "unknown",
-                "simulated": False,
-                "verified": False,
-                "profile": self.ctp_env_profile,
-                "readiness": self.ctp_env_readiness,
-            }
-
-    class FakeMarketStream:
-        def __init__(self, _queue, **kwargs) -> None:
-            stream_calls.append(("market", kwargs))
-
-    class FakeTradeStream:
-        def __init__(self, _queue, **kwargs) -> None:
-            stream_calls.append(("trade", kwargs))
-
-    monkeypatch.setattr(adapter_module, "CtpRequestDataFuture", UnverifiedRequestFeed)
-    monkeypatch.setattr(adapter_module, "CtpMarketStream", FakeMarketStream)
-    monkeypatch.setattr(adapter_module, "CtpTradeStream", FakeTradeStream)
-
-    adapter_module.CtpGatewayAdapter(auto_detect_fronts=True)
-
-    for _name, kwargs in stream_calls:
-        assert kwargs["td_front"] != "tcp://custom-td"
-        assert kwargs["md_front"] != "tcp://custom-md"
-        assert kwargs.get("ctp_env_profile") != "custom_front_override"
