@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from bt_api_base.balance_utils import simple_balance_handler as _ctp_balance_handler
-from bt_api_base.gateway.registrar import GatewayRuntimeRegistrar
 from bt_api_base.plugins.protocol import PluginInfo
 from bt_api_base.registry import ExchangeRegistry
 
@@ -14,7 +13,6 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpRequestDataFuture,
     CtpTradeStream,
 )
-from bt_api_ctp.gateway.adapter import CtpGatewayAdapter
 
 
 def _ctp_future_subscribe_handler(
@@ -47,17 +45,13 @@ def _ctp_future_subscribe_handler(
         bt_api.log("CTP trade stream started")
 
 
-def register_plugin(
-    registry: type[ExchangeRegistry], runtime_factory: type[GatewayRuntimeRegistrar]
-) -> PluginInfo:
+def register_plugin(registry: type[ExchangeRegistry]) -> PluginInfo:
     registry.register_feed("CTP___FUTURE", CtpRequestDataFuture)
     registry.register_exchange_data("CTP___FUTURE", CtpExchangeDataFuture)
     registry.register_balance_handler("CTP___FUTURE", _ctp_balance_handler)
     registry.register_stream("CTP___FUTURE", "subscribe", _ctp_future_subscribe_handler)
     registry.register_stream("CTP___FUTURE", "market", CtpMarketStream)
     registry.register_stream("CTP___FUTURE", "account", CtpTradeStream)
-    runtime_factory.register_adapter("CTP", CtpGatewayAdapter)
-
     return PluginInfo(
         name="bt_api_ctp",
         version=__version__,

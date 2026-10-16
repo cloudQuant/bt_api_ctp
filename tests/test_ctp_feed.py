@@ -99,11 +99,7 @@ class TestCtpImports:
 
         from bt_api_ctp.plugin import register_plugin
 
-        class MockRuntimeFactory:
-            def register_adapter(self, *args, **kwargs):
-                pass
-
-        register_plugin(ExchangeRegistry, MockRuntimeFactory)
+        register_plugin(ExchangeRegistry)
 
         assert ExchangeRegistry.has_exchange("CTP___FUTURE")
         assert ExchangeRegistry.get_balance_handler("CTP___FUTURE") is not None
@@ -317,11 +313,7 @@ class TestCtpContainerParsing:
         from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
         from bt_api_ctp.plugin import register_plugin
 
-        class MockRuntimeFactory:
-            def register_adapter(self, *args, **kwargs):
-                pass
-
-        register_plugin(ExchangeRegistry, MockRuntimeFactory)
+        register_plugin(ExchangeRegistry)
 
         account = CtpAccountData(
             {
