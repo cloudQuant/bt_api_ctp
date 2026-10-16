@@ -1,7 +1,7 @@
 """Typed, read-only CTP instrument metadata from one current native session.
 
-This is intentionally separate from the legacy gateway adapter's cached
-``get_symbol_info`` projection.  Each read issues a fresh exact instrument
+This replaces the legacy gateway adapter's cached ``get_symbol_info``
+projection.  Each read issues a fresh exact instrument
 query and verifies the live TraderClient-issued query source, current-session
 readback, terminal callback state, and the exact CTP market stream's opaque
 quote-clock source scope.  It does not claim an atomic account snapshot or
