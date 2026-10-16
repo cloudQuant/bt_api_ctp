@@ -47,6 +47,7 @@ class _SyntheticMdClient:
         self.on_login = None
         self.on_tick = None
         self.subscribed: list[str] = []
+        self.subscribe_additional_calls = 0
         self.unsubscribed: list[str] = []
         self.fail_subscribe_additional_after_accept = False
         self.stop_calls = 0
@@ -59,6 +60,7 @@ class _SyntheticMdClient:
         self.subscribed.extend(instruments)
 
     def subscribe_additional(self, instruments: list[str]) -> tuple[str, ...]:
+        self.subscribe_additional_calls += 1
         additions = tuple(item for item in instruments if item not in self.subscribed)
         self.subscribed.extend(additions)
         if self.fail_subscribe_additional_after_accept:
@@ -293,6 +295,306 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
     assert client.stop_calls == 1
     assert provider.diagnostics["active_sessions"] == 0
     assert provider.diagnostics["active_handles"] == 0
+
+
+def test_incremental_keys_keep_one_md_epoch_and_preserve_queued_ticks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    keys = tuple(
+        _key(
+            instrument=MarketInstrumentKey(
+                provider="ctp",
+                venue="CFFEX",
+                environment="simnow",
+                product_type="future",
+                instrument_id=symbol,
+                native_symbol=symbol,
+            )
+        )
+        for symbol in ("IF2612", "IH2612", "IC2612")
+    )
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+
+    first = provider.subscribe(keys[0], generation="hub-generation-a")
+    (client,) = _SyntheticMdClient.instances
+
+    def emit(symbol: str, second: int) -> None:
+        client.emit_tick(
+            InstrumentID=symbol,
+            ExchangeID="CFFEX",
+            LastPrice=4_001.0,
+            PreSettlementPrice=3_990.0,
+            OpenPrice=3_995.0,
+            HighestPrice=4_010.0,
+            LowestPrice=3_980.0,
+            BidPrice1=4_000.0,
+            BidVolume1=2,
+            AskPrice1=4_002.0,
+            AskVolume1=3,
+            OpenInterest=1_000.0,
+            Volume=123,
+            Turnover=492_000.0,
+            UpperLimitPrice=4_200.0,
+            LowerLimitPrice=3_800.0,
+            TradingDay="20261017",
+            ActionDay="20261017",
+            UpdateTime=f"09:30:0{second}",
+            UpdateMillisec=250,
+        )
+
+    # The first key can already have a valid native callback in the Hub's
+    # per-key replay path while later keys are still being installed.
+    emit("IF2612", 1)
+    assert first.queue.size == 1
+    assert first.stream._quote_v2_subscription_metadata["IF2612"]["subscription_epoch"] == 1
+
+    second = provider.subscribe(keys[1], generation="hub-generation-b")
+    emit("IH2612", 2)
+    assert first.queue.size == 1
+    assert second.queue.size == 1
+
+    third = provider.subscribe(keys[2], generation="hub-generation-c")
+    assert first.queue.size == 1
+    assert second.queue.size == 1
+    assert third.queue.size == 0
+    assert {
+        symbol: metadata["subscription_epoch"]
+        for symbol, metadata in first.stream._quote_v2_subscription_metadata.items()
+    } == {"IF2612": 1, "IH2612": 1, "IC2612": 1}
+
+    for symbol in ("IF2612", "IH2612", "IC2612"):
+        emit(symbol, 3)
+
+    first_events = provider.poll(first, limit=8)
+    second_events = provider.poll(second, limit=8)
+    third_events = provider.poll(third, limit=8)
+    assert [event.data["symbol"] for event in first_events] == ["IF2612", "IF2612"]
+    assert [event.data["symbol"] for event in second_events] == ["IH2612", "IH2612"]
+    assert [event.data["symbol"] for event in third_events] == ["IC2612"]
+    assert {
+        event.data["subscription_epoch"]
+        for events in (first_events, second_events, third_events)
+        for event in events
+    } == {1}
+
+    assert provider.unsubscribe(first) is True
+    assert provider.unsubscribe(second) is True
+    assert provider.unsubscribe(third) is True
+    assert client.stop_calls == 1
+    assert provider.diagnostics["active_sessions"] == 0
+    assert provider.diagnostics["active_handles"] == 0
+
+
+def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    keys = tuple(
+        _key(
+            instrument=MarketInstrumentKey(
+                provider="ctp",
+                venue="CFFEX",
+                environment="simnow",
+                product_type="future",
+                instrument_id=symbol,
+                native_symbol=symbol,
+            )
+        )
+        for symbol in ("IF2612", "IH2612")
+    )
+    streams: list[CtpMarketStream] = []
+
+    def factory(key: MarketSubscriptionKey, sink: BoundedCtpQuoteV2Queue) -> CtpMarketStream:
+        stream = _stream_factory(key, sink)
+        streams.append(stream)
+        return stream
+
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        stop_timeout_seconds=1.0,
+    )
+    first = provider.subscribe(keys[0], generation="hub-generation-a")
+    second = provider.subscribe(keys[1], generation="hub-generation-b")
+    (old_client,) = _SyntheticMdClient.instances
+    old_callback = old_client.on_tick
+    old_stream = first.stream
+
+    assert provider.unsubscribe(first) is True
+    assert old_stream._retired_quote_v2_subscriptions == {"IF2612": 1}
+    subscribe_calls_before_readd = tuple(old_client.subscribed)
+    source_scope_before_readd = provider._source_scope
+    with pytest.raises(CtpQuoteV2MarketProviderError) as error:
+        provider.subscribe(keys[0], generation="hub-generation-a2")
+    assert error.value.code == "CTP_MARKET_FRESH_STREAM_REQUIRED"
+    assert tuple(old_client.subscribed) == subscribe_calls_before_readd
+    assert provider._source_scope is source_scope_before_readd is second.source_scope
+    assert old_stream.get_quote_clock_source_scope() is second.source_scope
+    assert provider.diagnostics["active_handles"] == 1
+    assert second.active is True
+
+    old_client.emit_tick(
+        InstrumentID="IH2612",
+        ExchangeID="CFFEX",
+        LastPrice=4_001.0,
+        PreSettlementPrice=3_990.0,
+        OpenPrice=3_995.0,
+        HighestPrice=4_010.0,
+        LowestPrice=3_980.0,
+        BidPrice1=4_000.0,
+        BidVolume1=2,
+        AskPrice1=4_002.0,
+        AskVolume1=3,
+        OpenInterest=1_000.0,
+        Volume=123,
+        Turnover=492_000.0,
+        UpperLimitPrice=4_200.0,
+        LowerLimitPrice=3_800.0,
+        TradingDay="20261017",
+        ActionDay="20261017",
+        UpdateTime="09:30:01",
+        UpdateMillisec=250,
+    )
+    (active_event,) = provider.poll(second, limit=8)
+    assert active_event.data["symbol"] == "IH2612"
+
+    old_client.stop_receipts.extend(
+        (
+            CtpNativeStopReceipt(
+                connection_generation=1,
+                join_required=False,
+                join_completed=True,
+                native_released=False,
+                thread_alive=False,
+                timed_out=False,
+            ),
+            CtpNativeStopReceipt(
+                connection_generation=1,
+                join_required=False,
+                join_completed=True,
+                native_released=True,
+                thread_alive=False,
+                timed_out=False,
+            ),
+        )
+    )
+    assert provider.close() is False
+    assert provider.diagnostics["active_handles"] == 1
+    assert len(_SyntheticMdClient.instances) == 1
+    with pytest.raises(CtpQuoteV2MarketProviderError) as error:
+        provider.subscribe(keys[0], generation="hub-generation-a2")
+    assert error.value.code == "CTP_MARKET_FRESH_STREAM_REQUIRED"
+    assert len(_SyntheticMdClient.instances) == 1
+
+    assert provider.close() is True
+    assert provider.diagnostics["active_handles"] == 0
+    fresh = provider.subscribe(keys[0], generation="hub-generation-a3")
+    assert len(streams) == 2
+    assert fresh.stream is streams[1]
+    assert fresh.stream is not old_stream
+    (new_client,) = _SyntheticMdClient.instances[1:]
+    assert new_client is not old_client
+
+    # The old callback closure cannot be relabelled into the new stream after
+    # confirmed full close and a fresh native client token.
+    old_queue_size = fresh.queue.size
+    old_callback(
+        SimpleNamespace(
+            InstrumentID="IF2612",
+            ExchangeID="CFFEX",
+            LastPrice=4_001.0,
+            PreSettlementPrice=3_990.0,
+            OpenPrice=3_995.0,
+            HighestPrice=4_010.0,
+            LowestPrice=3_980.0,
+            BidPrice1=4_000.0,
+            BidVolume1=2,
+            AskPrice1=4_002.0,
+            AskVolume1=3,
+            OpenInterest=1_000.0,
+            Volume=123,
+            Turnover=492_000.0,
+            UpperLimitPrice=4_200.0,
+            LowerLimitPrice=3_800.0,
+            TradingDay="20261017",
+            ActionDay="20261017",
+            UpdateTime="09:30:02",
+            UpdateMillisec=250,
+        )
+    )
+    assert fresh.queue.size == old_queue_size == 0
+    assert provider.poll(fresh, limit=8) == ()
+    assert provider.unsubscribe(fresh) is True
+
+
+def test_retired_symbol_limit_fences_additions_but_allows_provider_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    keys = tuple(
+        _key(
+            instrument=MarketInstrumentKey(
+                provider="ctp",
+                venue="CFFEX",
+                environment="simnow",
+                product_type="future",
+                instrument_id=symbol,
+                native_symbol=symbol,
+            )
+        )
+        for symbol in ("IF2612", "IH2612", "IC2612")
+    )
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+    )
+    first = provider.subscribe(keys[0], generation="hub-generation-a")
+    second = provider.subscribe(keys[1], generation="hub-generation-b")
+    (client,) = _SyntheticMdClient.instances
+    retired = first.stream._retired_quote_v2_subscriptions
+    retired.update(
+        {
+            f"retired-{index}": first.stream._md_client_token
+            for index in range(live_ctp_feed._MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS - 1)
+        }
+    )
+    # Releasing this handle reaches the tombstone limit, fences additions for
+    # this native client, and still allows the normal Hub-style per-handle
+    # teardown sequence to continue.
+    assert provider.unsubscribe(first) is True
+    assert len(retired) == live_ctp_feed._MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS
+    assert first.active is False and second.active is True
+    assert provider.diagnostics["active_handles"] == 1
+    assert tuple(client.unsubscribed) == ("IF2612",)
+    native_symbols_before_fenced_add = tuple(client.subscribed)
+    native_add_calls_before_fenced_add = client.subscribe_additional_calls
+
+    with pytest.raises(CtpQuoteV2MarketProviderError) as error:
+        provider.subscribe(keys[2], generation="hub-generation-c")
+    assert error.value.code == "CTP_MARKET_RETIRED_SYMBOL_LIMIT"
+    assert tuple(client.subscribed) == native_symbols_before_fenced_add
+    assert client.subscribe_additional_calls == native_add_calls_before_fenced_add
+    assert provider._source_scope is second.source_scope
+    assert second.stream.get_quote_clock_source_scope() is second.source_scope
+
+    # The remaining handle can still be released, and its final release stops
+    # the exact native session despite the full retired-symbol ledger.
+    assert provider.unsubscribe(second) is True
+    assert client.unsubscribed == ["IF2612"]
+    assert client.stop_calls == 1
+    assert provider.diagnostics["active_handles"] == 0
+    assert provider.diagnostics["active_sessions"] == 0
 
 
 def test_failed_additional_native_subscription_is_rolled_back_and_session_fails_closed(

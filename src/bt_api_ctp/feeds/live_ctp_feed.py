@@ -54,6 +54,22 @@ from bt_api_ctp.query import QueryResult
 
 _CTP_MONOTONIC_NS = time.monotonic_ns
 _CTP_MONOTONIC_CLOCK_SOURCE = time.get_clock_info("monotonic").implementation
+_MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS = 1_024
+
+
+class CtpMarketStreamSubscriptionError(RuntimeError):
+    """Finite no-mutation rejection from the CTP quote subscription boundary."""
+
+    _CODES = frozenset(
+        {
+            "CTP_MD_RESUBSCRIBE_REQUIRES_FRESH_STREAM",
+            "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT",
+        }
+    )
+
+    def __init__(self, code: str) -> None:
+        self.code = code if type(code) is str and code in self._CODES else "CTP_MD_SUBSCRIPTION_REJECTED"
+        super().__init__(self.code)
 
 
 def _is_exact_ctp_order_ref(value: Any) -> bool:
@@ -1883,6 +1899,16 @@ class CtpMarketStream(BaseDataStream):
         # the owner stops this MD session; metadata rollback alone is not
         # evidence that the native session has no such subscription.
         self._ambiguous_quote_v2_subscriptions: set[str] = set()
+        # CTP quote callbacks carry no per-subscription token. Once a symbol
+        # has been removed, a late callback cannot be distinguished from a
+        # callback for a later subscription on this same native client.
+        # Retain a bounded tombstone until a distinct MdClient authenticates
+        # and receives a source scope; its old callbacks are fenced by token.
+        self._retired_quote_v2_subscriptions: dict[str, int] = {}
+        # If tombstone capacity is exhausted, prohibit new symbols on this
+        # client but keep allowing existing symbols to unsubscribe so normal
+        # Hub shutdown can still release every handle and stop the session.
+        self._quote_v2_additions_fenced_client_token: int | None = None
         self._has_connected_once = False
         self._register_quote_v2_topics(self.topics)
 
@@ -1939,16 +1965,31 @@ class CtpMarketStream(BaseDataStream):
         ]
         if not records:
             return []
+        if any(instrument in self._retired_quote_v2_subscriptions for instrument, _ in records):
+            raise CtpMarketStreamSubscriptionError("CTP_MD_RESUBSCRIBE_REQUIRES_FRESH_STREAM")
+        new_instruments = {
+            instrument
+            for instrument, _ in records
+            if instrument not in self._quote_v2_subscription_metadata
+        }
+        if new_instruments and (
+            self._quote_v2_additions_fenced_client_token is not None
+            or len(self._retired_quote_v2_subscriptions)
+            >= _MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS
+        ):
+            if self._quote_v2_additions_fenced_client_token is None:
+                self._quote_v2_additions_fenced_client_token = self._md_client_token
+            raise CtpMarketStreamSubscriptionError("CTP_MD_RETIRED_SUBSCRIPTION_LIMIT")
 
-        # One subscribe request receives one epoch shared by every requested
-        # leg.  A subsequent (including reconnect) request advances it.
-        self._subscription_epoch += 1
+        # The epoch identifies the active native MD subscription generation,
+        # not an individual Hub key registration. Additional instruments join
+        # that generation so already-published events remain valid while a
+        # multi-key consumer finishes its startup subscriptions. Reconnects
+        # advance and retag the complete active set in
+        # ``_advance_quote_v2_subscription_epoch``.
+        if self._subscription_epoch <= 0:
+            self._subscription_epoch = 1
         epoch = self._subscription_epoch
-        # Receipts are fenced by the stream-wide callback epoch. When another
-        # instrument is added, retag the existing active topics at the same
-        # boundary so one authenticated MD session can serve several keys.
-        for metadata in self._quote_v2_subscription_metadata.values():
-            metadata["subscription_epoch"] = epoch
         instruments: list[str] = []
         for instrument, topic in records:
             metadata = dict(self._quote_v2_default_metadata)
@@ -2105,6 +2146,10 @@ class CtpMarketStream(BaseDataStream):
         with self._md_callback_lock:
             self.state = ConnectionState.CONNECTING
             self._md_client_token += 1
+            # The previous MdClient's callbacks retain its old client/token
+            # pair and are rejected by _is_current_md_callback. Retired
+            # symbols are cleared only after this exact new client authenticates
+            # and receives a valid source scope in _on_login.
             client_token = self._md_client_token
             callback_capability = object()
             self._managed_quote_v2_callback_capability = callback_capability
@@ -2192,12 +2237,25 @@ class CtpMarketStream(BaseDataStream):
             elif client_generation != self._observed_client_generation:
                 self._observed_client_generation = client_generation
                 self._advance_quote_v2_connection_generation(advance_subscription_epoch=True)
-            self._issue_quote_clock_source_scope(
+            scope = self._issue_quote_clock_source_scope(
                 client=client,
                 client_token=int(client_token or 0),
                 client_generation=client_generation,
                 callback_capability=_managed_callback_capability,
             )
+            if scope is not None:
+                # A fresh authenticated MdClient has a distinct callback
+                # token, so delayed callbacks from the retired client cannot
+                # be mistaken for these subscriptions. An in-place reconnect
+                # keeps the token and therefore keeps its tombstones.
+                for symbol, retired_client_token in tuple(
+                    self._retired_quote_v2_subscriptions.items()
+                ):
+                    if retired_client_token != int(client_token or 0):
+                        self._retired_quote_v2_subscriptions.pop(symbol, None)
+                fenced_token = self._quote_v2_additions_fenced_client_token
+                if fenced_token is not None and fenced_token != int(client_token or 0):
+                    self._quote_v2_additions_fenced_client_token = None
 
     def _on_tick(
         self,
@@ -2419,6 +2477,14 @@ class CtpMarketStream(BaseDataStream):
                 raise RuntimeError("ctp_md_client_changed_during_unsubscribe")
             for symbol in removals:
                 self._quote_v2_subscription_metadata.pop(symbol, None)
+                if (
+                    symbol not in self._retired_quote_v2_subscriptions
+                    and len(self._retired_quote_v2_subscriptions)
+                    < _MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS
+                ):
+                    self._retired_quote_v2_subscriptions[symbol] = self._md_client_token
+                if len(self._retired_quote_v2_subscriptions) >= _MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS:
+                    self._quote_v2_additions_fenced_client_token = self._md_client_token
             return True
 
     @classmethod

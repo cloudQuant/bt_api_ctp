@@ -30,6 +30,7 @@ from bt_api_ctp.ctp.client import CtpNativeStopReceipt
 from bt_api_ctp.feeds.live_ctp_feed import (
     ConnectionState,
     CtpMarketStream,
+    CtpMarketStreamSubscriptionError,
     CtpQuoteClockSourceScope,
     _get_ctp_managed_quote_v2_receipt,
 )
@@ -63,6 +64,8 @@ class CtpQuoteV2MarketProviderError(RuntimeError):
             "CTP_MARKET_EVENT_KEY_MISMATCH",
             "CTP_MARKET_EVENT_RECEIPT_UNTRUSTED",
             "CTP_MARKET_SOURCE_SCOPE_CHANGED",
+            "CTP_MARKET_FRESH_STREAM_REQUIRED",
+            "CTP_MARKET_RETIRED_SYMBOL_LIMIT",
             "CTP_MARKET_SESSION_KEY_MISMATCH",
             "CTP_MARKET_UNSUBSCRIBE_FAILED",
             "CTP_MARKET_STOP_UNCONFIRMED",
@@ -187,6 +190,13 @@ class CtpQuoteV2MarketProvider:
     ``source_ref`` and ``entitlement_ref`` are explicit trusted profile
     bindings. They are compared exactly with every key; the provider invents
     neither authorization value nor account identity.
+
+    A symbol successfully unsubscribed from a live native client cannot be
+    safely re-added to that same client because its callbacks carry no
+    subscription token. Re-adding it requires a confirmed full provider close
+    and a fresh stream; other active symbol handles remain usable meanwhile.
+    If the bounded retired-symbol ledger fills, new symbols are fenced for that
+    client while existing handles can still be released normally.
     """
 
     def __init__(
@@ -265,10 +275,13 @@ class CtpQuoteV2MarketProvider:
         if self._active_handles.get(id(handle)) is not handle:
             return False
         if len(self._active_handles) > 1:
+            symbol = handle.key.instrument.native_symbol
             try:
-                handle.stream.unsubscribe_topics(
-                    [{"topic": "tick", "symbol": handle.key.instrument.native_symbol}]
-                )
+                handle.stream.unsubscribe_topics([{"topic": "tick", "symbol": symbol}])
+            except CtpMarketStreamSubscriptionError as exc:
+                if exc.code == "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT":
+                    raise CtpQuoteV2MarketProviderError("CTP_MARKET_RETIRED_SYMBOL_LIMIT") from None
+                return False
             except Exception:
                 return False
             fanout = self._fanout
@@ -294,17 +307,27 @@ class CtpQuoteV2MarketProvider:
         return native_stop_confirmed
 
     def close(self) -> bool:
-        """Retry every exact handle and startup cleanup still owned here.
+        """Stop the exact shared native session before discarding ownership.
 
-        GatewayMarketHub normally releases active handles first. This provider
-        close hook covers a native session whose startup failed before the Hub
-        received a handle; an unconfirmed stop remains retained for a later
-        owner-thread retry.
+        A full owner close is the recovery boundary for retired-symbol
+        tombstones and bypasses per-symbol unsubscribe limits. On an
+        unconfirmed native stop, every handle and the stream remain retained
+        for a later owner-thread retry.
         """
 
         self._check_owner()
-        for handle in tuple(self._active_handles.values()):
-            self.unsubscribe(handle)
+        stream = self._stream
+        if stream is not None:
+            native_client = self._native_client or getattr(stream, "_md_client", None)
+            stopped, _native_stop_confirmed = self._stop_stream(stream, native_client, False)
+            if not stopped:
+                return False
+            for handle in tuple(self._active_handles.values()):
+                handle.active = False
+                handle.queue.clear()
+            self._active_handles.clear()
+            self._handles_by_symbol.clear()
+            self._reset_active_stream()
         try:
             self._retry_pending_start_cleanup()
         except CtpQuoteV2MarketProviderError:
@@ -447,12 +470,13 @@ class CtpQuoteV2MarketProvider:
         scope = self._source_scope
         if key.instrument.environment != self._session_environment:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SESSION_KEY_MISMATCH")
-        if (
-            stream is None
-            or fanout is None
-            or scope is None
-            or self._current_source_scope(stream) is not scope
-        ):
+        if stream is None or fanout is None:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
+        symbol = key.instrument.native_symbol
+        retired = getattr(stream, "_retired_quote_v2_subscriptions", {})
+        if type(retired) is dict and symbol in retired:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_FRESH_STREAM_REQUIRED")
+        if scope is None or self._current_source_scope(stream) is not scope:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
         subscribed = getattr(stream, "_quote_v2_subscription_metadata", {})
         if type(subscribed) is not dict or set(subscribed) != set(self._handles_by_symbol):
@@ -460,15 +484,13 @@ class CtpQuoteV2MarketProvider:
             self._source_scope = None
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED")
         callback_queue = BoundedCtpQuoteV2Queue(self._queue_capacity)
-        symbol = key.instrument.native_symbol
         fanout.register(symbol, callback_queue)
         ambiguous_symbols = {symbol}
         try:
-            # Adding a symbol advances CtpMarketStream's callback epoch for
-            # the active topic set. Drop queued rows with the previous epoch
-            # before changing that fence; they cannot be safely re-labelled.
-            for active in self._active_handles.values():
-                active.queue.clear()
+            # A new instrument joins the existing native MD generation. Keep
+            # queued rows for active symbols: the Hub may already have
+            # published them to per-key replay journals, and this operation
+            # neither changes their source session nor relabels their epoch.
             stream.subscribe_topics([_quote_topic(key)])
             subscribed = getattr(stream, "_quote_v2_subscription_metadata", {})
             expected = set(self._handles_by_symbol) | {symbol}
@@ -476,6 +498,17 @@ class CtpQuoteV2MarketProvider:
                 if type(subscribed) is dict:
                     ambiguous_symbols.update(expected.symmetric_difference(subscribed))
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED")
+        except CtpMarketStreamSubscriptionError as exc:
+            # This typed stream exception denotes a pre-mutation rejection.
+            # Remove only the tentative target; preserve active handle queues
+            # and the current source scope for every code in this family.
+            callback_queue.clear()
+            fanout.unregister(symbol, callback_queue)
+            if exc.code == "CTP_MD_RESUBSCRIBE_REQUIRES_FRESH_STREAM":
+                raise CtpQuoteV2MarketProviderError("CTP_MARKET_FRESH_STREAM_REQUIRED") from None
+            if exc.code == "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT":
+                raise CtpQuoteV2MarketProviderError("CTP_MARKET_RETIRED_SYMBOL_LIMIT") from None
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED") from None
         except Exception as exc:
             # The native add may have partially succeeded even if stream
             # metadata or the API response did not. Retain that uncertainty
