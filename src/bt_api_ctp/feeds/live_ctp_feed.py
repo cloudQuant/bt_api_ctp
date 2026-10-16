@@ -6,12 +6,13 @@ import time
 import warnings
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from math import isfinite
 from sys import float_info
 from typing import Any
+from uuid import uuid4
 
 from bt_api_base.containers.orders.order import OrderStatus
 from bt_api_base.containers.requestdatas.request_data import RequestData
@@ -51,12 +52,45 @@ from bt_api_ctp.instrument import (
 )
 from bt_api_ctp.query import QueryResult
 
+_CTP_MONOTONIC_NS = time.monotonic_ns
+_CTP_MONOTONIC_CLOCK_SOURCE = time.get_clock_info("monotonic").implementation
+
 
 def _is_exact_ctp_order_ref(value: Any) -> bool:
     return type(value) is str and len(value) == 12 and value.isascii() and value.isdecimal()
 
 
 _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL = object()
+_CTP_QUOTE_CLOCK_SOURCE_SCOPE_SEAL = object()
+
+
+@dataclass(frozen=True)
+class CtpQuoteClockSourceScope:
+    """Opaque identity for one authenticated native MD callback session.
+
+    This binds the producer's actual process monotonic source and MD session to
+    a particular stream/client/callback capability.  It does not calibrate
+    exchange event timestamps, prove freshness, or grant execution
+    qualification.
+    """
+
+    source: str
+    clock_domain_id: str
+    clock_source_session_id: str
+    clock_source: str
+    connection_generation: int
+    _seal: object = field(repr=False, compare=False)
+    _stream: Any = field(repr=False, compare=False)
+    _stream_token: object = field(repr=False, compare=False)
+    _client: Any = field(repr=False, compare=False)
+    _client_token: int = field(repr=False, compare=False)
+    _client_generation: int = field(repr=False, compare=False)
+    _callback_capability: object = field(repr=False, compare=False)
+    _clock_source_callable: Any = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _CTP_QUOTE_CLOCK_SOURCE_SCOPE_SEAL:
+            raise ValueError("CTP quote clock source scopes are issued by CtpMarketStream")
 
 
 @dataclass(frozen=True)
@@ -81,12 +115,65 @@ class _CtpManagedQuoteV2Receipt:
     source: str
     rules_hash: str
     clock_domain_id: str
+    clock_source_session_id: str
     source_clock_quality: str
     receive_clock_quality: str
     source_clock_error_ms: float | None
     receive_clock_error_ms: float | None
     freshness_verified: bool
     execution_qualified: bool
+    clock_source_scope: CtpQuoteClockSourceScope
+
+
+def _is_current_ctp_quote_clock_source_scope(
+    scope: Any,
+    stream: Any,
+    *,
+    require_authenticated: bool,
+) -> bool:
+    """Validate the opaque scope against the exact active native MD session."""
+
+    if type(scope) is not CtpQuoteClockSourceScope or type(stream) is not CtpMarketStream:
+        return False
+    if (
+        scope._seal is not _CTP_QUOTE_CLOCK_SOURCE_SCOPE_SEAL
+        or scope._stream is not stream
+        or scope._stream_token is not getattr(stream, "_managed_quote_v2_stream_token", None)
+        or scope._client is not getattr(stream, "_md_client", None)
+        or scope._client_token != getattr(stream, "_md_client_token", None)
+        or scope._callback_capability
+        is not getattr(stream, "_managed_quote_v2_callback_capability", None)
+    ):
+        return False
+    try:
+        generation = int(getattr(stream, "_connection_generation", 0) or 0)
+        client_generation = getattr(scope._client, "connection_generation", None)
+    except Exception:
+        return False
+    if not (
+        scope.source == "ctp.native.md"
+        and type(scope.clock_domain_id) is str
+        and scope.clock_domain_id
+        and type(scope.clock_source_session_id) is str
+        and len(scope.clock_source_session_id) == 32
+        and all(character in "0123456789abcdef" for character in scope.clock_source_session_id)
+        and type(scope.clock_source) is str
+        and scope.clock_source
+        and scope.clock_domain_id
+        == f"ctp-md-process:{os.getpid()}:monotonic:{scope.clock_source_session_id}"
+        and type(scope.connection_generation) is int
+        and scope.connection_generation > 0
+        and scope.connection_generation == generation
+        and type(scope._client_generation) is int
+        and scope._client_generation > 0
+        and type(client_generation) is int
+        and client_generation == scope._client_generation
+        and callable(scope._clock_source_callable)
+    ):
+        return False
+    if require_authenticated and getattr(stream, "state", None) is not ConnectionState.AUTHENTICATED:
+        return False
+    return True
 
 
 def _get_ctp_managed_quote_v2_receipt(
@@ -110,6 +197,11 @@ def _get_ctp_managed_quote_v2_receipt(
         or receipt._ticker is not ticker
         or receipt._stream is not stream
         or receipt._stream_token is not getattr(stream, "_managed_quote_v2_stream_token", None)
+        or not _is_current_ctp_quote_clock_source_scope(
+            receipt.clock_source_scope,
+            stream,
+            require_authenticated=True,
+        )
     ):
         return None
     try:
@@ -130,6 +222,12 @@ def _get_ctp_managed_quote_v2_receipt(
         and receipt.subscription_epoch == stream_epoch == ticker_epoch
         and receipt.ingest_seq > 0
         and receipt.ingest_seq == ticker_seq
+        and receipt.source == receipt.clock_source_scope.source
+        and receipt.clock_domain_id == ticker.clock_domain_id
+        and receipt.source == ticker.source
+        and receipt.clock_source_scope.clock_domain_id == receipt.clock_domain_id
+        and receipt.clock_source_scope.clock_source_session_id
+        == receipt.clock_source_session_id
     ):
         return None
     return {
@@ -140,6 +238,8 @@ def _get_ctp_managed_quote_v2_receipt(
         "source": receipt.source,
         "rules_hash": receipt.rules_hash,
         "clock_domain_id": receipt.clock_domain_id,
+        "clock_source_session_id": receipt.clock_source_session_id,
+        "clock_source": receipt.clock_source_scope.clock_source,
         "source_clock_quality": receipt.source_clock_quality,
         "receive_clock_quality": receipt.receive_clock_quality,
         "source_clock_error_ms": receipt.source_clock_error_ms,
@@ -1760,6 +1860,7 @@ class CtpMarketStream(BaseDataStream):
         # may still emit diagnostic rows, but cannot issue a managed receipt.
         self._managed_quote_v2_callback_capability: object | None = None
         self._managed_quote_v2_stream_token = object()
+        self._managed_quote_clock_source_scope: CtpQuoteClockSourceScope | None = None
         self._volume_tracker = CtpVolumeDeltaTracker()
         self._subscription_epoch = 0
         self._quote_v2_default_metadata = self._quote_v2_metadata(
@@ -1783,11 +1884,11 @@ class CtpMarketStream(BaseDataStream):
     def _quote_v2_metadata(value: Any) -> dict[str, Any]:
         """Copy explicit externally supplied V2 diagnostic fields.
 
-        The CTP MD API does not prove clock calibration, rules identity or an
-        execution-ready subscription.  These values stay observable on the
-        native row for diagnostics, but cannot qualify the managed receipt
-        used by the parent SDK.  Missing fields therefore remain empty,
-        ``unknown`` or false instead of being inferred from local process time.
+        These values remain useful on direct/offline diagnostic rows, but are
+        not proof of native source identity or clock qualification. Managed
+        native callbacks replace caller-provided source, clock, quality and
+        freshness claims with the active producer scope and conservative
+        unknown values.
         """
 
         if not isinstance(value, dict):
@@ -1876,8 +1977,74 @@ class CtpMarketStream(BaseDataStream):
 
         self._connection_generation += 1
         self._ingest_seq = 0
+        self._managed_quote_clock_source_scope = None
         if advance_subscription_epoch:
             self._advance_quote_v2_subscription_epoch()
+
+    def _issue_quote_clock_source_scope(
+        self,
+        *,
+        client: Any,
+        client_token: int,
+        client_generation: int,
+        callback_capability: object,
+    ) -> CtpQuoteClockSourceScope | None:
+        """Issue a source identity after the exact native MD login session."""
+
+        try:
+            current_client_generation = getattr(client, "connection_generation", None)
+        except Exception:
+            current_client_generation = None
+        if (
+            self._md_client is not client
+            or self._md_client_token != client_token
+            or self._managed_quote_v2_callback_capability is not callback_capability
+            or type(client_generation) is not int
+            or client_generation <= 0
+            or current_client_generation != client_generation
+        ):
+            self._managed_quote_clock_source_scope = None
+            return None
+        session_id = uuid4().hex
+        clock_source = _CTP_MONOTONIC_CLOCK_SOURCE
+        scope = CtpQuoteClockSourceScope(
+            source="ctp.native.md",
+            clock_domain_id=(
+                f"ctp-md-process:{os.getpid()}:monotonic:{session_id}"
+            ),
+            clock_source_session_id=session_id,
+            clock_source=str(clock_source),
+            connection_generation=int(self._connection_generation or 0),
+            _seal=_CTP_QUOTE_CLOCK_SOURCE_SCOPE_SEAL,
+            _stream=self,
+            _stream_token=self._managed_quote_v2_stream_token,
+            _client=client,
+            _client_token=int(client_token),
+            _client_generation=client_generation,
+            _callback_capability=callback_capability,
+            _clock_source_callable=_CTP_MONOTONIC_NS,
+        )
+        self._managed_quote_clock_source_scope = scope
+        return scope
+
+    def get_quote_clock_source_scope(self) -> CtpQuoteClockSourceScope | None:
+        """Return current native MD source identity after login, or ``None``.
+
+        The returned object is an opaque, immutable producer identity.  Its
+        fields describe the source/session and monotonic implementation only;
+        callers still need their own run-owned mapping to qualify exchange
+        timestamps or freshness.
+        """
+
+        with self._md_callback_lock:
+            scope = self._managed_quote_clock_source_scope
+            if not _is_current_ctp_quote_clock_source_scope(
+                scope,
+                self,
+                require_authenticated=True,
+            ):
+                return None
+            return scope
 
     def _is_current_md_callback(self, client: Any, client_token: int | None) -> bool:
         """Return whether a callback still belongs to the active MD client."""
@@ -1894,24 +2061,33 @@ class CtpMarketStream(BaseDataStream):
         for diagnostics, but it cannot alter this receipt.
         """
 
-        row._managed_quote_v2_receipt = _CtpManagedQuoteV2Receipt(
-            _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL,
+        scope = self._managed_quote_clock_source_scope
+        if not _is_current_ctp_quote_clock_source_scope(
+            scope,
             self,
-            self._managed_quote_v2_stream_token,
-            row,
-            str(row.get_symbol_name() or "").strip(),
-            int(self._connection_generation or 0),
-            int(row.subscription_epoch or 0),
-            int(row.ingest_seq or 0),
-            "ctp.native.md",
-            "",
-            "",
-            "unknown",
-            "unknown",
-            None,
-            None,
-            False,
-            False,
+            require_authenticated=False,
+        ):
+            return
+        row._managed_quote_v2_receipt = _CtpManagedQuoteV2Receipt(
+            _seal=_CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL,
+            _stream=self,
+            _stream_token=self._managed_quote_v2_stream_token,
+            _ticker=row,
+            symbol=str(row.get_symbol_name() or "").strip(),
+            connection_generation=scope.connection_generation,
+            subscription_epoch=int(row.subscription_epoch or 0),
+            ingest_seq=int(row.ingest_seq or 0),
+            source=scope.source,
+            rules_hash="",
+            clock_domain_id=scope.clock_domain_id,
+            clock_source_session_id=scope.clock_source_session_id,
+            source_clock_quality="unknown",
+            receive_clock_quality="unknown",
+            source_clock_error_ms=None,
+            receive_clock_error_ms=None,
+            freshness_verified=False,
+            execution_qualified=False,
+            clock_source_scope=scope,
         )
 
     def connect(self):
@@ -1940,11 +2116,29 @@ class CtpMarketStream(BaseDataStream):
                     )
                 )
             )
-            client.on_login = lambda login_field, _client=client, _token=client_token: (
-                self._on_login(login_field, client=_client, client_token=_token)
+            client.on_login = (
+                lambda login_field, _client=client, _token=client_token, _capability=callback_capability: (
+                    self._on_login(
+                        login_field,
+                        client=_client,
+                        client_token=_token,
+                        _managed_callback_capability=_capability,
+                    )
+                )
             )
             client.on_error = lambda rsp_info, _client=client, _token=client_token: self._on_error(
                 rsp_info, client=_client, client_token=_token
+            )
+            client.on_disconnect = (
+                lambda reason,
+                _client=client,
+                _token=client_token,
+                _capability=callback_capability: self._on_disconnect(
+                    reason,
+                    client=_client,
+                    client_token=_token,
+                    _managed_callback_capability=_capability,
+                )
             )
             instruments = list(self._quote_v2_subscription_metadata)
             if instruments:
@@ -1952,11 +2146,43 @@ class CtpMarketStream(BaseDataStream):
             client.start(block=False)
             self._has_connected_once = True
 
-    def _on_login(self, login_field, *, client: Any = None, client_token: int | None = None):
+    def _on_login(
+        self,
+        login_field,
+        *,
+        client: Any = None,
+        client_token: int | None = None,
+        _managed_callback_capability: object | None = None,
+    ):
         with self._md_callback_lock:
             if client is not None and not self._is_current_md_callback(client, client_token):
                 return
             self.state = ConnectionState.AUTHENTICATED
+            if (
+                client is None
+                or _managed_callback_capability is None
+                or _managed_callback_capability is not self._managed_quote_v2_callback_capability
+            ):
+                return
+            try:
+                client_generation = getattr(client, "connection_generation", None)
+            except Exception:
+                self._managed_quote_clock_source_scope = None
+                return
+            if type(client_generation) is not int or client_generation <= 0:
+                self._managed_quote_clock_source_scope = None
+                return
+            if self._observed_client_generation is None:
+                self._observed_client_generation = client_generation
+            elif client_generation != self._observed_client_generation:
+                self._observed_client_generation = client_generation
+                self._advance_quote_v2_connection_generation(advance_subscription_epoch=True)
+            self._issue_quote_clock_source_scope(
+                client=client,
+                client_token=int(client_token or 0),
+                client_generation=client_generation,
+                callback_capability=_managed_callback_capability,
+            )
 
     def _on_tick(
         self,
@@ -1983,8 +2209,6 @@ class CtpMarketStream(BaseDataStream):
             if client is None:
                 return
 
-            received_at = datetime.now(timezone.utc)
-            received_monotonic_ns = time.monotonic_ns()
             tick_dict = _ctp_field_to_dict(tick_field)
             symbol = str(tick_dict.get("InstrumentID", "") or "")
             try:
@@ -1998,10 +2222,41 @@ class CtpMarketStream(BaseDataStream):
             elif client_generation != self._observed_client_generation:
                 self._observed_client_generation = client_generation
                 self._advance_quote_v2_connection_generation(advance_subscription_epoch=True)
+            scope = self._managed_quote_clock_source_scope if native_managed_callback else None
+            scope_is_current = _is_current_ctp_quote_clock_source_scope(
+                scope,
+                self,
+                require_authenticated=False,
+            )
+            # Bind the receive monotonic sample to the exact callable captured
+            # into the producer scope. If a caller reaches this private path
+            # without a current managed scope, the row remains diagnostic and
+            # cannot receive a managed receipt.
+            clock_source_callable = (
+                scope._clock_source_callable if scope_is_current else _CTP_MONOTONIC_NS
+            )
+            received_at = datetime.now(timezone.utc)
+            received_monotonic_ns = int(clock_source_callable())
             self._ingest_seq += 1
             metadata = dict(self._quote_v2_default_metadata)
             metadata.update(self._quote_v2_metadata_by_instrument.get(symbol, {}))
             metadata.update(self._quote_v2_subscription_metadata.get(symbol, {}))
+            if native_managed_callback:
+                # The public metadata remains available to diagnostic-only
+                # direct calls, but a native callback always derives its
+                # source/domain from the opaque producer session and never
+                # accepts configured quality, freshness, or clock claims.
+                metadata.update(
+                    {
+                        "clock_domain_id": scope.clock_domain_id if scope_is_current else "",
+                        "source": "ctp.native.md",
+                        "source_clock_quality": "unknown",
+                        "receive_clock_quality": "unknown",
+                        "source_clock_error_ms": None,
+                        "receive_clock_error_ms": None,
+                        "freshness_verified": False,
+                    }
+                )
             row = CtpTickerData(
                 tick_dict,
                 symbol,
@@ -2040,6 +2295,28 @@ class CtpMarketStream(BaseDataStream):
         with self._md_callback_lock:
             if client is not None and not self._is_current_md_callback(client, client_token):
                 return
+            self._managed_quote_clock_source_scope = None
+            self.state = ConnectionState.ERROR
+
+    def _on_disconnect(
+        self,
+        reason,
+        *,
+        client: Any = None,
+        client_token: int | None = None,
+        _managed_callback_capability: object | None = None,
+    ):
+        with self._md_callback_lock:
+            if (
+                client is None
+                or not self._is_current_md_callback(client, client_token)
+                or _managed_callback_capability is not self._managed_quote_v2_callback_capability
+            ):
+                return
+            # The MD client's generation advances only after the next front
+            # connection. Revoke this session as soon as disconnect is
+            # observed, before that generation change becomes visible.
+            self._managed_quote_clock_source_scope = None
             self.state = ConnectionState.ERROR
 
     def disconnect(self):
@@ -2049,6 +2326,7 @@ class CtpMarketStream(BaseDataStream):
             # old native client cannot enter after this lifecycle boundary.
             self._md_client_token += 1
             self._managed_quote_v2_callback_capability = None
+            self._managed_quote_clock_source_scope = None
             self._md_client = None
             self._observed_client_generation = None
             self.state = ConnectionState.DISCONNECTED
@@ -2209,6 +2487,7 @@ __all__ = [
     "CTP_DIRECTION_FLAG",
     "CTP_OFFSET_FLAG",
     "CtpMarketStream",
+    "CtpQuoteClockSourceScope",
     "CtpRequestData",
     "CtpRequestDataFuture",
     "CtpTradeStream",

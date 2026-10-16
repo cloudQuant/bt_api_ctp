@@ -19,6 +19,7 @@ from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.ctp_env_selector import official_simnow_fronts
 from bt_api_ctp.feeds.live_ctp_feed import (
     CtpMarketStream,
+    CtpQuoteClockSourceScope,
     CtpRequestDataFuture,
     CtpTradeStream,
     CtpVolumeDeltaTracker,
@@ -1983,6 +1984,8 @@ def test_volume_delta_continues_across_action_day_midnight_within_trading_day() 
 
 
 def test_market_stream_keeps_per_subscription_option_and_future_metadata() -> None:
+    """Direct/offline rows retain topic values for diagnostics only."""
+
     common = {
         "rules_hash": "rules-sha256",
         "clock_domain_id": "ctp-md-clock-a",
@@ -2023,6 +2026,8 @@ def test_market_stream_keeps_per_subscription_option_and_future_metadata() -> No
     rows = []
     stream.push_data = rows.append
 
+    # This private direct-call seam has no connect-installed callback
+    # capability, so its metadata cannot receive a managed quote receipt.
     for instrument, price, lower, upper in (
         ("SA701", 1200, 1000, 2000),
         ("SA701C1080", 60, 1, 100),
@@ -2052,6 +2057,7 @@ def test_market_stream_keeps_per_subscription_option_and_future_metadata() -> No
     assert all(row.rules_hash == "rules-sha256" for row in rows)
     assert all(row.source_clock_quality == "verified" for row in rows)
     assert all(row.freshness_verified is True for row in rows)
+    assert all(_get_ctp_managed_quote_v2_receipt(row, stream) is None for row in rows)
     assert [row.product_class for row in rows] == ["1", "2"]
     assert [row.contract_type for row in rows] == ["future", "option"]
     assert [row.option_type for row in rows] == [None, "call"]
@@ -2138,23 +2144,39 @@ def test_market_stream_public_quote_metadata_cannot_qualify_native_receipt(
     )
 
     row = rows[-1]
-    # Topic metadata remains visible as diagnostic data and overrides kwargs.
+    # Public rules metadata can remain visible for diagnostics, but clock and
+    # quality claims on a managed native callback must come from its producer.
     assert row.rules_hash == "topic-rules"
-    assert row.clock_domain_id == "topic-clock"
-    assert row.source == "topic-source"
-    assert row.receive_clock_quality == "verified"
-    assert row.freshness_verified is True
+    scope = stream.get_quote_clock_source_scope()
+    assert type(scope) is CtpQuoteClockSourceScope
+    assert scope is not None
+    assert scope.source == "ctp.native.md"
+    assert scope.clock_domain_id.startswith("ctp-md-process:")
+    assert scope.clock_domain_id != "kwargs-clock"
+    assert scope.clock_domain_id != "topic-clock"
+    assert scope.clock_source_session_id
+    assert scope.clock_source
+    assert scope.connection_generation == 1
+    assert row.clock_domain_id == scope.clock_domain_id
+    assert row.source == "ctp.native.md"
+    assert row.source_clock_quality == "unknown"
+    assert row.receive_clock_quality == "unknown"
+    assert row.source_clock_error_ms is None
+    assert row.receive_clock_error_ms is None
+    assert row.freshness_verified is False
 
     receipt = _get_ctp_managed_quote_v2_receipt(row, stream)
     assert receipt is not None
     assert receipt["symbol"] == "IF2506C4000"
     assert receipt["connection_generation"] == 1
     assert receipt["subscription_epoch"] == 1
-    # Only native calibration/rules evidence can set this in a future release;
-    # no public config or topic field is allowed to do so.
+    # Producer identity is available, but no mapping/freshness authority is
+    # inferred from configuration or from the receive clock itself.
     assert receipt["execution_qualified"] is False
     assert receipt["rules_hash"] == ""
-    assert receipt["clock_domain_id"] == ""
+    assert receipt["clock_domain_id"] == scope.clock_domain_id
+    assert receipt["clock_source_session_id"] == scope.clock_source_session_id
+    assert receipt["clock_source"] == scope.clock_source
     assert receipt["receive_clock_quality"] == "unknown"
     assert receipt["freshness_verified"] is False
 
@@ -2169,6 +2191,119 @@ def test_market_stream_public_quote_metadata_cannot_qualify_native_receipt(
     other_stream._connection_generation = 1
     other_stream._subscription_epoch = 1
     assert _get_ctp_managed_quote_v2_receipt(row, other_stream) is None
+
+
+def test_market_quote_clock_source_scope_is_bound_to_authenticated_session(
+    monkeypatch,
+) -> None:
+    clients = []
+    synthetic_clock_values = iter((101_001, 202_002, 303_003))
+
+    def synthetic_monotonic_ns() -> int:
+        return next(synthetic_clock_values)
+
+    class FakeMdClient:
+        def __init__(self, *_args) -> None:
+            self.connection_generation = 1
+            clients.append(self)
+
+        def subscribe(self, _instruments) -> None:
+            pass
+
+        def start(self, *, block=False) -> None:
+            self.started = block
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr("bt_api_ctp.feeds.live_ctp_feed.ctp_client.MdClient", FakeMdClient)
+    monkeypatch.setattr(
+        "bt_api_ctp.feeds.live_ctp_feed._CTP_MONOTONIC_NS",
+        synthetic_monotonic_ns,
+    )
+    stream = CtpMarketStream(topics=[{"topic": "tick", "symbol": "IF2506"}])
+    rows = []
+    stream.push_data = rows.append
+
+    stream.connect()
+    first_client = clients[-1]
+    assert stream.get_quote_clock_source_scope() is None
+    first_client.on_login(SimpleNamespace())
+    first_scope = stream.get_quote_clock_source_scope()
+    assert type(first_scope) is CtpQuoteClockSourceScope
+    assert first_scope is not None
+    assert first_scope.connection_generation == 1
+
+    tick = SimpleNamespace(
+        InstrumentID="IF2506",
+        ExchangeID="CFFEX",
+        LastPrice=4000,
+        BidPrice1=3999,
+        AskPrice1=4001,
+        BidVolume1=2,
+        AskVolume1=3,
+        OpenInterest=1000,
+        UpperLimitPrice=5000,
+        LowerLimitPrice=3000,
+        Volume=100,
+        TradingDay="20260909",
+        ActionDay="20260909",
+        UpdateTime="09:30:01",
+        UpdateMillisec=0,
+    )
+    first_client.on_tick(tick)
+    first_row = rows[-1]
+    assert first_row.clock_domain_id == first_scope.clock_domain_id
+    assert first_row.recv_monotonic_ns == 101_001
+    assert _get_ctp_managed_quote_v2_receipt(first_row, stream) is not None
+
+    # An in-place native generation change also rotates the producer clock
+    # session and fences receipts from the prior source generation. Until the
+    # new login is observed, the changed native generation is unqualified.
+    first_client.on_disconnect(0)
+    assert stream.get_quote_clock_source_scope() is None
+    assert _get_ctp_managed_quote_v2_receipt(first_row, stream) is None
+    first_client.connection_generation = 2
+    first_client.on_tick(tick)
+    assert stream.get_quote_clock_source_scope() is None
+    assert rows[-1].clock_domain_id == ""
+    assert rows[-1].recv_monotonic_ns == 202_002
+    first_client.on_login(SimpleNamespace())
+    second_scope = stream.get_quote_clock_source_scope()
+    assert type(second_scope) is CtpQuoteClockSourceScope
+    assert second_scope is not None
+    assert second_scope is not first_scope
+    assert second_scope.connection_generation == 2
+    assert second_scope.clock_source_session_id != first_scope.clock_source_session_id
+    assert second_scope.clock_domain_id != first_scope.clock_domain_id
+    assert _get_ctp_managed_quote_v2_receipt(first_row, stream) is None
+    first_client.on_tick(tick)
+    assert rows[-1].clock_domain_id == second_scope.clock_domain_id
+    assert rows[-1].recv_monotonic_ns == 303_003
+
+    second_row = rows[-1]
+    stream.disconnect()
+    assert stream.get_quote_clock_source_scope() is None
+    before_stale_callback = len(rows)
+    first_client.on_tick(tick)
+    assert len(rows) == before_stale_callback
+    assert _get_ctp_managed_quote_v2_receipt(second_row, stream) is None
+
+    stream.connect()
+    replacement_client = clients[-1]
+    replacement_client.on_login(SimpleNamespace())
+    replacement_scope = stream.get_quote_clock_source_scope()
+    assert type(replacement_scope) is CtpQuoteClockSourceScope
+    assert replacement_scope is not None
+    assert replacement_scope.connection_generation > second_scope.connection_generation
+    assert replacement_scope.clock_source_session_id not in {
+        first_scope.clock_source_session_id,
+        second_scope.clock_source_session_id,
+    }
+    assert replacement_scope.clock_domain_id not in {
+        first_scope.clock_domain_id,
+        second_scope.clock_domain_id,
+    }
 
 
 def test_market_stream_rejects_callback_without_managed_capability() -> None:
