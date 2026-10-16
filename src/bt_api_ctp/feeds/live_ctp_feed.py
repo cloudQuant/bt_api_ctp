@@ -1861,6 +1861,7 @@ class CtpMarketStream(BaseDataStream):
         self._managed_quote_v2_callback_capability: object | None = None
         self._managed_quote_v2_stream_token = object()
         self._managed_quote_clock_source_scope: CtpQuoteClockSourceScope | None = None
+        self._managed_quote_v2_subscription_failed = False
         self._volume_tracker = CtpVolumeDeltaTracker()
         self._subscription_epoch = 0
         self._quote_v2_default_metadata = self._quote_v2_metadata(
@@ -1877,6 +1878,11 @@ class CtpMarketStream(BaseDataStream):
             if str(instrument)
         }
         self._quote_v2_subscription_metadata: dict[str, dict[str, Any]] = {}
+        # Native subscribe calls can fail after the API may have partially
+        # accepted a request. Keep those symbols explicitly recorded until
+        # the owner stops this MD session; metadata rollback alone is not
+        # evidence that the native session has no such subscription.
+        self._ambiguous_quote_v2_subscriptions: set[str] = set()
         self._has_connected_once = False
         self._register_quote_v2_topics(self.topics)
 
@@ -1938,6 +1944,11 @@ class CtpMarketStream(BaseDataStream):
         # leg.  A subsequent (including reconnect) request advances it.
         self._subscription_epoch += 1
         epoch = self._subscription_epoch
+        # Receipts are fenced by the stream-wide callback epoch. When another
+        # instrument is added, retag the existing active topics at the same
+        # boundary so one authenticated MD session can serve several keys.
+        for metadata in self._quote_v2_subscription_metadata.values():
+            metadata["subscription_epoch"] = epoch
         instruments: list[str] = []
         for instrument, topic in records:
             metadata = dict(self._quote_v2_default_metadata)
@@ -2157,6 +2168,10 @@ class CtpMarketStream(BaseDataStream):
         with self._md_callback_lock:
             if client is not None and not self._is_current_md_callback(client, client_token):
                 return
+            if self._managed_quote_v2_subscription_failed:
+                self._managed_quote_clock_source_scope = None
+                self.state = ConnectionState.ERROR
+                return
             self.state = ConnectionState.AUTHENTICATED
             if (
                 client is None
@@ -2196,6 +2211,12 @@ class CtpMarketStream(BaseDataStream):
             # Direct calls are retained for the existing offline unit-test
             # seam.  Native callbacks always carry a client/token pair and
             # must match both identities before touching state.
+            if (
+                self._managed_quote_v2_subscription_failed
+                and client is not None
+                and self._is_current_md_callback(client, client_token)
+            ):
+                return
             native_managed_callback = (
                 client is not None
                 and self._managed_quote_v2_callback_capability is not None
@@ -2335,9 +2356,74 @@ class CtpMarketStream(BaseDataStream):
 
     def subscribe_topics(self, topics):
         with self._md_callback_lock:
+            previous = set(self._quote_v2_subscription_metadata)
             instruments = self._register_quote_v2_topics(topics)
-            if instruments and self._md_client is not None:
-                self._md_client.subscribe(instruments)
+            client = self._md_client
+            all_instruments = list(self._quote_v2_subscription_metadata)
+            additions = tuple(item for item in instruments if item not in previous)
+        if not instruments or client is None or not additions:
+            return
+        try:
+            subscribe_additional = getattr(client, "subscribe_additional", None)
+            if callable(subscribe_additional):
+                accepted = subscribe_additional(list(additions))
+                if type(accepted) is not tuple or accepted != additions:
+                    raise RuntimeError("ctp_md_subscribe_unconfirmed")
+            else:
+                # Compatibility for the existing direct/offline fake seam.
+                # Its void return cannot confirm native acceptance, so any
+                # exception still fails the managed stream closed below.
+                client.subscribe(all_instruments)
+        except Exception:
+            self._fail_closed_quote_v2_subscription(additions)
+            raise
+
+    def _fail_closed_quote_v2_subscription(self, ambiguous_symbols=()) -> None:
+        """Fence a shared managed MD session after an uncertain add request.
+
+        The symbol metadata is rolled back so it cannot masquerade as an
+        active Hub handle. The symbols remain recorded separately because a
+        native API may have accepted part of the request before reporting an
+        error. Existing handles are retained for owner-thread shutdown, and
+        no further managed quote is trusted from this session.
+        """
+
+        with self._md_callback_lock:
+            for symbol in ambiguous_symbols:
+                if type(symbol) is str and symbol:
+                    self._ambiguous_quote_v2_subscriptions.add(symbol)
+                    self._quote_v2_subscription_metadata.pop(symbol, None)
+            self._managed_quote_clock_source_scope = None
+            self._managed_quote_v2_callback_capability = None
+            self._managed_quote_v2_subscription_failed = True
+            self.state = ConnectionState.ERROR
+
+    def unsubscribe_topics(self, topics):
+        """Unsubscribe exact registered symbols without stopping the MD session."""
+
+        requested = set(self._topic_symbols_list(topics))
+        if not requested:
+            return True
+        with self._md_callback_lock:
+            current = set(self._quote_v2_subscription_metadata)
+            removals = requested & current
+            client = self._md_client
+        if client is not None and removals:
+            unsubscribe = getattr(client, "unsubscribe", None)
+            if not callable(unsubscribe):
+                raise RuntimeError("ctp_md_unsubscribe_unavailable")
+            if unsubscribe(sorted(removals)) is not True:
+                raise RuntimeError("ctp_md_unsubscribe_unconfirmed")
+        with self._md_callback_lock:
+            if self._md_client is not client:
+                raise RuntimeError("ctp_md_client_changed_during_unsubscribe")
+            for symbol in removals:
+                self._quote_v2_subscription_metadata.pop(symbol, None)
+            return True
+
+    @classmethod
+    def _topic_symbols_list(cls, topics):
+        return [symbol for topic in topics or [] for symbol in cls._topic_symbols(topic)]
 
     def _run_loop(self):
         self.connect()

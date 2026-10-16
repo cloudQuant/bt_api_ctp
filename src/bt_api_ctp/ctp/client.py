@@ -2712,6 +2712,54 @@ class MdClient:
         if api is not None:
             api.SubscribeMarketData(pending_instruments)
 
+    def subscribe_additional(self, instruments):
+        """Add exact instruments without replacing reconnect subscriptions."""
+
+        requested = list(instruments)
+        if any(type(item) is not str or not item or item != item.strip() for item in requested):
+            raise ValueError("invalid CTP market instrument")
+        with self._state_lock:
+            additions = [item for item in requested if item not in self._pending_instruments]
+            api = self._api if self._loggedin else None
+        if api is not None and additions:
+            result = api.SubscribeMarketData(additions)
+            if type(result) is int and result != 0:
+                raise RuntimeError("ctp_md_subscribe_rejected")
+        with self._state_lock:
+            for item in additions:
+                if item not in self._pending_instruments:
+                    self._pending_instruments.append(item)
+        return tuple(additions)
+
+    def unsubscribe(self, instruments):
+        """Remove exact instruments from the native subscription set.
+
+        The return value reports whether the native API accepted the request;
+        it does not claim exchange-side delivery or quote freshness.
+        """
+
+        requested = list(instruments)
+        if any(type(item) is not str or not item or item != item.strip() for item in requested):
+            raise ValueError("invalid CTP market instrument")
+        with self._state_lock:
+            removals = [item for item in requested if item in self._pending_instruments]
+            api = self._api if self._loggedin else None
+        if api is not None and removals:
+            native_unsubscribe = getattr(api, "UnSubscribeMarketData", None)
+            if not callable(native_unsubscribe):
+                return False
+            try:
+                result = native_unsubscribe(removals)
+            except Exception:
+                return False
+            if type(result) is int and result != 0:
+                return False
+        with self._state_lock:
+            self._pending_instruments = [
+                item for item in self._pending_instruments if item not in removals
+            ]
+        return True
+
     def subscribe_batched(
         self, instruments, *, batch_size=100, interval_sec=0.1, should_stop=None
     ):
