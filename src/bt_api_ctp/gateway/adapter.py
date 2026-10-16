@@ -13,10 +13,10 @@ from bt_api_base.gateway.adapters.base import BaseGatewayAdapter
 from bt_api_base.gateway.models import GatewayTick
 from bt_api_base.gateway.protocol import CHANNEL_EVENT, CHANNEL_MARKET
 
-from bt_api_ctp.containers.ctp._normalization import ctp_code
 from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
+from bt_api_ctp.containers.ctp.position_dimensions import ctp_position_dimension_projection
 from bt_api_ctp.ctp.client import _check_native_module
 from bt_api_ctp.ctp_env_selector import verify_official_simnow_profile
 from bt_api_ctp.feeds.live_ctp_feed import (
@@ -968,64 +968,16 @@ def _ctp_position_dimension_projection(
     normalized_offset: object,
     order_offset: bool,
 ) -> dict[str, str]:
-    """Bind close ownership to the raw CTP direction and offset codes.
+    """Compatibility bridge to the provider-owned CTP projection."""
 
-    CTP order/trade data does not carry a separate position-side field.  The
-    only safe projection is therefore the venue's documented side/offset pair;
-    unknown codes and forced-close variants remain explicitly unresolved.
-    """
-
-    if not isinstance(raw, dict):
-        return {}
-
-    def code(key: str) -> str:
-        value = raw.get(key)
-        if value is None:
-            return ""
-        text = str(value).strip().strip("\x00")
-        return ctp_code(text) if text else ""
-
-    direction_code = code(direction_key)
-    offset_text = code(offset_key)
-    offset_code = offset_text[:1] if order_offset else offset_text
-    direction = {"0": "buy", "1": "sell"}.get(direction_code)
-    normalized_direction = str(normalized_side or "").strip().lower()
-    if direction is None or normalized_direction != direction:
-        return {
-            "position_dimensions_source": "ctp_side_offset_unresolved_v1",
-            "ctp_direction_code": direction_code if direction_code in {"0", "1"} else "UNKNOWN",
-            "ctp_offset_code": offset_code if offset_code in {"0", "1", "2", "3", "4", "5", "6"} else "UNKNOWN",
-            "position_side": "UNRESOLVED",
-            "position_bucket": "UNRESOLVED",
-        }
-
-    if offset_code == "0":
-        # Opening fills acquire their bucket from the position ledger's
-        # trading-day snapshot, not from the order's open offset.
-        return {}
-
-    close_projection = {
-        "1": ("close", "ALL"),
-        "3": ("close_today", "TODAY"),
-        "4": ("close_yesterday", "YESTERDAY"),
-    }.get(offset_code)
-    expected_offset = None if close_projection is None else close_projection[0]
-    if close_projection is None or str(normalized_offset or "").strip().lower() != expected_offset:
-        return {
-            "position_dimensions_source": "ctp_side_offset_unresolved_v1",
-            "ctp_direction_code": direction_code,
-            "ctp_offset_code": offset_code if offset_code in {"0", "1", "2", "3", "4", "5", "6"} else "UNKNOWN",
-            "position_side": "UNRESOLVED",
-            "position_bucket": "UNRESOLVED",
-        }
-
-    return {
-        "position_dimensions_source": "ctp_side_offset_v1",
-        "ctp_direction_code": direction_code,
-        "ctp_offset_code": offset_code,
-        "position_side": "LONG" if direction == "sell" else "SHORT",
-        "position_bucket": close_projection[1],
-    }
+    return ctp_position_dimension_projection(
+        raw,
+        direction_key=direction_key,
+        offset_key=offset_key,
+        normalized_side=normalized_side,
+        normalized_offset=normalized_offset,
+        order_offset=order_offset,
+    )
 
 
 def _status(value: Any) -> str:

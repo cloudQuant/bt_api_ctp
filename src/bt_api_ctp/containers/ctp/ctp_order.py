@@ -9,6 +9,7 @@ from bt_api_base.functions.utils import (
 )
 
 from ._normalization import ctp_dict_code, ctp_int
+from .position_dimensions import ctp_position_dimension_projection
 
 CTP_ORDER_STATUS_MAP = {
     "0": OrderStatus.COMPLETED,
@@ -159,3 +160,18 @@ class CtpOrderData(OrderData):
     def get_account_id(self) -> str:
         self._ensure_init()
         return self.account_id or ""
+
+    def get_all_data(self) -> dict[str, Any]:
+        self._ensure_init()
+        data = super().get_all_data()
+        data.update(
+            ctp_position_dimension_projection(
+                self.order_info,
+                direction_key="Direction",
+                offset_key="CombOffsetFlag",
+                normalized_side=self.direction,
+                normalized_offset=self.offset,
+                order_offset=True,
+            )
+        )
+        return data

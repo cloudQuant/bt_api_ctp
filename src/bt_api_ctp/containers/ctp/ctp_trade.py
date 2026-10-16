@@ -9,6 +9,7 @@ from bt_api_base.functions.utils import (
 )
 
 from ._normalization import ctp_dict_code, ctp_int
+from .position_dimensions import ctp_position_dimension_projection
 
 
 class CtpTradeData(TradeData):
@@ -143,6 +144,14 @@ class CtpTradeData(TradeData):
                 "trade_fee": self.trade_fee,
                 "trade_fee_verified": self.trade_fee_verified,
                 "fee_unresolved": not self.trade_fee_verified,
+                **ctp_position_dimension_projection(
+                    self.trade_info,
+                    direction_key="Direction",
+                    offset_key="OffsetFlag",
+                    normalized_side=self.direction,
+                    normalized_offset=self.offset,
+                    order_offset=False,
+                ),
             }
         return self._all_data
 
