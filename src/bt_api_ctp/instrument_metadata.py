@@ -36,7 +36,7 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     _is_current_ctp_quote_clock_source_scope,
 )
 from bt_api_ctp.md_identity import MdIdentityObservation
-from bt_api_ctp.query import QueryResult, _QuerySource, _query_records_digest
+from bt_api_ctp.query import QueryResult, _query_records_digest, _QuerySource
 
 _SCHEMA_ID = "ctp.instrument_metadata"
 _SCHEMA_VERSION = 1
@@ -207,7 +207,11 @@ class CtpInstrumentMetadataReader:
             source = self._validate_query_result(
                 trader,
                 result,
-                current_query_scope,
+                # The query starts after the initial scope is captured.  The
+                # post-query scope proves the same authenticated session is
+                # still current, but its capture time is necessarily too late
+                # to serve as the query's start-time lower bound.
+                initial_query_scope,
                 instrument_id,
                 exchange_id,
                 timeout_value,

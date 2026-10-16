@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 import bt_api_ctp.ctp.client as ctp_client
+import bt_api_ctp.instrument_metadata as instrument_metadata
 from bt_api_ctp.ctp.client import MdClient, TraderClient, _TraderSpi
 from bt_api_ctp.feeds.live_ctp_feed import CtpMarketStream, CtpRequestDataFuture
 from bt_api_ctp.instrument_metadata import CtpInstrumentMetadataError, CtpInstrumentMetadataReader
-
 
 _BROKER = "metadata-fixture-broker"
 _INVESTOR = "metadata-fixture-investor"
@@ -41,9 +42,11 @@ class _FakeTraderApi:
         self.trader = trader
         self.returned_instrument = returned_instrument
         self.query_fields: list[tuple[str, str, str]] = []
+        self.request_ids: list[int] = []
 
     def ReqQryInstrument(self, field, request_id: int) -> int:
         self.query_fields.append((field.InstrumentID, field.ExchangeID, field.ProductID))
+        self.request_ids.append(request_id)
         self.trader._handle_query_callback(
             "instruments",
             SimpleNamespace(
@@ -174,6 +177,67 @@ def test_reader_issues_exact_native_query_and_binds_both_current_sessions(monkey
     assert fact.query_elapsed_seconds >= 0
     assert len(fact.source_records_sha256) == 64
     assert fact.to_dict()["schema_id"] == "ctp.instrument_metadata"
+
+
+def test_reader_validates_query_start_against_pre_query_scope(monkeypatch):
+    reader, api, _market = _reader(monkeypatch)
+    trader = reader.request_feed.trader_client
+    original_scope_for_client = instrument_metadata._scope_for_client
+    scopes = []
+
+    def delayed_post_query_scope(client):
+        scope = original_scope_for_client(client)
+        if scopes:
+            # Model a delayed post-query session readback.  It is still the
+            # same sealed session, but its capture time is later than the
+            # query's authentic start time.
+            scope = replace(scope, captured_monotonic=scope.captured_monotonic + 1.0)
+        scopes.append(scope)
+        return scope
+
+    monkeypatch.setattr(instrument_metadata, "_scope_for_client", delayed_post_query_scope)
+
+    fact = reader.read(
+        _INSTRUMENT,
+        _EXCHANGE,
+        account_session_generation="account-generation-7",
+        timeout=2.0,
+    )
+
+    assert len(scopes) == 2
+    result = trader.get_query_result(api.request_ids[0])
+    assert result is not None
+    assert result.query_source is not None
+    assert result.query_source.started_monotonic >= scopes[0].captured_monotonic
+    assert result.query_source.started_monotonic < scopes[1].captured_monotonic
+    assert fact.source_connection_generation == scopes[1].connection_generation
+
+
+def test_reader_rejects_trader_session_change_after_query(monkeypatch):
+    reader, api, _market = _reader(monkeypatch)
+    original_scope_for_client = instrument_metadata._scope_for_client
+    scopes = []
+
+    def changed_post_query_scope(client):
+        scope = original_scope_for_client(client)
+        if scopes:
+            scope = replace(scope, connection_generation=scope.connection_generation + 1)
+        scopes.append(scope)
+        return scope
+
+    monkeypatch.setattr(instrument_metadata, "_scope_for_client", changed_post_query_scope)
+
+    with pytest.raises(CtpInstrumentMetadataError) as caught:
+        reader.read(
+            _INSTRUMENT,
+            _EXCHANGE,
+            account_session_generation="account-generation-7",
+            timeout=2.0,
+        )
+
+    assert caught.value.code == "TRADER_SESSION_CHANGED"
+    assert api.query_fields == [(_INSTRUMENT, _EXCHANGE, "")]
+    assert len(scopes) == 2
 
 
 def test_reader_rejects_wrong_native_returned_instrument(monkeypatch):
