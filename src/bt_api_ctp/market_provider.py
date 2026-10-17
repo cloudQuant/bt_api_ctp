@@ -434,26 +434,29 @@ class CtpQuoteV2MarketProvider:
             native_client = getattr(stream, "_md_client", None)
             if native_client is None:
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_AUTH_FAILED")
-        except CtpQuoteV2MarketProviderError:
-            native_client = native_client or getattr(stream, "_md_client", None)
-            stopped, native_stop_confirmed = self._stop_stream(
-                stream, native_client, native_stop_confirmed
-            )
+        except BaseException as start_error:
+            if native_client is None:
+                native_client = getattr(stream, "_md_client", None)
+            try:
+                stopped, native_stop_confirmed = self._stop_stream(
+                    stream, native_client, native_stop_confirmed
+                )
+            except BaseException:
+                # Startup may have crossed the native worker boundary before
+                # an interrupt.  Cleanup can itself be interrupted; keep the
+                # exact stream/client in custody and preserve the original
+                # startup exception for the caller.
+                stopped = False
+                native_stop_confirmed = False
             if not stopped:
                 self._pending_start_cleanup.append(
                     _PendingStreamCleanup(stream, native_client, native_stop_confirmed)
                 )
+            if isinstance(start_error, CtpQuoteV2MarketProviderError):
+                raise
+            if isinstance(start_error, Exception):
+                raise CtpQuoteV2MarketProviderError("CTP_MARKET_START_FAILED") from None
             raise
-        except Exception:
-            native_client = native_client or getattr(stream, "_md_client", None)
-            stopped, native_stop_confirmed = self._stop_stream(
-                stream, native_client, native_stop_confirmed
-            )
-            if not stopped:
-                self._pending_start_cleanup.append(
-                    _PendingStreamCleanup(stream, native_client, native_stop_confirmed)
-                )
-            raise CtpQuoteV2MarketProviderError("CTP_MARKET_START_FAILED") from None
 
         self._stream = stream
         self._fanout = fanout

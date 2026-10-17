@@ -831,6 +831,104 @@ def test_ctp_market_provider_close_retries_failed_start_cleanup(
         _SyntheticMdClient.stop_receipts_on_create = []
 
 
+@pytest.mark.parametrize(
+    ("start_failure_type", "cleanup_failure_type"),
+    (
+        (KeyboardInterrupt, SystemExit),
+        (SystemExit, KeyboardInterrupt),
+    ),
+)
+def test_ctp_market_provider_retains_stream_when_start_and_cleanup_are_interrupted(
+    monkeypatch: pytest.MonkeyPatch,
+    start_failure_type: type[BaseException],
+    cleanup_failure_type: type[BaseException],
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+    _SyntheticMdClient.stop_receipts_on_create = [
+        CtpNativeStopReceipt(
+            connection_generation=1,
+            join_required=False,
+            join_completed=True,
+            native_released=False,
+            thread_alive=False,
+            timed_out=False,
+        )
+    ]
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    start_failure = start_failure_type("native startup interrupted")
+    cleanup_failure = cleanup_failure_type("native cleanup interrupted")
+    start_attempts: list[CtpMarketStream] = []
+    cleanup_calls = 0
+    original_stop = CtpMarketStream.stop
+
+    def factory(
+        key: MarketSubscriptionKey, queue: BoundedCtpQuoteV2Queue
+    ) -> CtpMarketStream:
+        stream = _stream_factory(key, queue)
+        start_attempts.append(stream)
+        return stream
+
+    def start_then_interrupt(stream: CtpMarketStream) -> None:
+        # Run the real CTP connect binding and login callback first, then
+        # interrupt the caller after a native client has been installed.
+        stream.connect()
+        raise start_failure
+
+    def cleanup_interrupts_once(stream: CtpMarketStream) -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise cleanup_failure
+        original_stop(stream)
+
+    monkeypatch.setattr(CtpMarketStream, "start", start_then_interrupt)
+    monkeypatch.setattr(CtpMarketStream, "stop", cleanup_interrupts_once)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+    )
+
+    try:
+        with pytest.raises(start_failure_type) as error:
+            provider.subscribe(_key(), generation="hub-generation-interrupted")
+
+        assert error.value is start_failure
+        (stream,) = start_attempts
+        (client,) = _SyntheticMdClient.instances
+        (pending,) = provider._pending_start_cleanup
+        assert pending.stream is stream
+        assert pending.native_client is client
+        assert pending.native_stop_confirmed is False
+        assert provider.diagnostics["pending_start_cleanup"] == 1
+
+        # A later owner-thread close retries the exact retained stream.  The
+        # first native receipt remains uncertain; only the second confirms it.
+        assert provider.close() is False
+        (pending,) = provider._pending_start_cleanup
+        assert pending.stream is stream
+        assert pending.native_client is client
+        assert client.stop_wait_calls == 1
+
+        client.stop_receipts.append(
+            CtpNativeStopReceipt(
+                connection_generation=1,
+                join_required=False,
+                join_completed=True,
+                native_released=True,
+                thread_alive=False,
+                timed_out=False,
+            )
+        )
+        assert provider.close() is True
+        assert provider.diagnostics["pending_start_cleanup"] == 0
+        assert client.stop_wait_calls == 2
+    finally:
+        _SyntheticMdClient.authenticate = True
+        _SyntheticMdClient.stop_receipts_on_create = []
+
+
 def test_ctp_native_callback_queue_is_bounded_and_nonblocking() -> None:
     callback_queue = BoundedCtpQuoteV2Queue(capacity=2)
     callback_queue.put("first", block=True, timeout=0)
