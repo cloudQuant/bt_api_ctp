@@ -10,6 +10,7 @@ from bt_api_ctp.account_provider import (
     CtpReadOnlyAccountSessionProvider,
 )
 from bt_api_ctp.ctp.client import CtpNativeStopReceipt
+from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 from bt_api_ctp.query import (
     QueryResult,
     _attach_query_source,
@@ -271,6 +272,71 @@ def test_ctp_account_provider_keeps_interrupted_startup_uncertain_until_receipt(
     assert provider.native_owner_created is True
     assert provider.native_connection_generation == 7
     assert provider.last_native_stop_receipt is complete_receipt
+
+
+def test_exact_ctp_feed_constructor_failure_confirms_native_free_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor_calls = []
+    start_calls = []
+
+    class ConstructorFailure:
+        def __init__(self, *_args, **_kwargs) -> None:
+            constructor_calls.append(True)
+            raise RuntimeError("synthetic TraderClient constructor failure")
+
+        def start(self, *_args, **_kwargs) -> None:
+            start_calls.append(True)
+
+    monkeypatch.setattr(
+        "bt_api_ctp.feeds.live_ctp_feed.ctp_client.TraderClient",
+        ConstructorFailure,
+    )
+    feed = CtpRequestDataFuture(
+        broker_id="broker-test",
+        user_id="investor-test",
+        password="synthetic-only",
+        td_front="tcp://test-td",
+        md_front="tcp://test-md",
+        auto_settlement_confirm=False,
+    )
+    provider = _provider(feed)
+
+    with pytest.raises(CtpAccountSessionProviderError, match="SESSION_NOT_CONNECTED"):
+        provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+
+    # The production feed assigns _trader only after TraderClient construction,
+    # and calls start only after assignment. Its native API factory is in start.
+    assert constructor_calls == [True]
+    assert start_calls == []
+    assert feed._trader is None
+    assert provider.native_owner_created is False
+    assert provider.native_connection_generation is None
+    assert provider.close() is True
+    assert provider.native_owner_created is False
+    assert provider.native_connection_generation is None
+
+
+def test_custom_feed_without_trader_remains_unknown_after_connect_failure() -> None:
+    class CustomFeed:
+        _request_feed = None
+        _trader = None
+
+        def connect(self) -> None:
+            raise RuntimeError("synthetic custom feed failure")
+
+    feed = CustomFeed()
+    provider = _provider(feed)  # type: ignore[arg-type]
+
+    with pytest.raises(CtpAccountSessionProviderError, match="SESSION_NOT_CONNECTED"):
+        provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+
+    with pytest.raises(CtpAccountSessionProviderError, match="NATIVE_CUSTODY_UNCERTAIN"):
+        _ = provider.native_owner_created
+    assert provider.close() is False
+    assert provider._request_feed is feed
+    with pytest.raises(CtpAccountSessionProviderError, match="NATIVE_CUSTODY_UNCERTAIN"):
+        _ = provider.native_owner_created
 
 
 def test_ctp_account_provider_rejects_mutated_query_rows_and_scope_change() -> None:

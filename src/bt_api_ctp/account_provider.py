@@ -8,6 +8,7 @@ cancellation, settlement, or execution methods.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import uuid
@@ -50,6 +51,22 @@ _ACTIVE_ORDER_STATUS = frozenset({"1", "3", "b", "c"})
 _TERMINAL_ORDER_STATUS = frozenset({"0", "2", "4", "5"})
 _UTC = timezone.utc
 _CHINA = timezone(timedelta(hours=8))
+
+
+def _is_exact_prestart_ctp_request_feed(feed: object) -> bool:
+    """Whether the exact loaded CTP feed failed before retaining its trader."""
+
+    try:
+        module = sys.modules.get("bt_api_ctp.feeds.live_ctp_feed")
+        feed_type = vars(module).get("CtpRequestDataFuture") if module is not None else None
+        return (
+            feed_type is not None
+            and type(feed) is feed_type
+            and object.__getattribute__(feed, "_trader") is None
+        )
+    except BaseException:
+        # Failure to establish the fixed feed's pre-start state is uncertain.
+        return False
 
 
 class CtpAccountSessionProviderError(RuntimeError):
@@ -237,13 +254,19 @@ class CtpReadOnlyAccountSessionProvider:
             self._native_owner_created = True
             self._native_connection_generation = scope.connection_generation
         except CtpAccountSessionProviderError:
-            self._native_owner_created = None
+            self._native_owner_created = (
+                False if _is_exact_prestart_ctp_request_feed(feed) else None
+            )
             raise
         except Exception:
-            self._native_owner_created = None
+            self._native_owner_created = (
+                False if _is_exact_prestart_ctp_request_feed(feed) else None
+            )
             raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED") from None
         except BaseException:
-            self._native_owner_created = None
+            self._native_owner_created = (
+                False if _is_exact_prestart_ctp_request_feed(feed) else None
+            )
             raise
 
     def read_account(self, *, generation: str, timeout: float) -> AccountObservation:
@@ -327,17 +350,20 @@ class CtpReadOnlyAccountSessionProvider:
         if self._trader is not None and feed_trader is not self._trader:
             return False
         if trader is None:
-            if self._native_owner_created is None:
-                # The trusted feed never exposed a TraderClient/native owner,
-                # so this failed before CTP native startup.
-                self._native_owner_created = False
-                self._native_connection_generation = None
-            elif self._native_owner_created is True:
+            if type(self._native_owner_created) is not bool:
+                # Unknown startup custody is not a no-native close proof.
+                return False
+            if self._native_owner_created is True:
                 # A previously confirmed stop is idempotent. A missing
                 # receipt for a claimed owner is not enough to release it.
                 if self.last_native_stop_receipt is None:
                     return False
                 return True
+            if (
+                self._native_connection_generation is not None
+                or self._last_native_stop_receipt is not None
+            ):
+                return False
             self._request_feed = None
             self._trader = None
             self._session_scope = None
