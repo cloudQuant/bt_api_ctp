@@ -16,14 +16,10 @@ def test_ctp_gateway_adapter_source_module_is_removed() -> None:
     assert adapter_spec is None
 
 
-def test_ctp_gateway_adapter_is_not_in_base_lazy_exports() -> None:
-    from bt_api_base.gateway import adapters
-
-    assert "CtpGatewayAdapter" not in adapters._ADAPTER_IMPORTS
-    assert "CtpGatewayAdapter" in adapters._RETIRED_ADAPTERS
+def test_retired_base_gateway_runtime_is_unavailable() -> None:
     try:
-        getattr(adapters, "CtpGatewayAdapter")
-    except AttributeError as exc:
-        assert str(exc) == "CtpGatewayAdapter"
-    else:
-        raise AssertionError("retired CTP adapter was resolved")
+        runtime_spec = find_spec("bt_api_base.gateway.runtime")
+    except ModuleNotFoundError:
+        runtime_spec = None
+
+    assert runtime_spec is None
