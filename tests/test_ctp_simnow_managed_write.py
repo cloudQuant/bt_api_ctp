@@ -48,6 +48,7 @@ def _configured_simnow_client(
     md_front=None,
     bind_constructor_pair=True,
     install_binding=True,
+    connection_generation=7,
 ):
     pytest.importorskip("bt_api_py._ctp_credential_binding")
     pytest.importorskip("bt_api_py._ctp_execution_authorization")
@@ -90,9 +91,9 @@ def _configured_simnow_client(
     client._connected = True
     client._authentication_state = "authenticated"
     client._login_state = "logging_in"
-    client._connection_generation = 7
+    client._connection_generation = connection_generation
     client._login_request_id = 1
-    client._login_connection_generation = 7
+    client._login_connection_generation = connection_generation
     _TraderSpi(client).OnRspUserLogin(
         SimpleNamespace(
             BrokerID="3070",
@@ -110,7 +111,7 @@ def _configured_simnow_client(
     client._settlement_readback_verified = True
     client._settlement_account_fingerprint = client._account_fingerprint
     client._settlement_trading_day = client._trading_day
-    client._settlement_connection_generation = 7
+    client._settlement_connection_generation = connection_generation
     client._ready = True
     client._has_current_settlement_readback_locked = lambda: True
 

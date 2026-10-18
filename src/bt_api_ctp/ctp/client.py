@@ -5396,7 +5396,12 @@ class TraderClient:
         request_id: int,
         *,
         method_name: str,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
     ) -> Any:
+        managed_cancel_tuple_supplied = (
+            runtime_action_id is not None or managed_cancel_intent_id is not None
+        )
         with self._query_state_lock:
             state = self._callback_ingress
             current = self._managed_native_call_leases.get(
@@ -5446,6 +5451,10 @@ class TraderClient:
                     binding,
                     state.owner_intent_id,
                 )
+                if envelope["operation"] == "SUBMIT" and managed_cancel_tuple_supplied:
+                    raise CtpExecutionGateError(
+                        "ctp_managed_native_cancel_identity_on_submit"
+                    )
                 if (
                     envelope["operation"]
                     != ("SUBMIT" if method_name == "ReqOrderInsert" else "CANCEL")
@@ -5506,41 +5515,88 @@ class TraderClient:
                         or payload.get("ActionFlag") != "0"
                     ):
                         raise CtpExecutionGateError("ctp_managed_native_cancel_field_mismatch")
+                    if managed_cancel_tuple_supplied:
+                        _validate_managed_cancel_identity(
+                            runtime_order_id=envelope["runtime_order_id"],
+                            managed_intent_id=envelope["reservation_managed_intent_id"],
+                            runtime_action_id=runtime_action_id,
+                            managed_cancel_intent_id=managed_cancel_intent_id,
+                        )
+                        if managed_cancel_intent_id != envelope["managed_action_id"]:
+                            raise CtpExecutionGateError(
+                                "ctp_managed_native_cancel_identity_mismatch"
+                            )
                 if self._is_simnow_write_restricted_locked():
-                    # V2 CANCEL does not carry a separate runtime action ID.
-                    # Never infer it from the managed intent or Store action ID.
-                    if envelope["operation"] != "SUBMIT":
-                        raise CtpExecutionGateError("ctp_simnow_runtime_action_id_required")
                     self._require_native_field_identity_locked(
                         detached, require_user_id=True
                     )
-                    insert_identity = _order_insert_identity(detached)
-                    if (
-                        insert_identity.order_ref != envelope["order_ref"]
-                        or insert_identity.field_request_id != request_id
-                    ):
-                        raise CtpExecutionGateError("ctp_managed_native_insert_field_mismatch")
-                    authorization = self._require_execution_write_locked(
-                        self._execution_gate_capability,
-                        insert_identity.instrument_id,
-                        insert_identity.exchange_id,
-                        operation="insert",
-                        runtime_order_id=envelope["runtime_order_id"],
-                        managed_intent_id=envelope["reservation_managed_intent_id"],
-                    )
-                    self._consume_runtime_simnow_write_authorization_locked(
-                        authorization,
-                        capability=self._execution_gate_capability,
-                        operation="insert",
-                        native_field=detached,
-                        request_id=request_id,
-                        instrument_id=insert_identity.instrument_id,
-                        exchange_id=insert_identity.exchange_id,
-                        runtime_order_id=envelope["runtime_order_id"],
-                        managed_intent_id=envelope["reservation_managed_intent_id"],
-                        runtime_action_id=None,
-                        managed_cancel_intent_id=None,
-                    )
+                    if envelope["operation"] == "SUBMIT":
+                        insert_identity = _order_insert_identity(detached)
+                        if (
+                            insert_identity.order_ref != envelope["order_ref"]
+                            or insert_identity.field_request_id != request_id
+                        ):
+                            raise CtpExecutionGateError(
+                                "ctp_managed_native_insert_field_mismatch"
+                            )
+                        authorization = self._require_execution_write_locked(
+                            self._execution_gate_capability,
+                            insert_identity.instrument_id,
+                            insert_identity.exchange_id,
+                            operation="insert",
+                            runtime_order_id=envelope["runtime_order_id"],
+                            managed_intent_id=envelope["reservation_managed_intent_id"],
+                        )
+                        self._consume_runtime_simnow_write_authorization_locked(
+                            authorization,
+                            capability=self._execution_gate_capability,
+                            operation="insert",
+                            native_field=detached,
+                            request_id=request_id,
+                            instrument_id=insert_identity.instrument_id,
+                            exchange_id=insert_identity.exchange_id,
+                            runtime_order_id=envelope["runtime_order_id"],
+                            managed_intent_id=envelope["reservation_managed_intent_id"],
+                            runtime_action_id=None,
+                            managed_cancel_intent_id=None,
+                        )
+                    else:
+                        if not managed_cancel_tuple_supplied:
+                            # Never infer runtime cancellation authority from
+                            # the managed intent or Store action identifier.
+                            raise CtpExecutionGateError(
+                                "ctp_simnow_runtime_action_id_required"
+                            )
+                        cancel_identity = _order_action_identity(detached)
+                        instrument_id = cancel_identity.instrument_id
+                        exchange_id = cancel_identity.exchange_id
+                        if not instrument_id or not exchange_id:
+                            raise CtpExecutionGateError(
+                                "ctp_managed_native_cancel_field_mismatch"
+                            )
+                        authorization = self._require_execution_write_locked(
+                            self._execution_gate_capability,
+                            instrument_id,
+                            exchange_id,
+                            operation="cancel",
+                            runtime_order_id=envelope["runtime_order_id"],
+                            managed_intent_id=envelope["reservation_managed_intent_id"],
+                            runtime_action_id=runtime_action_id,
+                            managed_cancel_intent_id=managed_cancel_intent_id,
+                        )
+                        self._consume_runtime_simnow_write_authorization_locked(
+                            authorization,
+                            capability=self._execution_gate_capability,
+                            operation="cancel",
+                            native_field=detached,
+                            request_id=request_id,
+                            instrument_id=instrument_id,
+                            exchange_id=exchange_id,
+                            runtime_order_id=envelope["runtime_order_id"],
+                            managed_intent_id=envelope["reservation_managed_intent_id"],
+                            runtime_action_id=runtime_action_id,
+                            managed_cancel_intent_id=managed_cancel_intent_id,
+                        )
                 native_method = getattr(lease._api, method_name, None)
                 if not callable(native_method):
                     raise CtpExecutionGateError("ctp_managed_native_call_method_unavailable")
@@ -5604,14 +5660,24 @@ class TraderClient:
         lease: CtpManagedNativeCallLeaseV2,
         field: Any,
         request_id: int,
+        *,
+        runtime_action_id: str | None = None,
+        managed_cancel_intent_id: str | None = None,
     ) -> Any:
-        """Invoke exactly one pinned ReqOrderAction without holding SDK locks."""
+        """Invoke one pinned ReqOrderAction with an explicit cancel identity tuple.
+
+        The tuple is optional for backward-compatible non-SimNow V2 calls.
+        Restricted SimNow writes require it and never infer it from the Store
+        managed action identifier.
+        """
 
         return self._submit_with_managed_native_call_lease(
             lease,
             field,
             request_id,
             method_name="ReqOrderAction",
+            runtime_action_id=runtime_action_id,
+            managed_cancel_intent_id=managed_cancel_intent_id,
         )
 
     def _dispatch_callback_ingress(
