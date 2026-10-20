@@ -402,6 +402,151 @@ def test_store_binding_sends_detached_insert_and_consumes_one_lease(monkeypatch)
         client.stop()
 
 
+def test_managed_native_lease_rejects_live_query_before_store_verifier(monkeypatch):
+    client, _api, _sink, owner = _new_active_client(monkeypatch)
+    accumulator = None
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        accumulator = client._new_query_accumulator("positions")
+        verifier_calls = []
+        client._callback_ingress.command_binding_verifier = (
+            lambda *_args: verifier_calls.append(True)
+        )
+
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_call_owner_unavailable",
+        ):
+            client.acquire_managed_native_call_lease(owner, binding)
+
+        assert verifier_calls == []
+        assert not accumulator.sealed
+    finally:
+        if accumulator is not None:
+            with client._query_state_lock:
+                accumulator.sealed = True
+                accumulator.event.set()
+        client.stop()
+
+
+def test_callback_between_lease_acquire_and_submit_fences_native_insert(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        state = client._callback_ingress
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        acquired_sequence = lease._source_sequence
+        api.spi.OnHeartBeatWarning(1)
+        assert state.sequence == acquired_sequence + 1
+
+        field = _field(CThostFtdcInputOrderField, payload)
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_call_source_sequence_changed",
+        ):
+            client.submit_order_insert_with_lease(lease, field, 41)
+
+        assert not any(call[0] == "ReqOrderInsert" for call in api.calls)
+        assert state.command_lease is None
+        assert state.native_call_refs == 0
+        assert client._native_request_inflight_refs == 0
+        assert not client._managed_native_call_leases
+        assert not state.poisoned
+    finally:
+        client.stop()
+
+
+def test_new_query_is_rejected_while_managed_lease_is_active_and_sealed(monkeypatch):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+
+        result = client.query_account_result(timeout=0)
+
+        assert result.error_message == "query_submit_exception:CtpExecutionGateError"
+        accumulator = client._query_history[result.request_id]
+        assert accumulator.sealed
+        assert accumulator.event.is_set()
+        assert not any(call[0] == "ReqQryTradingAccount" for call in api.calls)
+        assert client._callback_ingress.command_lease is lease
+        assert client._callback_ingress.native_call_refs == 1
+
+        field = _field(CThostFtdcInputOrderField, payload)
+        assert client.submit_order_insert_with_lease(lease, field, 41) == 0
+        assert any(call[0] == "ReqOrderInsert" for call in api.calls)
+    finally:
+        client.stop()
+
+
+def test_synchronous_order_and_trade_callbacks_remain_allowed_during_insert(monkeypatch):
+    client, api, sink, owner = _new_active_client(monkeypatch)
+    try:
+        payload = _request_payload()
+        binding = _binding(owner, client._callback_ingress.active_session, payload)
+        lease = client.acquire_managed_native_call_lease(owner, binding)
+        state = client._callback_ingress
+        callback_sequence = state.sequence
+        delivered = []
+        client.on_order = lambda value: delivered.append(("order", value))
+        client.on_trade = lambda value: delivered.append(("trade", value))
+
+        order = _typed(
+            "Order",
+            BrokerID="9999",
+            InvestorID="investor-1",
+            UserID="investor-1",
+            InstrumentID="rb2610",
+            ExchangeID="SHFE",
+            OrderRef="000000000017",
+            RequestID=41,
+            TradingDay="20260926",
+        )
+        trade = _typed(
+            "Trade",
+            InstrumentID="rb2610",
+            ExchangeID="SHFE",
+            BrokerID="9999",
+            InvestorID="investor-1",
+            UserID="investor-1",
+            TradeID="trade-1",
+            OrderRef="000000000017",
+            TradeDate="20260926",
+            TradingDay="20260926",
+            SequenceNo=1,
+            Price=3512.5,
+            Volume=1,
+        )
+
+        def req_order_insert(_field, request_id):
+            assert request_id == 41
+            assert state.command_lease is None
+            assert state.native_call_refs == 1
+            assert client._native_request_inflight_refs == 1
+            api.spi.OnRtnOrder(order)
+            api.spi.OnRtnTrade(trade)
+            return 0
+
+        api.ReqOrderInsert = req_order_insert
+        field = _field(CThostFtdcInputOrderField, payload)
+        assert client.submit_order_insert_with_lease(lease, field, 41) == 0
+
+        assert delivered == [("order", order), ("trade", trade)]
+        assert [record.callback_name for record in sink.records[-2:]] == [
+            "OnRtnOrder",
+            "OnRtnTrade",
+        ]
+        assert state.sequence == callback_sequence + 2
+        assert not state.poisoned
+        assert state.native_call_refs == 0
+        assert client._native_request_inflight_refs == 0
+    finally:
+        client.stop()
+
+
 def test_store_command_id_cannot_acquire_a_second_lease_after_insert(monkeypatch):
     client, api, _sink, owner = _new_active_client(monkeypatch)
     try:

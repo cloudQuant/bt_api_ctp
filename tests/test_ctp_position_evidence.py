@@ -430,6 +430,21 @@ def test_current_session_scope_mismatch_is_rejected(session_change, code):
         build(session=session)
 
 
+def test_query_source_tags_mismatch_is_rejected():
+    result = positions_result((position_row(),))
+    session = replace(
+        TEST_CLIENT.get_query_session_scope(),
+        source_tags=("source", "client", "api", "spi", 1, 1),
+    )
+
+    assert result.query_source.source_tags is None
+    assert session.source_tags is not None
+    with pytest.raises(CtpPositionEvidenceError) as raised:
+        build(result, session=session)
+
+    assert raised.value.code == "position_query_source_binding_mismatch"
+
+
 @pytest.mark.parametrize(
     "change,code",
     [

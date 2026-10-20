@@ -111,6 +111,7 @@ class _QuerySource:
     records_sha256: str | None
     trusted_expires_at_utc: datetime | None
     trusted_expires_monotonic: float | None
+    source_tags: tuple[str, str, str, str, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ class _QuerySessionScope:
     read_only_ready: bool
     captured_at_utc: datetime
     captured_monotonic: float
+    source_tags: tuple[str, str, str, str, int, int] | None = None
 
 
 def _new_query_source(
@@ -149,6 +151,7 @@ def _new_query_source(
     request_intent_parameters: tuple[tuple[str, float], ...] = (),
     request_parameters: tuple[tuple[str, float], ...] = (),
     explicit_request_filters: tuple[str, ...] = (),
+    source_tags: tuple[str, str, str, str, int, int] | None = None,
 ) -> _QuerySource:
     trusted_expires_at_utc = None
     trusted_expires_monotonic = None
@@ -181,6 +184,7 @@ def _new_query_source(
         records_sha256=records_sha256,
         trusted_expires_at_utc=trusted_expires_at_utc,
         trusted_expires_monotonic=trusted_expires_monotonic,
+        source_tags=source_tags,
     )
 
 
@@ -202,6 +206,7 @@ def _new_query_session_scope(
     read_only_ready: bool,
     captured_at_utc: datetime,
     captured_monotonic: float,
+    source_tags: tuple[str, str, str, str, int, int] | None = None,
 ) -> _QuerySessionScope:
     return _QuerySessionScope(
         _seal=_QUERY_SCOPE_SEAL,
@@ -214,6 +219,7 @@ def _new_query_session_scope(
         read_only_ready=read_only_ready,
         captured_at_utc=captured_at_utc,
         captured_monotonic=captured_monotonic,
+        source_tags=source_tags,
     )
 
 

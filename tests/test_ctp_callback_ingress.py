@@ -320,6 +320,37 @@ def test_flattened_fields_preserve_missing_zero_and_present_none():
     assert "arg:0.FrontID:missing" in missing_required.missing_field_names
 
 
+def test_position_callback_seals_null_pointer_without_retaining_nonnull_pointer():
+    null_row = _build(
+        "OnRspQryInvestorPosition",
+        (None, _rsp_info(), 7, True),
+        sequence=8,
+    )
+    opaque_empty_row = _build(
+        "OnRspQryInvestorPosition",
+        (SimpleNamespace(), _rsp_info(), 7, True),
+        sequence=8,
+    )
+
+    null_argument = null_row.to_payload()["named_args"][0]
+    opaque_argument = opaque_empty_row.to_payload()["named_args"][0]
+    assert null_row.capture_complete and opaque_empty_row.capture_complete
+    assert null_argument["present"] is True
+    assert null_argument["scalar_captured"] is False
+    assert null_argument["value"] is None
+    assert null_argument["pointer_is_null"] is True
+    assert opaque_argument["present"] is True
+    assert opaque_argument["scalar_captured"] is False
+    assert opaque_argument["value"] is None
+    assert opaque_argument["pointer_is_null"] is False
+    assert all(
+        field["present"] is False and field["scalar_captured"] is False
+        for field in opaque_empty_row.to_payload()["flattened_fields"]
+        if field["argument_slot"] == 0
+    )
+    assert null_row.digest != opaque_empty_row.digest
+
+
 def test_ack_binds_exact_complete_record_and_committed_high_watermark():
     record = _build("OnFrontConnected", ())
     ack = ingress.CtpTraderCallbackIngressAckV2(

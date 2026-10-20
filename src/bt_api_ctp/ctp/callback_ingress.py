@@ -95,14 +95,23 @@ class CtpTraderCallbackArgumentV2:
     present: bool
     scalar_captured: bool
     value: CallbackScalar | None
+    pointer_is_null: bool = False
 
     def __post_init__(self) -> None:
         _validate_exact_int("callback argument slot", self.slot, minimum=0)
         _validate_argument_name(self.name)
-        if type(self.present) is not bool or type(self.scalar_captured) is not bool:
+        if (
+            type(self.present) is not bool
+            or type(self.scalar_captured) is not bool
+            or type(self.pointer_is_null) is not bool
+        ):
             raise ValueError("invalid callback argument presence flags")
         if not self.present and (self.scalar_captured or self.value is not None):
             raise ValueError("absent callback argument cannot carry a value")
+        if self.pointer_is_null and (
+            not self.present or self.scalar_captured or self.value is not None
+        ):
+            raise ValueError("null callback pointer must be a present uncaptured pointer")
         if self.scalar_captured:
             _validate_scalar(self.value, label="callback argument")
         elif self.value is not None:
@@ -279,6 +288,11 @@ class CtpTraderCallbackIngressRecordV2:
         ):
             raise ValueError("callback captured a scalar outside its fixed scalar slots")
         if any(
+            item.pointer_is_null and item.slot in spec.scalar_argument_slots
+            for item in self.callback_arguments
+        ):
+            raise ValueError("callback scalar argument cannot be marked as a null pointer")
+        if any(
             item.scalar_captured
             and not _is_allowed_scalar_argument(self.callback_name, item.slot, item.value)
             for item in self.callback_arguments
@@ -382,6 +396,12 @@ class CtpTraderCallbackIngressRecordV2:
                     "present": item.present,
                     "scalar_captured": item.scalar_captured,
                     "value": item.value,
+                    **(
+                        {"pointer_is_null": item.pointer_is_null}
+                        if item.slot
+                        not in CALLBACK_SPECS[self.callback_name].scalar_argument_slots
+                        else {}
+                    ),
                 }
                 for item in self.callback_arguments
             ],
@@ -1161,7 +1181,9 @@ def build_callback_ingress_record_v2(
             # distinguishable from absent positional arguments.
             if value is None:
                 callback_arguments.append(
-                    CtpTraderCallbackArgumentV2(slot, spec.argument_names[slot], True, False, None)
+                    CtpTraderCallbackArgumentV2(
+                        slot, spec.argument_names[slot], True, False, None, pointer_is_null=True
+                    )
                 )
             elif _is_scalar(value):
                 callback_arguments.append(
@@ -1515,7 +1537,14 @@ def _build_oversize_record(values: dict[str, Any]) -> CtpTraderCallbackIngressRe
     safe_arguments = tuple(
         item
         if item.scalar_captured
-        else CtpTraderCallbackArgumentV2(item.slot, item.name, item.present, False, None)
+        else CtpTraderCallbackArgumentV2(
+            item.slot,
+            item.name,
+            item.present,
+            False,
+            None,
+            pointer_is_null=item.pointer_is_null,
+        )
         for item in values["callback_arguments"]
     )
     compact_values = dict(values)

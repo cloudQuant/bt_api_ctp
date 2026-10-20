@@ -1,0 +1,99 @@
+{
+  "repository": "bt_api_ctp",
+  "branch": "dev",
+  "parent_commit": "1cdaaf2042afa624a3b0da3a17e081587799d428",
+  "round": "iteration10-position-source-and-managed-lease-20261021",
+  "evidence_level": "SOURCE_FAKE_CTP_COMPONENT_ONLY",
+  "formal_case_pass_delta": 0,
+  "scope": [
+    "src/bt_api_ctp/containers/ctp/ctp_position_evidence.py",
+    "src/bt_api_ctp/ctp/callback_ingress.py",
+    "src/bt_api_ctp/ctp/client.py",
+    "src/bt_api_ctp/query.py",
+    "tests/test_ctp_callback_ingress.py",
+    "tests/test_ctp_callback_ingress_client.py",
+    "tests/test_ctp_position_evidence.py",
+    "docs/ITERATION10_POSITION_SOURCE_LEASE_20261021.json"
+  ],
+  "changes": [
+    "Bind position query results and session scope to exact callback source tags, exposing builder-sealed Store facts.",
+    "Add bounded pointer_is_null to callback projections to distinguish genuine null position terminals from opaque empty objects without retaining pointers or object representations.",
+    "Reject live queries before managed-lease acquisition and new ReqQry during the lease; recheck callback sequence at the locked lease-consumption/inflight transition. Permit normal order/trade callbacks during the native call."
+  ],
+  "qa": [
+    {
+      "selection": "position evidence compatibility before later lease/pointer additions",
+      "passed": 68
+    },
+    {
+      "selection": "new query/source tag mismatch node",
+      "passed": 1
+    },
+    {
+      "selection": "callback ingress suite",
+      "passed": 17
+    },
+    {
+      "selection": "callback ingress client suite with four race regressions",
+      "passed": 52
+    },
+    {
+      "selection": "adjacent managed SimNow cancellation suite",
+      "passed": 9
+    },
+    {
+      "selection": "Execution sealed-position-window cross-package node",
+      "passed": 1
+    }
+  ],
+  "qa_notes": [
+    "Targeted source-fake checks, not one combined suite. Accepted selections were not repeated for delivery.",
+    "Python C:/Anaconda3/python.exe -X utf8; pytest -p no:asyncio. Native-sensitive suites blocked native imports and verified CTP native was not loaded.",
+    "Known warnings: unknown asyncio_default_fixture_loop_scope pytest option and expected native fallback warning.",
+    "Root reviewed source diffs; independent static review accepted the managed-lease race fix; diff whitespace checks passed.",
+    "The initially reported position-test digest had a transcription error; author and Root rechecked the unchanged file without repeating QA."
+  ],
+  "compatibility": "Older v2 rows remain readable by existing consumers. New position baseline windows require the explicit null bit on fresh terminal callbacks and do not authorize old ambiguous rows.",
+  "limits": [
+    "No real-account/provider/native trading acceptance.",
+    "The locked lease consumption/inflight transition is the authorization linearization point; locks are not held across native calls.",
+    "This component commit does not accept the separate Execution Store or complete service/trading integration."
+  ],
+  "checkout_inputs": {
+    "src/bt_api_ctp/containers/ctp/ctp_position_evidence.py": {
+      "bytes": 37713,
+      "sha256": "15c6c29fdb0cb951a974e4a3743de961f53d183d54eba7ce586c99d0aab8444d",
+      "git_lf_sha256": "fecf52f0aa94e642069d269bd3a302fa617925159005ae7057e3122ad340e1d7"
+    },
+    "src/bt_api_ctp/ctp/callback_ingress.py": {
+      "bytes": 73361,
+      "sha256": "294d20ad6d97787125052798559e9a3d16674a64bac752af5e5f7e0026a3ed88",
+      "git_lf_sha256": "e739073295ed2eb1b32b962c002464a87d1b85d108e774a95483ee74623affff"
+    },
+    "src/bt_api_ctp/ctp/client.py": {
+      "bytes": 457645,
+      "sha256": "1948a2ec6fbe767d5064a7129de5a34498305fd35a7d75f6b9ef47d0fa473081",
+      "git_lf_sha256": "1948a2ec6fbe767d5064a7129de5a34498305fd35a7d75f6b9ef47d0fa473081"
+    },
+    "src/bt_api_ctp/query.py": {
+      "bytes": 12379,
+      "sha256": "da8b1fcf4b89d8942b34fe336385abe00a8c5d94fee9605d39657fda80f967e4",
+      "git_lf_sha256": "5d85c56b4569e4b07110d0547ffe442dc609571188b9e4f03a8c4590233fa684"
+    },
+    "tests/test_ctp_callback_ingress.py": {
+      "bytes": 32233,
+      "sha256": "befb24792d40760a2cf3c67b4777669480d2ad063fddc71ec02aad0355f53bc1",
+      "git_lf_sha256": "0b95d8127cabe3f78a6bd2ec6a2ace7680d0442e9c22c63ca32dcee45d20092f"
+    },
+    "tests/test_ctp_callback_ingress_client.py": {
+      "bytes": 52738,
+      "sha256": "1ae448a349ec68bea4fc41b292d67aeb5db3e3afbca84725a148fc634e6d1852",
+      "git_lf_sha256": "0fc9694918ae6d359f74603cdf3f2b16f2c3010ad893f143841c35d5e402242a"
+    },
+    "tests/test_ctp_position_evidence.py": {
+      "bytes": 26205,
+      "sha256": "1a6171abbcdc73053df5b765ec972faf678472e5c4bb5e0b34046d958c6ce104",
+      "git_lf_sha256": "a07debf58a7e578c3c922aeea30459a554845ccb233f342d13a5bcb4002c32bd"
+    }
+  }
+}

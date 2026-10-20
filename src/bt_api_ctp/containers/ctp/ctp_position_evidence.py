@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -66,6 +66,7 @@ _INTEGER_FROZEN_FIELDS = {
 _DIRECTION_VALUES = frozenset(("1", "2", "3"))
 _HEDGE_VALUES = frozenset(("1", "2", "3"))
 _POSITION_DATE_VALUES = frozenset(("1", "2"))
+_CTP_POSITION_EVIDENCE_SEAL = object()
 
 
 class CtpPositionEvidenceError(ValueError):
@@ -202,6 +203,9 @@ class CtpPositionEvidence:
     rows: tuple[CtpPositionRowEvidence, ...]
     source_hash: str
     complete: bool = True
+    source_tags: tuple[str, str, str, str, int, int] | None = None
+    _query_issuer: object | None = field(default=None, repr=False, compare=False)
+    _seal: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def evidence_complete(self) -> bool:
@@ -250,6 +254,7 @@ class CtpPositionEvidence:
             "record_count": len(self.rows),
             "source_hash": self.source_hash,
             "query_envelope": _json_value(self.query_envelope),
+            "source_tags": self.source_tags,
         }
         if include_rows:
             data["rows"] = [
@@ -518,6 +523,8 @@ def _query_source(
         or source.investor_id != scope.investor_id
     ):
         raise CtpPositionEvidenceError("position_query_scope_mismatch")
+    if source.source_tags != scope.source_tags:
+        raise CtpPositionEvidenceError("position_query_source_binding_mismatch")
     if (
         source.started_at_utc != result.started_at_utc
         or source.completed_at_utc != result.completed_at_utc
@@ -570,6 +577,87 @@ def _query_source(
     if source.completed_monotonic > scope.captured_monotonic:
         raise CtpPositionEvidenceError("position_query_clock_invalid")
     return source
+
+
+def _valid_source_tags(value: Any) -> bool:
+    return (
+        type(value) is tuple
+        and len(value) == 6
+        and all(type(item) is str and item and item == item.strip() for item in value[:4])
+        and type(value[4]) is int
+        and value[4] > 0
+        and type(value[5]) is int
+        and value[5] >= 0
+    )
+
+
+def _position_evidence_hash(evidence: CtpPositionEvidence) -> str:
+    hash_input = {
+        "query_envelope": evidence.query_envelope,
+        "rows": tuple(row.raw_record for row in evidence.rows),
+        "expires_at_utc": evidence.expires_at_utc,
+        "expires_monotonic": evidence.expires_monotonic,
+    }
+    serialized = json.dumps(
+        _json_value(hash_input),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return sha256(serialized).hexdigest()
+
+
+def _ctp_position_evidence_store_facts(evidence: Any) -> dict[str, Any]:
+    """Verify a builder-sealed evidence value for the CTP Store boundary.
+
+    This private bridge intentionally returns the live issuer object only to
+    the optional CTP-aware Store method. The serialized evidence never turns
+    an arbitrary QueryResult or caller-created DTO into Store authority.
+    """
+
+    if (
+        type(evidence) is not CtpPositionEvidence
+        or evidence._seal is not _CTP_POSITION_EVIDENCE_SEAL
+        or evidence._query_issuer is None
+        or not evidence.complete
+        or evidence.request_type != "positions"
+        or not _valid_source_tags(evidence.source_tags)
+        or type(evidence.rows) is not tuple
+        or any(type(row) is not CtpPositionRowEvidence or row.errors for row in evidence.rows)
+    ):
+        raise CtpPositionEvidenceError("position_query_source_untrusted")
+    if (
+        evidence.query_envelope.get("request_type") != "positions"
+        or evidence.query_envelope.get("request_id") != evidence.query_request_id
+        or evidence.query_envelope.get("account_fingerprint") != evidence.account_fingerprint
+        or evidence.query_envelope.get("connection_generation") != evidence.connection_generation
+        or evidence.query_envelope.get("session_scope", {}).get("trading_day")
+        != evidence.trading_day
+        or evidence.query_envelope.get("query_source", {}).get("source_tags")
+        != evidence.source_tags
+        or evidence.source_hash != _position_evidence_hash(evidence)
+    ):
+        raise CtpPositionEvidenceError("position_query_payload_mismatch")
+    return {
+        "query_issuer": evidence._query_issuer,
+        "source_tags": evidence.source_tags,
+        "query_request_id": evidence.query_request_id,
+        "account_fingerprint": evidence.account_fingerprint,
+        "connection_generation": evidence.connection_generation,
+        "trading_day": evidence.trading_day,
+        "broker_id": evidence.query_envelope.get("session_scope", {}).get("broker_id"),
+        "investor_id": evidence.query_envelope.get("session_scope", {}).get("investor_id"),
+        "started_at_utc": evidence.started_at_utc,
+        "completed_at_utc": evidence.completed_at_utc,
+        "expires_at_utc": evidence.expires_at_utc,
+        "started_monotonic": evidence.query_envelope.get("query_source", {}).get("started_monotonic"),
+        "completed_monotonic": evidence.completed_monotonic,
+        "expires_monotonic": evidence.expires_monotonic,
+        "clock_domain_id": evidence.clock_domain_id,
+        "query_envelope": evidence.query_envelope,
+        "source_hash": evidence.source_hash,
+        "rows": tuple(row.raw_record for row in evidence.rows),
+    }
 
 
 def _query_envelope(result: QueryResult[Any]) -> dict[str, Any]:
@@ -803,15 +891,16 @@ def build_ctp_position_evidence(
         "records_sha256": source.records_sha256,
         "trusted_expires_at_utc": source.trusted_expires_at_utc,
         "trusted_expires_monotonic": source.trusted_expires_monotonic,
+        "source_tags": source.source_tags,
     }
     frozen_envelope = _freeze(envelope)
-    hash_input = {
-        "query_envelope": frozen_envelope,
-        "rows": tuple(row.raw_record for row in rows),
-        "expires_at_utc": expires,
-        "expires_monotonic": monotonic_expires,
-    }
     try:
+        hash_input = {
+            "query_envelope": frozen_envelope,
+            "rows": tuple(row.raw_record for row in rows),
+            "expires_at_utc": expires,
+            "expires_monotonic": monotonic_expires,
+        }
         serialized = json.dumps(
             _json_value(hash_input),
             sort_keys=True,
@@ -836,6 +925,9 @@ def build_ctp_position_evidence(
         query_envelope=frozen_envelope,
         rows=rows,
         source_hash=source_hash,
+        source_tags=source.source_tags,
+        _query_issuer=source.issuer,
+        _seal=_CTP_POSITION_EVIDENCE_SEAL,
     )
 
 

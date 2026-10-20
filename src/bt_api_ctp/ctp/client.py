@@ -1953,6 +1953,7 @@ class _QueryAccumulator:
     last_callback_monotonic: float | None = None
     completed_monotonic: float | None = None
     source_records_sha256: str | None = None
+    source_tags: tuple[str, str, str, str, int, int] | None = None
 
     def result(self) -> QueryResult[Any]:
         complete = (
@@ -2002,6 +2003,7 @@ class _QueryAccumulator:
                 request_intent_parameters=self.request_intent_parameters,
                 request_parameters=self.request_parameters,
                 explicit_request_filters=self.explicit_request_filters,
+                source_tags=self.source_tags,
             ),
         )
 
@@ -3629,6 +3631,7 @@ class CtpManagedNativeCallLeaseV2:
     _spi: Any
     _active_session: Any
     _source_tags: tuple[str, str, str, str, int, int]
+    _source_sequence: int
     _method_name: str
     _nonce: str
     _binding_payload_json: str
@@ -5171,6 +5174,10 @@ class TraderClient:
                 elif state.phase != "ACTIVE" or state.active_session is None:
                     self._poison_callback_ingress_locked("lifecycle_transition")
                     raise CtpExecutionGateError("ctp_callback_ingress_query_before_active")
+                if method_name.startswith("ReqQry") and (
+                    state.command_lease is not None or state.native_call_refs > 0
+                ):
+                    raise CtpExecutionGateError("ctp_native_request_inflight")
                 if method_name == "ReqSettlementInfoConfirm":
                     if (
                         type(settlement_authorization) is not _CtpSettlementAuthorization
@@ -5276,6 +5283,11 @@ class TraderClient:
                 or state.command_lease is not None
                 or state.native_call_refs != 0
                 or self._native_request_inflight_refs != 0
+                or any(
+                    not accumulator.sealed
+                    and accumulator.connection_generation == self._connection_generation
+                    for accumulator in self._query_history.values()
+                )
             ):
                 raise CtpExecutionGateError("ctp_managed_native_call_owner_unavailable")
             api = self._api
@@ -5300,6 +5312,7 @@ class TraderClient:
             if verified is not binding:
                 self._poison_callback_ingress_locked("native_call_lease_failure")
                 raise CtpExecutionGateError("ctp_managed_native_call_binding_rejected")
+            source_sequence = state.sequence
             try:
                 envelope, _payload, _native_payload = _managed_native_binding_payload(
                     binding,
@@ -5381,6 +5394,7 @@ class TraderClient:
                 _spi=spi,
                 _active_session=session,
                 _source_tags=source_tag_tuple,
+                _source_sequence=source_sequence,
                 _method_name=method_name,
                 _nonce=uuid.uuid4().hex,
                 _binding_payload_json=json.dumps(
@@ -5471,6 +5485,15 @@ class TraderClient:
                     self._poison_callback_ingress_locked("source_identity_mismatch")
                     self._maybe_finish_deferred_native_release_locked()
                 raise CtpExecutionGateError("ctp_managed_native_call_lease_invalid")
+
+            if state.sequence != lease._source_sequence:
+                self._managed_native_call_leases.pop(lease._nonce, None)
+                state.command_lease = None
+                state.native_call_refs = max(0, state.native_call_refs - 1)
+                self._maybe_finish_deferred_native_release_locked()
+                raise CtpExecutionGateError(
+                    "ctp_managed_native_call_source_sequence_changed"
+                )
 
             self._managed_native_call_leases.pop(lease._nonce, None)
             state.command_lease = None
@@ -8444,7 +8467,58 @@ class TraderClient:
                 read_only_ready=read_only_ready,
                 captured_at_utc=datetime.now(timezone.utc),
                 captured_monotonic=time.monotonic(),
+                source_tags=self._query_source_tags_locked(),
             )
+
+    def _query_source_tags_locked(
+        self,
+    ) -> tuple[str, str, str, str, int, int] | None:
+        """Capture the current immutable native callback-source identity.
+
+        The callback registration's connection generation is intentionally
+        retained as its own source tag. It can differ from the logical query
+        connection generation after the initial front-connected callback.
+        """
+
+        api = self._api
+        spi = self._spi
+        if api is None or spi is None:
+            return None
+        tags = getattr(spi, "_callback_source_tags", None)
+        if tags is not None:
+            values = (
+                getattr(tags, "source_instance_id", None),
+                getattr(tags, "native_client_epoch", None),
+                getattr(tags, "native_api_source_id", None),
+                getattr(tags, "native_spi_source_id", None),
+                getattr(tags, "native_api_generation", None),
+                getattr(tags, "connection_generation", None),
+            )
+        else:
+            values = (
+                self._callback_source_instance_id,
+                self._native_client_epoch,
+                self._native_api_source_id,
+                getattr(spi, "_native_spi_source_id", None),
+                self._native_api_generation,
+                self._connection_generation,
+            )
+        if (
+            any(type(value) is not str or not value for value in values[:4])
+            or type(values[4]) is not int
+            or values[4] <= 0
+            or type(values[5]) is not int
+            or values[:3]
+            != (
+                self._callback_source_instance_id,
+                self._native_client_epoch,
+                self._native_api_source_id,
+            )
+            or values[3] != getattr(spi, "_native_spi_source_id", None)
+            or values[4] != self._native_api_generation
+        ):
+            return None
+        return values
 
     def _current_login_identity_locked(
         self,
@@ -8884,6 +8958,8 @@ class TraderClient:
             or any(name not in dict(filter_items) for name in explicit_request_filters)
         ):
             raise TypeError("explicit query filter names must identify captured filters")
+        with self._query_state_lock:
+            source_tags = self._query_source_tags_locked()
         accumulator = _QueryAccumulator(
             request_type=request_type,
             request_id=request_id,
@@ -8900,6 +8976,7 @@ class TraderClient:
             request_parameters=parameter_items,
             explicit_request_filters=tuple(sorted(explicit_request_filters)),
             started_monotonic=time.monotonic(),
+            source_tags=source_tags,
         )
         with self._query_state_lock:
             self._query_history[request_id] = accumulator
@@ -9190,13 +9267,14 @@ class TraderClient:
         try:
             ret = submit(accumulator.request_id)
         except Exception as exc:
-            accumulator.error_code = -4
-            accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
-            accumulator.completed_at_utc = datetime.now(timezone.utc)
-            accumulator.completed_monotonic = time.monotonic()
-            accumulator.sealed = True
-            accumulator.event.set()
-            return accumulator.result()
+            with self._query_state_lock:
+                accumulator.error_code = -4
+                accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
+                accumulator.completed_at_utc = datetime.now(timezone.utc)
+                accumulator.completed_monotonic = time.monotonic()
+                accumulator.sealed = True
+                accumulator.event.set()
+                return accumulator.result()
         accumulator.submit_code = None if ret is None else int(ret)
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
             return self._mark_query_deadline_exceeded(accumulator)
