@@ -43,7 +43,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Mapping
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
@@ -1885,6 +1885,22 @@ def _progressive_query_wait_limits(
     return idle_timeout, hard_duration
 
 
+@contextmanager
+def _query_lock_until(lock: Any, deadline_monotonic: float | None):
+    """Acquire one query lane without spending past its caller's deadline."""
+    if deadline_monotonic is None:
+        with lock:
+            yield True
+        return
+    remaining = deadline_monotonic - time.monotonic()
+    acquired = remaining > 0 and lock.acquire(timeout=remaining)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            lock.release()
+
+
 def _read_native_query_parameter_items(
     field: Any,
     request_intent_items: tuple[tuple[str, float], ...],
@@ -2265,8 +2281,18 @@ class _MdSpi(CThostFtdcMdSpi):
             if not self._is_current_locked():
                 return
             callback = self._c.on_subscribe
+            response_callback = self._c.on_subscribe_response
+            connection_generation = self._c._connection_generation
         if callback is not None:
             callback(pSpecificInstrument, pRspInfo)
+        if response_callback is not None:
+            response_callback(
+                pSpecificInstrument,
+                pRspInfo,
+                nRequestID,
+                bIsLast,
+                connection_generation,
+            )
 
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
         with self._c._state_lock:
@@ -2308,6 +2334,10 @@ class MdClient:
         self.on_error = None  # callback(CThostFtdcRspInfoField)
         # callback(CThostFtdcSpecificInstrumentField, CThostFtdcRspInfoField)
         self.on_subscribe = None
+        # Managed consumers may bind a richer callback to validate the exact
+        # response request/final marker and the client generation. The legacy
+        # two-argument callback above remains unchanged.
+        self.on_subscribe_response = None
         # callback(nReason) - 前置断开通知，用于把断线时间窗写进完整性报告
         self.on_disconnect = None
 
@@ -8887,6 +8917,7 @@ class TraderClient:
         message: str,
         *,
         unsupported: bool = False,
+        timed_out: bool = False,
         include_query_source: bool = True,
     ) -> QueryResult[Any]:
         accumulator = self._new_query_accumulator(request_type)
@@ -8895,6 +8926,7 @@ class TraderClient:
         accumulator.error_code = -3 if unsupported else -1
         accumulator.error_message = message
         accumulator.unsupported = unsupported
+        accumulator.timed_out = timed_out
         accumulator.completed_at_utc = datetime.now(timezone.utc)
         accumulator.completed_monotonic = time.monotonic()
         accumulator.sealed = True
@@ -9012,10 +9044,40 @@ class TraderClient:
         explicit_request_filters: tuple[str, ...] = (),
         should_stop: Callable[[], bool] | None = None,
         max_duration: float | None = None,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
+        issue_deadline: float | None = None
+        if deadline_monotonic is not None:
+            if type(deadline_monotonic) not in (int, float):
+                return self._local_query_failure(
+                    request_type,
+                    "query_deadline_invalid",
+                    unsupported=True,
+                    include_query_source=False,
+                )
+            try:
+                issue_deadline = float(deadline_monotonic)
+            except (OverflowError, ValueError):
+                return self._local_query_failure(
+                    request_type,
+                    "query_deadline_invalid",
+                    unsupported=True,
+                    include_query_source=False,
+                )
+            if not math.isfinite(issue_deadline):
+                return self._local_query_failure(
+                    request_type,
+                    "query_deadline_invalid",
+                    unsupported=True,
+                    include_query_source=False,
+                )
         progressive_idle_timeout, progressive_max_duration = _progressive_query_wait_limits(
             timeout, max_duration
         )
+        if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            return self._local_query_failure(
+                request_type, "query_deadline_exceeded", timed_out=True
+            )
         if should_stop is not None and should_stop():
             return self._local_query_failure(request_type, "query_cancelled")
         if not self.is_read_only_ready:
@@ -9026,22 +9088,43 @@ class TraderClient:
                 "native_query_unsupported",
                 unsupported=True,
             )
-        with self._query_lock:
+        with _query_lock_until(self._query_lock, issue_deadline) as lock_acquired:
+            if not lock_acquired:
+                return self._local_query_failure(
+                    request_type, "query_deadline_exceeded", timed_out=True
+                )
+            if issue_deadline is not None and time.monotonic() >= issue_deadline:
+                return self._local_query_failure(
+                    request_type, "query_deadline_exceeded", timed_out=True
+                )
             elapsed = time.monotonic() - self._last_query_submitted_at
             wait_time = self._query_interval - elapsed
             if wait_time > 0:
-                if should_stop is None:
+                if should_stop is None and issue_deadline is None:
                     time.sleep(wait_time)
                 else:
                     stop_wait = threading.Event()
                     wait_deadline = time.monotonic() + wait_time
                     while True:
-                        if should_stop():
+                        if should_stop is not None and should_stop():
                             return self._local_query_failure(request_type, "query_cancelled")
-                        remaining = wait_deadline - time.monotonic()
+                        now = time.monotonic()
+                        remaining = wait_deadline - now
+                        if issue_deadline is not None:
+                            remaining = min(remaining, issue_deadline - now)
+                            if remaining <= 0 and now >= issue_deadline:
+                                return self._local_query_failure(
+                                    request_type,
+                                    "query_deadline_exceeded",
+                                    timed_out=True,
+                                )
                         if remaining <= 0:
                             break
                         stop_wait.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
+            if issue_deadline is not None and time.monotonic() >= issue_deadline:
+                return self._local_query_failure(
+                    request_type, "query_deadline_exceeded", timed_out=True
+                )
             try:
                 request_intent_items = _query_filter_items(request_intent_filters)
                 request_filter_items = _read_native_query_filter_items(
@@ -9072,6 +9155,10 @@ class TraderClient:
                 )
             if should_stop is not None and should_stop():
                 return self._local_query_failure(request_type, "query_cancelled")
+            if issue_deadline is not None and time.monotonic() >= issue_deadline:
+                return self._local_query_failure(
+                    request_type, "query_deadline_exceeded", timed_out=True
+                )
             accumulator = self._new_query_accumulator(
                 request_type,
                 dict(request_filter_items),
@@ -9095,7 +9182,11 @@ class TraderClient:
                     accumulator.sealed = True
                     accumulator.event.set()
                 return accumulator.result()
+        if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            return self._mark_query_deadline_exceeded(accumulator)
         self._record_request(f"query_{request_type}")
+        if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            return self._mark_query_deadline_exceeded(accumulator)
         try:
             ret = submit(accumulator.request_id)
         except Exception as exc:
@@ -9107,6 +9198,8 @@ class TraderClient:
             accumulator.event.set()
             return accumulator.result()
         accumulator.submit_code = None if ret is None else int(ret)
+        if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            return self._mark_query_deadline_exceeded(accumulator)
         if ret not in (None, 0):
             accumulator.error_code = int(ret)
             accumulator.error_message = "query_submit_rejected"
@@ -9121,6 +9214,8 @@ class TraderClient:
             # callback progress extends it, while the total duration remains
             # a hard cap measured from the query's native submission window.
             hard_deadline = accumulator.started_monotonic + progressive_max_duration
+            if issue_deadline is not None:
+                hard_deadline = min(hard_deadline, issue_deadline)
             idle_deadline = accumulator.started_monotonic + progressive_idle_timeout
             last_progress: float | None = None
             while True:
@@ -9168,7 +9263,11 @@ class TraderClient:
                         # packets. A terminal callback already recorded above
                         # still wins the deadline race.
                         accumulator.timed_out = True
-                        accumulator.error_message = "query_timeout"
+                        accumulator.error_message = (
+                            "query_deadline_exceeded"
+                            if issue_deadline is not None and now >= issue_deadline
+                            else "query_timeout"
+                        )
                         accumulator.completed_at_utc = datetime.now(timezone.utc)
                         accumulator.completed_monotonic = now
                         accumulator.sealed = True
@@ -9177,9 +9276,14 @@ class TraderClient:
 
                 accumulator.event.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
         elif should_stop is None:
-            observed = accumulator.event.wait(max(float(timeout), 0.0))
+            wait_deadline = time.monotonic() + max(float(timeout), 0.0)
+            if issue_deadline is not None:
+                wait_deadline = min(wait_deadline, issue_deadline)
+            observed = accumulator.event.wait(max(wait_deadline - time.monotonic(), 0.0))
         else:
             wait_deadline = time.monotonic() + max(float(timeout), 0.0)
+            if issue_deadline is not None:
+                wait_deadline = min(wait_deadline, issue_deadline)
             while True:
                 if accumulator.event.is_set():
                     observed = True
@@ -9201,13 +9305,40 @@ class TraderClient:
                 or accumulator.is_last_seen
                 or accumulator.error_code not in (None, 0)
             )
+            deadline_callback_late = (
+                issue_deadline is not None
+                and accumulator.completed_monotonic is not None
+                and accumulator.completed_monotonic > issue_deadline
+            )
+            if deadline_callback_late:
+                accumulator.timed_out = True
+                accumulator.error_message = "query_deadline_exceeded"
+                terminal_observed = False
             if not observed and not terminal_observed:
                 if cancelled:
                     accumulator.error_code = -1
                     accumulator.error_message = "query_cancelled"
                 else:
                     accumulator.timed_out = True
-                    accumulator.error_message = "query_timeout"
+                    accumulator.error_message = (
+                        "query_deadline_exceeded"
+                        if issue_deadline is not None
+                        and time.monotonic() >= issue_deadline
+                        else "query_timeout"
+                    )
+            if accumulator.completed_at_utc is None:
+                accumulator.completed_at_utc = datetime.now(timezone.utc)
+                accumulator.completed_monotonic = time.monotonic()
+            accumulator.sealed = True
+            accumulator.event.set()
+            return accumulator.result()
+
+    def _mark_query_deadline_exceeded(
+        self, accumulator: _QueryAccumulator
+    ) -> QueryResult[Any]:
+        with self._query_state_lock:
+            accumulator.timed_out = True
+            accumulator.error_message = "query_deadline_exceeded"
             if accumulator.completed_at_utc is None:
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
                 accumulator.completed_monotonic = time.monotonic()
@@ -9294,7 +9425,13 @@ class TraderClient:
         return list(result.records) if result.complete else []
 
     def query_orders_result(
-        self, instrument_id="", exchange_id="", order_sys_id="", timeout=5
+        self,
+        instrument_id="",
+        exchange_id="",
+        order_sys_id="",
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryOrderField()
         intent_filters = {
@@ -9328,6 +9465,7 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_orders(self, instrument_id="", exchange_id="", order_sys_id="", timeout=5):
@@ -9347,6 +9485,8 @@ class TraderClient:
         start_time="",
         end_time="",
         timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryTradeField()
         intent_filters = {
@@ -9382,6 +9522,7 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_trades(self, **kwargs: Any) -> list[Any]:

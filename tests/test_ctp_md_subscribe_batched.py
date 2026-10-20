@@ -186,6 +186,24 @@ class TestMdSubscribeResponseCallback:
 
         assert seen == [(field, info)]
 
+    def test_spi_exposes_request_completion_and_generation_without_changing_legacy_callback(self):
+        from bt_api_ctp.ctp.client import _MdSpi
+
+        client = _client()
+        client._connection_generation = 17
+        spi = _MdSpi(client)
+        legacy_seen = []
+        managed_seen = []
+        client.on_subscribe = lambda field, info: legacy_seen.append((field, info))
+        client.on_subscribe_response = lambda *args: managed_seen.append(args)
+        field = SimpleNamespace(InstrumentID="rb2701")
+        info = SimpleNamespace(ErrorID=0)
+
+        spi.OnRspSubMarketData(field, info, 41, False)
+
+        assert legacy_seen == [(field, info)]
+        assert managed_seen == [(field, info, 41, False, 17)]
+
     def test_spi_tolerates_missing_callback(self):
         from bt_api_ctp.ctp.client import _MdSpi
 

@@ -451,6 +451,56 @@ def test_instrument_query_cancelled_during_rate_wait_is_not_submitted():
     assert result.error_message == "query_cancelled"
 
 
+def test_trade_query_deadline_bounds_rate_wait_without_native_submission():
+    client = read_client()
+    submissions = []
+    client._query_interval = 30
+    client._last_query_submitted_at = time.monotonic()
+    client._api = SimpleNamespace(
+        ReqQryTrade=lambda *_args: submissions.append(True) or 0
+    )
+    deadline = time.monotonic() + 0.03
+    started = time.monotonic()
+
+    result = client.query_trades_result(
+        instrument_id="rb2701",
+        timeout=5,
+        deadline_monotonic=deadline,
+    )
+
+    assert time.monotonic() - started < 0.5
+    assert submissions == []
+    assert result.complete is False
+    assert result.timed_out is True
+    assert result.error_message == "query_deadline_exceeded"
+
+
+def test_order_query_deadline_covers_synchronous_native_submit():
+    client = read_client()
+    submissions = []
+
+    def slow_submit(*_args):
+        submissions.append(True)
+        time.sleep(0.03)
+        return 0
+
+    client._api = SimpleNamespace(ReqQryOrder=slow_submit)
+    deadline = time.monotonic() + 0.01
+    started = time.monotonic()
+
+    result = client.query_orders_result(
+        instrument_id="rb2701",
+        timeout=5,
+        deadline_monotonic=deadline,
+    )
+
+    assert time.monotonic() - started < 0.5
+    assert submissions == [True]
+    assert result.complete is False
+    assert result.timed_out is True
+    assert result.error_message == "query_deadline_exceeded"
+
+
 def test_terminal_instrument_callback_wins_over_simultaneous_cancellation():
     client = read_client()
     stop_event = threading.Event()
