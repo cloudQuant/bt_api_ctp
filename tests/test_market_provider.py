@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -45,8 +47,11 @@ class _SyntheticMdClient:
     def __init__(self, *_args: object) -> None:
         self.connection_generation = 1
         self.on_login = None
+        self.on_subscribe_response = None
+        self.on_disconnect = None
         self.on_tick = None
         self.subscribed: list[str] = []
+        self.next_request_id = 1
         self.subscribe_additional_calls = 0
         self.unsubscribed: list[str] = []
         self.fail_subscribe_additional_after_accept = False
@@ -54,6 +59,13 @@ class _SyntheticMdClient:
         self.stop_wait_calls = 0
         self.stop_receipts = list(self.__class__.stop_receipts_on_create)
         self.__class__.stop_receipts_on_create = []
+        self.emit_startup_acks = True
+        self.reverse_subscription_acks = False
+        self.emit_startup_readiness_tick = True
+        self.emit_tick_before_startup_acks = False
+        self.start_entered: threading.Event | None = None
+        self.allow_start: threading.Event | None = None
+        self.start_thread_id: int | None = None
         self.__class__.instances.append(self)
 
     def subscribe(self, instruments: list[str]) -> None:
@@ -63,6 +75,10 @@ class _SyntheticMdClient:
         self.subscribe_additional_calls += 1
         additions = tuple(item for item in instruments if item not in self.subscribed)
         self.subscribed.extend(additions)
+        if additions:
+            request_id = self.next_request_id
+            self.next_request_id += 1
+            self.emit_subscription_batch(additions, request_id=request_id)
         if self.fail_subscribe_additional_after_accept:
             self.fail_subscribe_additional_after_accept = False
             raise RuntimeError("synthetic ambiguous native subscribe")
@@ -75,19 +91,93 @@ class _SyntheticMdClient:
 
     def start(self, *, block: bool = False) -> None:
         assert block is False
+        self.start_thread_id = threading.get_ident()
+        if self.start_entered is not None:
+            self.start_entered.set()
+            assert self.allow_start is not None
+            if not self.allow_start.wait(timeout=3.0):
+                raise TimeoutError("synthetic native startup was not released")
         if self.__class__.authenticate:
             assert callable(self.on_login)
             self.on_login(SimpleNamespace())
+            acknowledgements = list(self.subscribed)
+            if self.emit_tick_before_startup_acks and acknowledgements:
+                self.emit_tick(
+                    InstrumentID=acknowledgements[0],
+                    ExchangeID="CFFEX",
+                    LastPrice=4_001.0,
+                    Volume=1,
+                    TradingDay="20261020",
+                    ActionDay="20261020",
+                    UpdateTime="09:30:01",
+                    UpdateMillisec=0,
+                )
+            if self.reverse_subscription_acks:
+                acknowledgements.reverse()
+            if self.emit_startup_acks:
+                request_id = self.next_request_id
+                self.next_request_id += 1
+                self.emit_subscription_batch(acknowledgements, request_id=request_id)
+            if self.emit_startup_readiness_tick and acknowledgements:
+                self.emit_tick(
+                    InstrumentID=acknowledgements[0],
+                    ExchangeID="CFFEX",
+                    LastPrice=4_001.0,
+                    Volume=1,
+                    TradingDay="20261020",
+                    ActionDay="20261020",
+                    UpdateTime="09:30:01",
+                    UpdateMillisec=0,
+                )
+
+    def emit_subscription_ack(
+        self,
+        instrument: str,
+        *,
+        request_id: int = 1,
+        is_last: bool = True,
+        error_id: int = 0,
+        connection_generation: int | None = None,
+    ) -> None:
+        assert callable(self.on_subscribe_response)
+        self.on_subscribe_response(
+            SimpleNamespace(InstrumentID=instrument),
+            SimpleNamespace(ErrorID=error_id),
+            request_id,
+            is_last,
+            self.connection_generation
+            if connection_generation is None
+            else connection_generation,
+        )
+
+    def emit_subscription_batch(
+        self,
+        instruments: tuple[str, ...] | list[str],
+        *,
+        request_id: int,
+        error_id: int = 0,
+    ) -> None:
+        for index, instrument in enumerate(instruments):
+            self.emit_subscription_ack(
+                instrument,
+                request_id=request_id,
+                is_last=index == len(instruments) - 1,
+                error_id=error_id,
+            )
 
     def emit_tick(self, **fields: object) -> None:
         assert callable(self.on_tick)
         self.on_tick(SimpleNamespace(**fields))
 
+    def emit_disconnect(self, reason: int = 0) -> None:
+        assert callable(self.on_disconnect)
+        self.on_disconnect(reason)
+
     def stop(self) -> None:
         self.stop_calls += 1
 
     def stop_and_wait(self, *, timeout: float) -> CtpNativeStopReceipt:
-        assert timeout > 0
+        assert timeout >= 0
         self.stop_wait_calls += 1
         if self.stop_receipts:
             return self.stop_receipts.pop(0)
@@ -119,6 +209,137 @@ def _stream_factory(key: MarketSubscriptionKey, queue: BoundedCtpQuoteV2Queue) -
         ctp_env_profile="config_front_pair",
         ctp_environment="simnow",
     )
+
+
+def _manual_ack_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    symbols: tuple[str, ...],
+) -> tuple[CtpMarketStream, _SyntheticMdClient, BoundedCtpQuoteV2Queue]:
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = _SyntheticMdClient(*args)
+        client.emit_startup_acks = False
+        client.emit_startup_readiness_tick = False
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    queue = BoundedCtpQuoteV2Queue(capacity=8)
+    stream = _stream_factory(_key(), queue)
+    assert stream.subscribe_topics(
+        [{"topic": "tick", "symbol": symbol} for symbol in symbols]
+    ) is None
+    assert stream.enable_quote_v2_service_readiness() is True
+    stream.connect()
+    (client,) = _SyntheticMdClient.instances
+    assert stream.state is ConnectionState.AUTHENTICATED
+    assert stream.get_quote_v2_service_ready_scope() is None
+    return stream, client, queue
+
+
+def _emit_synthetic_tick(client: _SyntheticMdClient, symbol: str, second: int) -> None:
+    client.emit_tick(
+        InstrumentID=symbol,
+        ExchangeID="CFFEX",
+        LastPrice=4_001.0 + second,
+        PreSettlementPrice=3_990.0,
+        OpenPrice=3_995.0,
+        HighestPrice=4_010.0,
+        LowestPrice=3_980.0,
+        BidPrice1=4_000.0,
+        BidVolume1=2,
+        AskPrice1=4_002.0,
+        AskVolume1=3,
+        OpenInterest=1_000.0,
+        Volume=123 + second,
+        Turnover=492_000.0,
+        UpperLimitPrice=4_200.0,
+        LowerLimitPrice=3_800.0,
+        TradingDay="20261020",
+        ActionDay="20261020",
+        UpdateTime=f"09:30:{second:02d}",
+        UpdateMillisec=0,
+    )
+
+
+def test_service_readiness_requires_all_symbols_and_terminal_ack_then_a_fresh_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream, client, queue = _manual_ack_stream(
+        monkeypatch, ("IF2612", "IH2612")
+    )
+    try:
+        # The response order is reversed from the requested topics. A tick for
+        # the non-final response cannot make the shared stream ready.
+        client.emit_subscription_ack("IH2612", request_id=31, is_last=False)
+        _emit_synthetic_tick(client, "IH2612", 1)
+        assert stream.get_quote_v2_service_ready_scope() is None
+        assert queue.size == 0
+
+        # bIsLast belongs to the request batch: readiness waits for the final
+        # response as well as an ACK for each requested symbol.
+        client.emit_subscription_ack("IF2612", request_id=31, is_last=True)
+        assert stream.get_quote_v2_service_ready_scope() is None
+        _emit_synthetic_tick(client, "IF2612", 2)
+        scope = stream.get_quote_v2_service_ready_scope()
+        assert scope is not None
+        assert stream.is_quote_v2_service_symbol_ready("IF2612") is True
+        assert stream.is_quote_v2_service_symbol_ready("IH2612") is True
+        assert queue.size == 0  # the first post-ACK tick establishes readiness
+
+        _emit_synthetic_tick(client, "IH2612", 3)
+        assert queue.size == 1
+    finally:
+        stream.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("request_id", "is_last", "error_id", "generation_offset"),
+    (
+        (31, False, 7, 0),  # A non-final per-symbol error is still an error.
+        (31, 0, 0, 0),  # bIsLast must be an actual bool.
+        (True, False, 0, 0),  # bool is not accepted as an integer request ID.
+        (31, False, 0, 1),  # A callback from another generation is stale.
+    ),
+)
+def test_invalid_subscribe_responses_fail_service_readiness_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    request_id: int,
+    is_last: object,
+    error_id: int,
+    generation_offset: int,
+) -> None:
+    stream, client, _queue = _manual_ack_stream(monkeypatch, ("IF2612",))
+    try:
+        client.emit_subscription_ack(
+            "IF2612",
+            request_id=request_id,
+            is_last=is_last,  # type: ignore[arg-type]
+            error_id=error_id,
+            connection_generation=client.connection_generation + generation_offset,
+        )
+        assert stream.quote_v2_service_fail_closed is True
+        assert stream.state is ConnectionState.ERROR
+        assert stream.get_quote_v2_service_ready_scope() is None
+    finally:
+        stream.disconnect()
+
+
+def test_terminal_subscribe_response_rejects_late_other_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream, client, _queue = _manual_ack_stream(
+        monkeypatch, ("IF2612", "IH2612")
+    )
+    try:
+        client.emit_subscription_ack("IF2612", request_id=41, is_last=True)
+        client.emit_subscription_ack("IH2612", request_id=41, is_last=False)
+        assert stream.quote_v2_service_fail_closed is True
+        assert stream.state is ConnectionState.ERROR
+        assert stream.get_quote_v2_service_ready_scope() is None
+    finally:
+        stream.disconnect()
 
 
 def test_ctp_market_provider_projects_the_native_callback_and_opaque_clock_identity(
@@ -224,11 +445,20 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
         connect_timeout_seconds=1.0,
     )
     first = provider.subscribe(first_key, generation="hub-generation-a")
-    second = provider.subscribe(second_key, generation="hub-generation-b")
     (client,) = _SyntheticMdClient.instances
+    # A native request ID can be reused after a completed request. The stream
+    # explicitly reopens it for this pending addition before its first ACK.
+    client.next_request_id = 1
+    second = provider.subscribe(second_key, generation="hub-generation-b")
     assert len(streams) == 1
     assert first.stream is second.stream is streams[0]
     assert client.subscribed == ["IF2612", "IH2612"]
+    assert first.stream._quote_v2_service_symbol_request_ids == {
+        "IF2612": 1,
+        "IH2612": 1,
+    }
+    assert first.stream._quote_v2_service_completed_request_ids == {1}
+    assert first.stream.get_quote_v2_service_ready_scope() is not None
     assert provider.diagnostics["active_sessions"] == 1
 
     first_descriptor = provider.describe_source(
@@ -782,6 +1012,524 @@ def test_ctp_market_provider_retains_unconfirmed_native_stop_for_retry(
     assert client.stop_calls == 1
     assert client.stop_wait_calls == 2
     assert provider.diagnostics["active_handles"] == 0
+
+
+def test_ctp_market_provider_reconnect_requires_stop_ack_tick_and_hub_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    created: list[_SyntheticMdClient] = []
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = _SyntheticMdClient(*args)
+        if created:
+            client.reverse_subscription_acks = True
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    second_key = _key(
+        instrument=MarketInstrumentKey(
+            provider="ctp",
+            venue="CFFEX",
+            environment="simnow",
+            product_type="future",
+            instrument_id="IH2612",
+            native_symbol="IH2612",
+        )
+    )
+    second_handle = provider.subscribe(second_key, generation="hub-generation-r1")
+    old_client = created[0]
+    old_scope = handle.source_scope
+    assert provider.describe_source(
+        handle,
+        key=handle.key,
+        generation=handle.generation,
+        stream_id=handle.key.stream_id,
+        epoch="hub-epoch-r1",
+    ) is not None
+
+    # This native observation is queued before disconnect and must be drained
+    # with the old source epoch, never relabelled onto the replacement client.
+    old_client.emit_tick(
+        InstrumentID="IF2612",
+        ExchangeID="CFFEX",
+        LastPrice=4_002.0,
+        Volume=2,
+        TradingDay="20261020",
+        ActionDay="20261020",
+        UpdateTime="09:30:02",
+        UpdateMillisec=0,
+    )
+    old_client.stop_receipts.extend(
+        (
+            CtpNativeStopReceipt(
+                connection_generation=1,
+                join_required=False,
+                join_completed=True,
+                native_released=False,
+                thread_alive=False,
+                timed_out=False,
+            ),
+            CtpNativeStopReceipt(
+                connection_generation=1,
+                join_required=False,
+                join_completed=True,
+                native_released=True,
+                thread_alive=False,
+                timed_out=False,
+            ),
+        )
+    )
+    old_client.emit_disconnect()
+
+    assert provider.poll(handle, limit=1) == ()
+    assert provider.diagnostics["source_recovery_active"] == 1
+    recovery = provider._source_recovery
+    assert recovery is not None
+    assert recovery.stop_done.wait(timeout=1.0) is True
+    assert old_client.stop_wait_calls == 2
+    assert len(_SyntheticMdClient.instances) == 1
+
+    # The owner consumes the exact complete receipt and starts one replacement
+    # worker. Its synchronous startup completes off-poll; readiness does not
+    # resume until a later owner poll consumes the result.
+    assert provider.poll(handle, limit=1) == ()
+    recovery = provider._source_recovery
+    assert recovery is not None
+    assert recovery.reconnect_done.wait(timeout=1.0) is True
+    assert recovery.reconnect_worker is not None
+    recovery.reconnect_worker.join(timeout=1.0)
+    assert len(_SyntheticMdClient.instances) == 2
+    new_client = created[1]
+    assert new_client.subscribed == ["IF2612", "IH2612"]
+    assert new_client.reverse_subscription_acks is True
+    assert provider.poll(handle, limit=1) == ()
+    assert provider.source_epoch_reset_required(handle) is False
+    assert provider.poll(handle, limit=1) == ()
+    assert provider.source_epoch_reset_required(handle) is True
+    assert provider.source_epoch_reset_required(second_handle) is True
+    new_scope = handle.source_scope
+    assert new_scope is not old_scope
+    assert new_scope.connection_generation > old_scope.connection_generation
+    assert new_scope.clock_source_session_id != old_scope.clock_source_session_id
+    assert provider.describe_source(
+        handle,
+        key=handle.key,
+        generation=handle.generation,
+        stream_id=handle.key.stream_id,
+        epoch="hub-epoch-r1",
+    ) is None
+    assert provider.describe_source(
+        second_handle,
+        key=second_handle.key,
+        generation=second_handle.generation,
+        stream_id=second_handle.key.stream_id,
+        epoch="hub-epoch-r1",
+    ) is None
+
+    # Hub reset/ack is an owner-thread barrier. Only after it accepts a new
+    # epoch can a subsequent native tick become a public provider event.
+    assert provider.acknowledge_source_epoch_reset(
+        handle, epoch="hub-epoch-r2"
+    ) is True
+    assert provider.source_epoch_reset_required(handle) is False
+    assert provider.source_epoch_reset_required(second_handle) is True
+    assert provider.acknowledge_source_epoch_reset(
+        second_handle, epoch="hub-epoch-r2"
+    ) is True
+    assert provider.source_epoch_reset_required(handle) is False
+    old_client.emit_tick(
+        InstrumentID="IF2612",
+        ExchangeID="CFFEX",
+        LastPrice=4_003.0,
+        Volume=3,
+        TradingDay="20261020",
+        ActionDay="20261020",
+        UpdateTime="09:30:03",
+        UpdateMillisec=0,
+    )
+    assert handle.queue.drain(1) == ()
+    new_client.emit_tick(
+        InstrumentID="IF2612",
+        ExchangeID="CFFEX",
+        LastPrice=4_004.0,
+        Volume=4,
+        TradingDay="20261020",
+        ActionDay="20261020",
+        UpdateTime="09:30:04",
+        UpdateMillisec=0,
+    )
+    (event,) = provider.poll(handle, limit=1)
+    assert event.data["connection_generation"] == new_scope.connection_generation
+    assert event.data["last_price"] == 4_004.0
+    descriptor = provider.describe_source(
+        handle,
+        key=handle.key,
+        generation=handle.generation,
+        stream_id=handle.key.stream_id,
+        epoch="hub-epoch-r2",
+    )
+    assert descriptor is not None
+    assert descriptor.epoch == "hub-epoch-r2"
+    assert descriptor.connection_generation == new_scope.connection_generation
+    second_descriptor = provider.describe_source(
+        second_handle,
+        key=second_handle.key,
+        generation=second_handle.generation,
+        stream_id=second_handle.key.stream_id,
+        epoch="hub-epoch-r2",
+    )
+    assert second_descriptor is not None
+    assert second_descriptor.epoch == "hub-epoch-r2"
+    assert second_descriptor.connection_generation == new_scope.connection_generation
+    assert provider.close() is True
+
+
+def test_ctp_market_provider_stop_worker_keeps_poll_nonblocking_until_exact_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    created: list[_SyntheticMdClient] = []
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = _SyntheticMdClient(*args)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    (old_client,) = created
+    owner_thread_id = threading.get_ident()
+    stop_entered = threading.Event()
+    allow_stop_return = threading.Event()
+    stop_thread_ids: list[int] = []
+    exact_receipt = CtpNativeStopReceipt(
+        connection_generation=old_client.connection_generation,
+        join_required=False,
+        join_completed=True,
+        native_released=True,
+        thread_alive=False,
+        timed_out=False,
+    )
+
+    def blocked_stop_and_wait(*, timeout: float) -> CtpNativeStopReceipt:
+        assert timeout == 0.0
+        old_client.stop_wait_calls += 1
+        stop_thread_ids.append(threading.get_ident())
+        stop_entered.set()
+        if not allow_stop_return.wait(timeout=3.0):
+            raise TimeoutError("synthetic stop observer was not released")
+        return exact_receipt
+
+    old_client.stop_and_wait = blocked_stop_and_wait  # type: ignore[method-assign]
+    try:
+        old_client.emit_disconnect()
+        started = time.monotonic()
+        assert provider.poll(handle, limit=1) == ()
+        assert time.monotonic() - started < 0.25
+        assert stop_entered.wait(timeout=1.0) is True
+        recovery = provider._source_recovery
+        assert recovery is not None
+        worker = recovery.stop_worker
+        assert worker is not None
+        assert recovery.old_client is old_client
+        assert recovery.stop_done.is_set() is False
+        assert recovery.stop_receipt is None
+        assert stop_thread_ids == [worker.ident]
+        assert worker.ident != owner_thread_id
+
+        # Neither subsequent owner polls nor close wait on native stop or start
+        # a replacement while the exact stop call remains blocked.
+        for _ in range(3):
+            started = time.monotonic()
+            assert provider.poll(handle, limit=1) == ()
+            assert time.monotonic() - started < 0.25
+        assert provider.close() is False
+        assert len(created) == 1
+        assert old_client.stop_wait_calls == 1
+        assert recovery.stop_worker is worker
+        assert recovery.stop_done.is_set() is False
+
+        allow_stop_return.set()
+        assert recovery.stop_done.wait(timeout=1.0) is True
+        assert recovery.stop_receipt is exact_receipt
+        assert len(created) == 1  # the worker cannot reconnect by itself
+
+        assert provider.poll(handle, limit=1) == ()
+        reconnect_worker = recovery.reconnect_worker
+        assert reconnect_worker is not None
+        assert recovery.reconnect_done.wait(timeout=1.0) is True
+        reconnect_worker.join(timeout=1.0)
+        assert len(created) == 2  # only the owner starts the reconnect worker
+        assert reconnect_worker.ident != owner_thread_id
+        assert provider.poll(handle, limit=1) == ()  # owner consumes worker result
+        assert provider.poll(handle, limit=1) == ()
+        assert provider.source_epoch_reset_required(handle) is True
+        assert provider.acknowledge_source_epoch_reset(
+            handle, epoch="hub-epoch-r2"
+        ) is True
+        assert provider.close() is True
+    finally:
+        allow_stop_return.set()
+        recovery = provider._source_recovery
+        if recovery is not None and recovery.stop_worker is not None:
+            recovery.stop_worker.join(timeout=1.0)
+
+
+def test_ctp_market_provider_reconnect_startup_worker_times_out_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    created: list[_SyntheticMdClient] = []
+    startup_entered = threading.Event()
+    allow_startup = threading.Event()
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = _SyntheticMdClient(*args)
+        if created:
+            client.start_entered = startup_entered
+            client.allow_start = allow_startup
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=0.15,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    (old_client,) = created
+    exact_receipt = CtpNativeStopReceipt(
+        connection_generation=old_client.connection_generation,
+        join_required=False,
+        join_completed=True,
+        native_released=True,
+        thread_alive=False,
+        timed_out=False,
+    )
+    old_client.stop_receipts.append(exact_receipt)
+    owner_thread_id = threading.get_ident()
+    old_client.emit_disconnect()
+
+    try:
+        assert provider.poll(handle, limit=1) == ()
+        recovery = provider._source_recovery
+        assert recovery is not None
+        assert recovery.stop_done.wait(timeout=1.0) is True
+
+        # The exact old-client receipt is consumed before the one reconnect
+        # worker begins native startup. The owner poll only launches it.
+        started = time.monotonic()
+        assert provider.poll(handle, limit=1) == ()
+        assert time.monotonic() - started < 0.25
+        assert startup_entered.wait(timeout=1.0) is True
+        assert created[0] is old_client
+        new_client = created[1]
+        worker = recovery.reconnect_worker
+        assert worker is not None
+        assert worker.ident != owner_thread_id
+        assert recovery.stop_receipt is exact_receipt
+        assert recovery.reconnect_done.is_set() is False
+        assert recovery.reconnected_client is None
+        assert new_client.start_thread_id == worker.ident
+
+        # CtpMarketStream.connect holds its callback lock across start().
+        # Repeated owner polls and close must remain bounded while that native
+        # startup call is blocked, and neither may reset an epoch or open a
+        # second replacement client.
+        release_timer = threading.Timer(0.5, allow_startup.set)
+        release_timer.start()
+        for _ in range(3):
+            started = time.monotonic()
+            assert provider.poll(handle, limit=1) == ()
+            assert time.monotonic() - started < 0.25
+        started = time.monotonic()
+        assert provider.close() is False
+        assert time.monotonic() - started < 0.25
+        assert provider.source_epoch_reset_required(handle) is False
+        assert len(created) == 2
+        assert recovery.reconnect_worker is worker
+        assert recovery.reconnect_done.is_set() is False
+
+        # Once the bounded recovery deadline expires, owner polling must still
+        # return while native startup owns the stream lock. It fences provider
+        # publication and retains custody until the exact worker exits.
+        time.sleep(0.16)
+        started = time.monotonic()
+        assert provider.poll(handle, limit=1) == ()
+        assert time.monotonic() - started < 0.25
+        assert recovery.state == "failed"
+        assert recovery.reconnect_cancelled.is_set() is True
+        assert provider.source_epoch_reset_required(handle) is False
+        started = time.monotonic()
+        assert provider.close() is False
+        assert time.monotonic() - started < 0.25
+
+        allow_startup.set()
+        release_timer.cancel()
+        assert recovery.reconnect_done.wait(timeout=1.0) is True
+        worker.join(timeout=1.0)
+        assert not worker.is_alive()
+        assert recovery.reconnect_succeeded is True
+        assert recovery.reconnect_error is None
+        assert recovery.reconnected_client is new_client
+        assert handle.stream.quote_v2_service_fail_closed is True
+        assert handle.stream.get_quote_v2_service_ready_scope() is None
+        assert provider.source_epoch_reset_required(handle) is False
+        assert provider.poll(handle, limit=1) == ()
+        assert provider.close() is True
+    finally:
+        allow_startup.set()
+        if "release_timer" in locals():
+            release_timer.cancel()
+        recovery = provider._source_recovery
+        if recovery is not None:
+            if recovery.stop_worker is not None:
+                recovery.stop_worker.join(timeout=1.0)
+            if recovery.reconnect_worker is not None:
+                recovery.reconnect_worker.join(timeout=1.0)
+
+
+def test_ctp_market_provider_closes_constructor_failed_reconnect_from_exact_old_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    created: list[_SyntheticMdClient] = []
+    constructor_attempts = 0
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        nonlocal constructor_attempts
+        constructor_attempts += 1
+        if constructor_attempts > 1:
+            raise RuntimeError("synthetic replacement constructor failure")
+        client = _SyntheticMdClient(*args)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    (old_client,) = created
+    exact_receipt = CtpNativeStopReceipt(
+        connection_generation=old_client.connection_generation,
+        join_required=False,
+        join_completed=True,
+        native_released=True,
+        thread_alive=False,
+        timed_out=False,
+    )
+    old_client.stop_receipts.append(exact_receipt)
+    old_client.emit_disconnect()
+
+    assert provider.poll(handle, limit=1) == ()
+    recovery = provider._source_recovery
+    assert recovery is not None
+    assert recovery.stop_done.wait(timeout=1.0) is True
+    assert recovery.stop_receipt is exact_receipt
+
+    assert provider.poll(handle, limit=1) == ()
+    worker = recovery.reconnect_worker
+    assert worker is not None
+    assert recovery.reconnect_done.wait(timeout=1.0) is True
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert constructor_attempts == 2
+    assert created == [old_client]
+    assert recovery.reconnect_succeeded is False
+    assert recovery.reconnected_client is None
+
+    stream = handle.stream
+    assert stream._md_client is None
+    assert stream.state is live_ctp_feed.ConnectionState.ERROR
+    assert stream._quote_v2_service_recovery_stopped_client is old_client
+    assert stream._quote_v2_service_recovery_stopped_generation == exact_receipt.connection_generation
+    assert old_client.stop_wait_calls == 1
+
+    assert provider.poll(handle, limit=1) == ()
+    assert recovery.state == "failed"
+    assert provider.close() is True
+    assert stream.state is live_ctp_feed.ConnectionState.DISCONNECTED
+    assert stream._running is False
+    assert stream._md_client is None
+    assert old_client.stop_calls == 0
+    assert old_client.stop_wait_calls == 1
+    assert constructor_attempts == 2
+
+
+def test_ctp_market_provider_recovery_without_fresh_ack_tick_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    original_factory = _SyntheticMdClient
+    created: list[_SyntheticMdClient] = []
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = original_factory(*args)
+        if created:
+            client.emit_startup_readiness_tick = False
+            client.emit_tick_before_startup_acks = True
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=0.05,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    old_client = created[0]
+    old_client.emit_disconnect()
+    assert provider.poll(handle, limit=1) == ()
+    recovery = provider._source_recovery
+    assert recovery is not None
+    assert recovery.stop_done.wait(timeout=1.0) is True
+    assert provider.poll(handle, limit=1) == ()
+    assert recovery.reconnect_done.wait(timeout=1.0) is True
+    assert recovery.reconnect_worker is not None
+    recovery.reconnect_worker.join(timeout=1.0)
+    assert provider.poll(handle, limit=1) == ()
+    new_client = created[1]
+    assert provider.poll(handle, limit=1) == ()
+    assert handle.stream.get_quote_v2_service_ready_scope() is None
+    # The reconnect fake sent a tick only after all ACKs; with that fresh tick
+    # deliberately omitted, no new scope or Hub reset is authorized.
+    assert new_client.subscribed == ["IF2612"]
+    assert provider.source_epoch_reset_required(handle) is False
+    time.sleep(0.06)
+    assert provider.poll(handle, limit=1) == ()
+    assert handle.stream.quote_v2_service_fail_closed is True
+    assert handle.stream.get_quote_v2_service_ready_scope() is None
+    assert provider.describe_source(
+        handle,
+        key=handle.key,
+        generation=handle.generation,
+        stream_id=handle.key.stream_id,
+        epoch="hub-epoch-r1",
+    ) is None
+    assert provider.close() is True
 
 
 def test_ctp_market_provider_close_retries_failed_start_cleanup(

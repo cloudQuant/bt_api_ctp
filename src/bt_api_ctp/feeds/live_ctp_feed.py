@@ -1910,6 +1910,25 @@ class CtpMarketStream(BaseDataStream):
         # Hub shutdown can still release every handle and stop the session.
         self._quote_v2_additions_fenced_client_token: int | None = None
         self._has_connected_once = False
+        # The ServiceMarket adapter opts into a stricter readiness contract:
+        # exact current-client login, successful per-symbol CTP subscription
+        # responses, then a fresh tick. The general feed keeps its historical
+        # login-only diagnostic source scope unless this is enabled explicitly.
+        self._quote_v2_service_readiness_enabled = False
+        self._quote_v2_service_ready = False
+        self._quote_v2_service_fail_closed = False
+        self._quote_v2_service_recovery_required = False
+        self._quote_v2_service_reconnect_authorized = False
+        self._quote_v2_service_recovery_stopped_client: Any = None
+        self._quote_v2_service_recovery_stopped_generation: int | None = None
+        self._quote_v2_service_login_generation: int | None = None
+        self._quote_v2_service_required_symbols: set[str] = set()
+        self._quote_v2_service_acknowledged_symbols: set[str] = set()
+        self._quote_v2_service_symbol_request_ids: dict[str, int] = {}
+        self._quote_v2_service_completed_request_ids: set[int] = set()
+        self._quote_v2_service_pending_addition_symbols: set[str] = set()
+        self._quote_v2_service_pending_addition_request_ids: set[int] = set()
+        self._quote_v2_service_config_binding: tuple[Any, ...] | None = None
         self._register_quote_v2_topics(self.topics)
 
     @staticmethod
@@ -2098,6 +2117,261 @@ class CtpMarketStream(BaseDataStream):
                 return None
             return scope
 
+    def enable_quote_v2_service_readiness(self) -> bool:
+        """Enable the stricter readiness gate for the managed market provider."""
+
+        with self._md_callback_lock:
+            if (
+                self._has_connected_once
+                or self._md_client is not None
+                or self.state is not ConnectionState.DISCONNECTED
+                or not self._quote_v2_subscription_metadata
+            ):
+                return False
+            self._quote_v2_service_readiness_enabled = True
+            self._quote_v2_service_ready = False
+            self._quote_v2_service_fail_closed = False
+            self._quote_v2_service_recovery_required = False
+            self._quote_v2_service_login_generation = None
+            self._quote_v2_service_required_symbols = set(
+                self._quote_v2_subscription_metadata
+            )
+            self._quote_v2_service_acknowledged_symbols.clear()
+            self._quote_v2_service_symbol_request_ids.clear()
+            self._quote_v2_service_completed_request_ids.clear()
+            self._quote_v2_service_pending_addition_symbols.clear()
+            self._quote_v2_service_pending_addition_request_ids.clear()
+            self._quote_v2_service_config_binding = (
+                self.md_front,
+                self.broker_id,
+                self.user_id,
+                self.password,
+                self.ctp_env_name,
+                self.ctp_env_profile,
+                self.ctp_env_readiness,
+                self.asset_type,
+            )
+            return True
+
+    @property
+    def quote_v2_service_recovery_required(self) -> bool:
+        with self._md_callback_lock:
+            return self._quote_v2_service_recovery_required
+
+    @property
+    def quote_v2_service_fail_closed(self) -> bool:
+        with self._md_callback_lock:
+            return self._quote_v2_service_fail_closed
+
+    def quote_v2_service_binding_matches(self) -> bool:
+        """Check immutable configured source identity without exposing secrets."""
+
+        with self._md_callback_lock:
+            binding = self._quote_v2_service_config_binding
+            if type(binding) is not tuple or len(binding) != 8:
+                return False
+            return (
+                self.md_front == binding[0]
+                and self.broker_id == binding[1]
+                and self.user_id == binding[2]
+                and self.password is binding[3]
+                and self.ctp_env_name == binding[4]
+                and self.ctp_env_profile == binding[5]
+                and self.ctp_env_readiness == binding[6]
+                and self.asset_type == binding[7]
+            )
+
+    def get_quote_v2_service_ready_scope(self) -> CtpQuoteClockSourceScope | None:
+        """Return a source scope only after login, ACK set, and a fresh tick."""
+
+        with self._md_callback_lock:
+            if (
+                not self._quote_v2_service_readiness_enabled
+                or not self._quote_v2_service_ready
+                or self._quote_v2_service_fail_closed
+                or self._quote_v2_service_recovery_required
+                or not self._quote_v2_service_ack_set_complete_locked()
+            ):
+                return None
+            scope = self._managed_quote_clock_source_scope
+            if not _is_current_ctp_quote_clock_source_scope(
+                scope,
+                self,
+                require_authenticated=True,
+            ):
+                return None
+            return scope
+
+    def _quote_v2_service_ack_set_complete_locked(self) -> bool:
+        required = self._quote_v2_service_required_symbols
+        if not required or not required.issubset(self._quote_v2_service_acknowledged_symbols):
+            return False
+        request_ids = {
+            self._quote_v2_service_symbol_request_ids.get(symbol)
+            for symbol in required
+        }
+        return (
+            None not in request_ids
+            and request_ids.issubset(self._quote_v2_service_completed_request_ids)
+        )
+
+    def is_quote_v2_service_symbol_ready(self, symbol: str) -> bool:
+        with self._md_callback_lock:
+            return (
+                type(symbol) is str
+                and bool(symbol)
+                and self._quote_v2_service_readiness_enabled
+                and self._quote_v2_service_ready
+                and not self._quote_v2_service_fail_closed
+                and not self._quote_v2_service_recovery_required
+                and symbol in self._quote_v2_service_required_symbols
+                and symbol in self._quote_v2_service_acknowledged_symbols
+                and self._quote_v2_service_symbol_request_ids.get(symbol)
+                in self._quote_v2_service_completed_request_ids
+                and self.get_quote_v2_service_ready_scope() is not None
+            )
+
+    def detach_quote_v2_client_for_recovery(self, expected_client: Any) -> bool:
+        """Fence a disconnected client while retaining its exact native owner."""
+
+        with self._md_callback_lock:
+            if (
+                not self._quote_v2_service_readiness_enabled
+                or not self._quote_v2_service_recovery_required
+                or self._quote_v2_service_fail_closed
+                or expected_client is None
+                or self._md_client is not expected_client
+                or self._quote_v2_service_recovery_stopped_client is not None
+            ):
+                return False
+            try:
+                stopped_generation = getattr(expected_client, "connection_generation", None)
+            except Exception:
+                return False
+            if type(stopped_generation) is not int or stopped_generation <= 0:
+                return False
+            self._md_client_token += 1
+            self._managed_quote_v2_callback_capability = None
+            self._managed_quote_clock_source_scope = None
+            self._md_client = None
+            self._observed_client_generation = None
+            self._quote_v2_service_ready = False
+            self._quote_v2_service_login_generation = None
+            self._quote_v2_service_required_symbols = set(
+                self._quote_v2_subscription_metadata
+            )
+            self._quote_v2_service_acknowledged_symbols.clear()
+            self._quote_v2_service_symbol_request_ids.clear()
+            self._quote_v2_service_completed_request_ids.clear()
+            self._quote_v2_service_pending_addition_symbols.clear()
+            self._quote_v2_service_pending_addition_request_ids.clear()
+            self._quote_v2_service_recovery_stopped_client = expected_client
+            self._quote_v2_service_recovery_stopped_generation = stopped_generation
+            self.state = ConnectionState.DISCONNECTED
+            return True
+
+    def reconnect_quote_v2_after_confirmed_stop(
+        self,
+        expected_client: Any,
+        receipt: Any,
+    ) -> bool:
+        """Start one fresh MD client only after the exact old client is stopped."""
+
+        receipt_type = getattr(ctp_client, "CtpNativeStopReceipt", None)
+        with self._md_callback_lock:
+            old_generation = self._quote_v2_service_recovery_stopped_generation
+            if (
+                receipt_type is None
+                or type(receipt) is not receipt_type
+                or receipt.complete is not True
+                or receipt.native_released is not True
+                or receipt.thread_alive is not False
+                or receipt.timed_out is not False
+                or (receipt.join_required and receipt.join_completed is not True)
+                or type(old_generation) is not int
+                or type(receipt.connection_generation) is not int
+                or receipt.connection_generation != old_generation
+                or self._quote_v2_service_recovery_stopped_client is not expected_client
+                or self._quote_v2_service_recovery_required is not True
+                or self._quote_v2_service_fail_closed
+                or self._md_client is not None
+                or self.state is not ConnectionState.DISCONNECTED
+                or not self.quote_v2_service_binding_matches()
+            ):
+                return False
+            self._quote_v2_service_recovery_required = False
+            self._quote_v2_service_reconnect_authorized = True
+        try:
+            self.connect()
+        except Exception:
+            with self._md_callback_lock:
+                self._quote_v2_service_reconnect_authorized = False
+                if self._md_client is None:
+                    # MdClient construction failed before a replacement was
+                    # bound. Preserve the exact old-client stop identity so
+                    # the provider can close this wrapper without another
+                    # native start or stop attempt.
+                    self._quote_v2_service_recovery_stopped_client = expected_client
+                    self._quote_v2_service_recovery_stopped_generation = old_generation
+                    self._quote_v2_service_recovery_required = True
+                else:
+                    self._quote_v2_service_recovery_stopped_client = None
+                    self._quote_v2_service_recovery_stopped_generation = None
+                self._quote_v2_service_fail_closed = True
+                self._quote_v2_service_ready = False
+                self._managed_quote_clock_source_scope = None
+                self.state = ConnectionState.ERROR
+            return False
+        with self._md_callback_lock:
+            self._quote_v2_service_recovery_stopped_client = None
+            self._quote_v2_service_recovery_stopped_generation = None
+        return True
+
+    def normalize_quote_v2_reconnect_construction_failure(
+        self,
+        expected_client: Any,
+        receipt: Any,
+    ) -> bool:
+        """Close a failed replacement wrapper using its exact old-stop receipt.
+
+        This path is valid only when replacement construction failed before a
+        new client was bound. It stops the Python feed loop and normalizes the
+        stream through ``disconnect``; it never starts or stops a native client.
+        """
+
+        receipt_type = getattr(ctp_client, "CtpNativeStopReceipt", None)
+        with self._md_callback_lock:
+            stopped_generation = self._quote_v2_service_recovery_stopped_generation
+            if (
+                receipt_type is None
+                or type(receipt) is not receipt_type
+                or receipt.complete is not True
+                or receipt.native_released is not True
+                or receipt.thread_alive is not False
+                or receipt.timed_out is not False
+                or (receipt.join_required and receipt.join_completed is not True)
+                or type(stopped_generation) is not int
+                or type(receipt.connection_generation) is not int
+                or receipt.connection_generation != stopped_generation
+                or self._quote_v2_service_recovery_stopped_client is not expected_client
+                or getattr(expected_client, "connection_generation", None)
+                != stopped_generation
+                or self._quote_v2_service_recovery_required is not True
+                or self._quote_v2_service_reconnect_authorized is not False
+                or self._quote_v2_service_fail_closed is not True
+                or self._quote_v2_service_ready is not False
+                or self._md_client is not None
+                or self.state not in (ConnectionState.ERROR, ConnectionState.DISCONNECTED)
+            ):
+                return False
+            self._running = False
+            self.disconnect()
+            return (
+                self.state is ConnectionState.DISCONNECTED
+                and self._md_client is None
+                and self._running is False
+            )
+
     def _is_current_md_callback(self, client: Any, client_token: int | None) -> bool:
         """Return whether a callback still belongs to the active MD client."""
 
@@ -2144,6 +2418,22 @@ class CtpMarketStream(BaseDataStream):
 
     def connect(self):
         with self._md_callback_lock:
+            if self._quote_v2_service_readiness_enabled:
+                if self._has_connected_once and not self._quote_v2_service_reconnect_authorized:
+                    raise RuntimeError("ctp_market_reconnect_requires_confirmed_stop")
+                self._quote_v2_service_reconnect_authorized = False
+                self._quote_v2_service_recovery_required = False
+                self._quote_v2_service_fail_closed = False
+                self._quote_v2_service_ready = False
+                self._quote_v2_service_login_generation = None
+                self._quote_v2_service_required_symbols = set(
+                    self._quote_v2_subscription_metadata
+                )
+                self._quote_v2_service_acknowledged_symbols.clear()
+                self._quote_v2_service_symbol_request_ids.clear()
+                self._quote_v2_service_completed_request_ids.clear()
+                self._quote_v2_service_pending_addition_symbols.clear()
+                self._quote_v2_service_pending_addition_request_ids.clear()
             self.state = ConnectionState.CONNECTING
             self._md_client_token += 1
             # The previous MdClient's callbacks retain its old client/token
@@ -2182,6 +2472,21 @@ class CtpMarketStream(BaseDataStream):
                     )
                 )
             )
+            client.on_subscribe_response = (
+                lambda field, rsp_info, request_id, is_last, connection_generation,
+                _client=client,
+                _token=client_token,
+                _capability=callback_capability: self._on_subscribe_response(
+                    field,
+                    rsp_info,
+                    request_id,
+                    is_last,
+                    connection_generation,
+                    client=_client,
+                    client_token=_token,
+                    _managed_callback_capability=_capability,
+                )
+            )
             client.on_error = lambda rsp_info, _client=client, _token=client_token: self._on_error(
                 rsp_info, client=_client, client_token=_token
             )
@@ -2217,12 +2522,12 @@ class CtpMarketStream(BaseDataStream):
                 self._managed_quote_clock_source_scope = None
                 self.state = ConnectionState.ERROR
                 return
-            self.state = ConnectionState.AUTHENTICATED
             if (
                 client is None
                 or _managed_callback_capability is None
                 or _managed_callback_capability is not self._managed_quote_v2_callback_capability
             ):
+                self.state = ConnectionState.AUTHENTICATED
                 return
             try:
                 client_generation = getattr(client, "connection_generation", None)
@@ -2232,6 +2537,34 @@ class CtpMarketStream(BaseDataStream):
             if type(client_generation) is not int or client_generation <= 0:
                 self._managed_quote_clock_source_scope = None
                 return
+            if self._quote_v2_service_readiness_enabled:
+                if (
+                    self._quote_v2_service_recovery_required
+                    or self._quote_v2_service_fail_closed
+                ):
+                    self._managed_quote_clock_source_scope = None
+                    self.state = ConnectionState.ERROR
+                    return
+                previous_generation = self._quote_v2_service_login_generation
+                if previous_generation is not None and previous_generation != client_generation:
+                    self._quote_v2_service_recovery_required = True
+                    self._quote_v2_service_ready = False
+                    self._managed_quote_clock_source_scope = None
+                    self.state = ConnectionState.ERROR
+                    return
+                self._quote_v2_service_login_generation = client_generation
+                self._observed_client_generation = client_generation
+                for symbol, retired_client_token in tuple(
+                    self._retired_quote_v2_subscriptions.items()
+                ):
+                    if retired_client_token != int(client_token or 0):
+                        self._retired_quote_v2_subscriptions.pop(symbol, None)
+                fenced_token = self._quote_v2_additions_fenced_client_token
+                if fenced_token is not None and fenced_token != int(client_token or 0):
+                    self._quote_v2_additions_fenced_client_token = None
+                self.state = ConnectionState.AUTHENTICATED
+                return
+            self.state = ConnectionState.AUTHENTICATED
             if self._observed_client_generation is None:
                 self._observed_client_generation = client_generation
             elif client_generation != self._observed_client_generation:
@@ -2256,6 +2589,89 @@ class CtpMarketStream(BaseDataStream):
                 fenced_token = self._quote_v2_additions_fenced_client_token
                 if fenced_token is not None and fenced_token != int(client_token or 0):
                     self._quote_v2_additions_fenced_client_token = None
+
+    def _on_subscribe_response(
+        self,
+        specific_instrument,
+        rsp_info,
+        request_id,
+        is_last,
+        connection_generation,
+        *,
+        client: Any,
+        client_token: int,
+        _managed_callback_capability: object,
+    ) -> None:
+        with self._md_callback_lock:
+            if (
+                not self._quote_v2_service_readiness_enabled
+                or not self._is_current_md_callback(client, client_token)
+                or _managed_callback_capability is not self._managed_quote_v2_callback_capability
+            ):
+                return
+            try:
+                active_generation = getattr(client, "connection_generation", None)
+            except Exception:
+                active_generation = None
+            if (
+                self._quote_v2_service_recovery_required
+                or self._quote_v2_service_fail_closed
+                or self.state is not ConnectionState.AUTHENTICATED
+                or type(connection_generation) is not int
+                or connection_generation <= 0
+                or connection_generation != self._quote_v2_service_login_generation
+                or type(active_generation) is not int
+                or active_generation <= 0
+                or connection_generation != active_generation
+                or type(is_last) is not bool
+            ):
+                self._quote_v2_service_fail_closed = True
+                self._managed_quote_clock_source_scope = None
+                self._quote_v2_service_ready = False
+                self.state = ConnectionState.ERROR
+                return
+            if type(request_id) is not int or request_id < 0:
+                self._quote_v2_service_fail_closed = True
+                self._managed_quote_clock_source_scope = None
+                self._quote_v2_service_ready = False
+                self.state = ConnectionState.ERROR
+                return
+            instrument = _ctp_field_to_dict(specific_instrument).get("InstrumentID")
+            error_id = _ctp_field_to_dict(rsp_info).get("ErrorID")
+            if (
+                type(instrument) is not str
+                or not instrument
+                or instrument not in self._quote_v2_subscription_metadata
+                or instrument not in self._quote_v2_service_required_symbols
+                or type(error_id) is not int
+                or error_id != 0
+                or instrument in self._quote_v2_service_acknowledged_symbols
+            ):
+                self._quote_v2_service_fail_closed = True
+                self._managed_quote_clock_source_scope = None
+                self._quote_v2_service_ready = False
+                self.state = ConnectionState.ERROR
+                return
+            reopen_request = (
+                instrument in self._quote_v2_service_pending_addition_symbols
+                and request_id
+                not in self._quote_v2_service_pending_addition_request_ids
+            )
+            if request_id in self._quote_v2_service_completed_request_ids and not reopen_request:
+                self._quote_v2_service_fail_closed = True
+                self._managed_quote_clock_source_scope = None
+                self._quote_v2_service_ready = False
+                self.state = ConnectionState.ERROR
+                return
+            if reopen_request:
+                self._quote_v2_service_completed_request_ids.discard(request_id)
+                self._quote_v2_service_pending_addition_request_ids.add(request_id)
+            if instrument in self._quote_v2_service_pending_addition_symbols:
+                self._quote_v2_service_pending_addition_symbols.discard(instrument)
+            self._quote_v2_service_acknowledged_symbols.add(instrument)
+            self._quote_v2_service_symbol_request_ids[instrument] = request_id
+            if is_last:
+                self._quote_v2_service_completed_request_ids.add(request_id)
 
     def _on_tick(
         self,
@@ -2290,6 +2706,63 @@ class CtpMarketStream(BaseDataStream):
 
             tick_dict = _ctp_field_to_dict(tick_field)
             symbol = str(tick_dict.get("InstrumentID", "") or "")
+            if native_managed_callback and self._quote_v2_service_readiness_enabled:
+                try:
+                    service_client_generation = getattr(client, "connection_generation", None)
+                except Exception:
+                    service_client_generation = None
+                if (
+                    self._quote_v2_service_fail_closed
+                    or self._quote_v2_service_recovery_required
+                ):
+                    return
+                if (
+                    type(service_client_generation) is not int
+                    or service_client_generation <= 0
+                    or service_client_generation != self._quote_v2_service_login_generation
+                ):
+                    self._quote_v2_service_recovery_required = True
+                    self._quote_v2_service_ready = False
+                    self._managed_quote_clock_source_scope = None
+                    self.state = ConnectionState.ERROR
+                    return
+                if self.state is not ConnectionState.AUTHENTICATED:
+                    return
+                if symbol not in self._quote_v2_subscription_metadata:
+                    if symbol in self._retired_quote_v2_subscriptions:
+                        return
+                    self._quote_v2_service_fail_closed = True
+                    self._managed_quote_clock_source_scope = None
+                    self._quote_v2_service_ready = False
+                    self.state = ConnectionState.ERROR
+                    return
+                if (
+                    symbol not in self._quote_v2_service_acknowledged_symbols
+                    or self._quote_v2_service_symbol_request_ids.get(symbol)
+                    not in self._quote_v2_service_completed_request_ids
+                ):
+                    return
+                if (
+                    not self._quote_v2_service_ready
+                    and not self._quote_v2_service_ack_set_complete_locked()
+                ):
+                    return
+                if not self._quote_v2_service_ready:
+                    scope = self._issue_quote_clock_source_scope(
+                        client=client,
+                        client_token=int(client_token or 0),
+                        client_generation=service_client_generation,
+                        callback_capability=_managed_callback_capability,
+                    )
+                    if scope is None:
+                        self._quote_v2_service_fail_closed = True
+                        self.state = ConnectionState.ERROR
+                        return
+                    self._quote_v2_service_ready = True
+                    # This tick proves the new source is flowing after the
+                    # complete ACK set. Discard it; a subsequent callback is
+                    # the first observation eligible for the public queue.
+                    return
             try:
                 client_generation = int(getattr(client, "connection_generation", 0) or 0)
             except (TypeError, ValueError):
@@ -2375,6 +2848,9 @@ class CtpMarketStream(BaseDataStream):
             if client is not None and not self._is_current_md_callback(client, client_token):
                 return
             self._managed_quote_clock_source_scope = None
+            if self._quote_v2_service_readiness_enabled:
+                self._quote_v2_service_fail_closed = True
+                self._quote_v2_service_ready = False
             self.state = ConnectionState.ERROR
 
     def _on_disconnect(
@@ -2396,6 +2872,17 @@ class CtpMarketStream(BaseDataStream):
             # connection. Revoke this session as soon as disconnect is
             # observed, before that generation change becomes visible.
             self._managed_quote_clock_source_scope = None
+            self._quote_v2_service_ready = False
+            if self._quote_v2_service_readiness_enabled and not self._quote_v2_service_fail_closed:
+                self._quote_v2_service_recovery_required = True
+                self._quote_v2_service_required_symbols = set(
+                    self._quote_v2_subscription_metadata
+                )
+                self._quote_v2_service_acknowledged_symbols.clear()
+                self._quote_v2_service_symbol_request_ids.clear()
+                self._quote_v2_service_completed_request_ids.clear()
+                self._quote_v2_service_pending_addition_symbols.clear()
+                self._quote_v2_service_pending_addition_request_ids.clear()
             self.state = ConnectionState.ERROR
 
     def disconnect(self):
@@ -2408,6 +2895,12 @@ class CtpMarketStream(BaseDataStream):
             self._managed_quote_clock_source_scope = None
             self._md_client = None
             self._observed_client_generation = None
+            self._quote_v2_service_ready = False
+            self._quote_v2_service_acknowledged_symbols.clear()
+            self._quote_v2_service_symbol_request_ids.clear()
+            self._quote_v2_service_completed_request_ids.clear()
+            self._quote_v2_service_pending_addition_symbols.clear()
+            self._quote_v2_service_pending_addition_request_ids.clear()
             self.state = ConnectionState.DISCONNECTED
         if client is not None:
             client.stop()
@@ -2416,6 +2909,18 @@ class CtpMarketStream(BaseDataStream):
         with self._md_callback_lock:
             previous = set(self._quote_v2_subscription_metadata)
             instruments = self._register_quote_v2_topics(topics)
+            if self._quote_v2_service_readiness_enabled:
+                if (
+                    any(instrument not in previous for instrument in instruments)
+                    and not self._quote_v2_service_pending_addition_symbols
+                ):
+                    self._quote_v2_service_pending_addition_request_ids.clear()
+                for instrument in instruments:
+                    if instrument not in previous:
+                        self._quote_v2_service_required_symbols.add(instrument)
+                        self._quote_v2_service_acknowledged_symbols.discard(instrument)
+                        self._quote_v2_service_symbol_request_ids.pop(instrument, None)
+                        self._quote_v2_service_pending_addition_symbols.add(instrument)
             client = self._md_client
             all_instruments = list(self._quote_v2_subscription_metadata)
             additions = tuple(item for item in instruments if item not in previous)
@@ -2454,6 +2959,9 @@ class CtpMarketStream(BaseDataStream):
             self._managed_quote_clock_source_scope = None
             self._managed_quote_v2_callback_capability = None
             self._managed_quote_v2_subscription_failed = True
+            if self._quote_v2_service_readiness_enabled:
+                self._quote_v2_service_fail_closed = True
+                self._quote_v2_service_ready = False
             self.state = ConnectionState.ERROR
 
     def unsubscribe_topics(self, topics):
@@ -2477,6 +2985,10 @@ class CtpMarketStream(BaseDataStream):
                 raise RuntimeError("ctp_md_client_changed_during_unsubscribe")
             for symbol in removals:
                 self._quote_v2_subscription_metadata.pop(symbol, None)
+                self._quote_v2_service_acknowledged_symbols.discard(symbol)
+                self._quote_v2_service_symbol_request_ids.pop(symbol, None)
+                self._quote_v2_service_required_symbols.discard(symbol)
+                self._quote_v2_service_pending_addition_symbols.discard(symbol)
                 if (
                     symbol not in self._retired_quote_v2_subscriptions
                     and len(self._retired_quote_v2_subscriptions)
