@@ -30,7 +30,11 @@ from bt_api_base.account_protocol import (
 )
 from bt_api_base.market_protocol import MarketInstrumentKey
 
-from bt_api_ctp.ctp.client import CtpNativeStopReceipt
+from bt_api_ctp.ctp.client import (
+    CtpNativeStartupAttempt,
+    CtpNativeStartupStopReceipt,
+    CtpNativeStopReceipt,
+)
 from bt_api_ctp.query import (
     _QUERY_EVIDENCE_MAX_TTL_SECONDS,
     _QUERY_MONOTONIC_CLOCK_DOMAIN,
@@ -143,6 +147,8 @@ class CtpReadOnlyAccountSessionProvider:
         self._native_owner_created: bool | None = False
         self._native_connection_generation: int | None = None
         self._last_native_stop_receipt: CtpNativeStopReceipt | None = None
+        self._startup_attempt: CtpNativeStartupAttempt | None = None
+        self._last_native_startup_stop_receipt: CtpNativeStartupStopReceipt | None = None
 
     @property
     def native_owner_created(self) -> bool:
@@ -189,6 +195,30 @@ class CtpReadOnlyAccountSessionProvider:
             raise CtpAccountSessionProviderError("NATIVE_CUSTODY_UNCERTAIN")
         return receipt
 
+    @property
+    def native_startup_attempt(self) -> CtpNativeStartupAttempt | None:
+        """Return only the immutable attempt captured from this provider's trader."""
+
+        self._check_owner(allow_unbound=True)
+        return self._startup_attempt
+
+    @property
+    def last_native_startup_stop_receipt(self) -> CtpNativeStartupStopReceipt | None:
+        """Return only a complete generation-zero cleanup proof for that attempt."""
+
+        self._check_owner(allow_unbound=True)
+        receipt = self._last_native_startup_stop_receipt
+        attempt = self._startup_attempt
+        if receipt is not None and (
+            type(receipt) is not CtpNativeStartupStopReceipt
+            or type(attempt) is not CtpNativeStartupAttempt
+            or receipt.api_attempt_id != attempt.api_attempt_id
+            or receipt._client_binding is not attempt._client_binding
+            or receipt.complete is not True
+        ):
+            raise CtpAccountSessionProviderError("NATIVE_CUSTODY_UNCERTAIN")
+        return receipt
+
     def connect(self, *, account_key: Any, generation: str, timeout: float) -> None:
         if type(account_key) is not AccountKey:
             raise CtpAccountSessionProviderError("INVALID_ACCOUNT_KEY")
@@ -215,6 +245,8 @@ class CtpReadOnlyAccountSessionProvider:
         self._native_owner_created = False
         self._native_connection_generation = None
         self._last_native_stop_receipt = None
+        self._startup_attempt = None
+        self._last_native_startup_stop_receipt = None
         try:
             feed = self._request_feed_factory()
         except Exception:
@@ -254,20 +286,36 @@ class CtpReadOnlyAccountSessionProvider:
             self._native_owner_created = True
             self._native_connection_generation = scope.connection_generation
         except CtpAccountSessionProviderError:
-            self._native_owner_created = (
-                False if _is_exact_prestart_ctp_request_feed(feed) else None
-            )
+            self._capture_native_startup_attempt(feed)
+            self._native_owner_created = self._startup_owner_state_after_failure(feed)
             raise
         except Exception:
-            self._native_owner_created = (
-                False if _is_exact_prestart_ctp_request_feed(feed) else None
-            )
+            self._capture_native_startup_attempt(feed)
+            self._native_owner_created = self._startup_owner_state_after_failure(feed)
             raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED") from None
         except BaseException:
-            self._native_owner_created = (
-                False if _is_exact_prestart_ctp_request_feed(feed) else None
-            )
+            self._capture_native_startup_attempt(feed)
+            self._native_owner_created = self._startup_owner_state_after_failure(feed)
             raise
+
+    def _startup_owner_state_after_failure(self, feed: object) -> bool | None:
+        attempt = self._startup_attempt
+        if type(attempt) is CtpNativeStartupAttempt:
+            if attempt.phase == "preflight_no_owner" and attempt.api_attempt_id is None:
+                return False
+            if attempt.phase in {"factory_uncertain", "api_created"}:
+                return None
+            return None
+        return False if _is_exact_prestart_ctp_request_feed(feed) else None
+
+    def _capture_native_startup_attempt(self, feed: object) -> None:
+        try:
+            trader = getattr(feed, "_trader", None)
+            attempt = getattr(trader, "native_startup_attempt", None)
+        except BaseException:
+            return
+        if type(attempt) is CtpNativeStartupAttempt:
+            self._startup_attempt = attempt
 
     def read_account(self, *, generation: str, timeout: float) -> AccountObservation:
         self._check_owner()
@@ -356,9 +404,17 @@ class CtpReadOnlyAccountSessionProvider:
             if self._native_owner_created is True:
                 # A previously confirmed stop is idempotent. A missing
                 # receipt for a claimed owner is not enough to release it.
-                if self.last_native_stop_receipt is None:
+                if self.last_native_stop_receipt is not None:
+                    return True
+                try:
+                    startup_receipt = self.last_native_startup_stop_receipt
+                except CtpAccountSessionProviderError:
                     return False
-                return True
+                return (
+                    type(startup_receipt) is CtpNativeStartupStopReceipt
+                    and startup_receipt.complete is True
+                    and startup_receipt.outcome == "api_created_released"
+                )
             if (
                 self._native_connection_generation is not None
                 or self._last_native_stop_receipt is not None
@@ -370,13 +426,57 @@ class CtpReadOnlyAccountSessionProvider:
             self._service_generation = None
             self._account_key = None
             return True
-        stop_and_wait = getattr(trader, "stop_and_wait", None)
+        attempt = self._startup_attempt
+        if type(attempt) is CtpNativeStartupAttempt:
+            # Generation-zero cleanup is an additive startup-specific API.
+            # Keep the established stop_and_wait() return contract for every
+            # existing active-session caller.
+            stop_and_wait = getattr(trader, "stop_startup_and_wait", None)
+        else:
+            stop_and_wait = getattr(trader, "stop_and_wait", None)
         if not callable(stop_and_wait):
             return False
         try:
             receipt = stop_and_wait(timeout=self._stop_timeout_seconds)
         except Exception:
             return False
+        if type(receipt) is CtpNativeStartupStopReceipt:
+            if (
+                type(attempt) is not CtpNativeStartupAttempt
+                or receipt.api_attempt_id != attempt.api_attempt_id
+                or receipt._client_binding is not attempt._client_binding
+                or receipt.complete is not True
+            ):
+                return False
+            if (
+                receipt.outcome == "preflight_no_owner"
+                and attempt.phase == "preflight_no_owner"
+                and attempt.api_attempt_id is None
+            ):
+                self._native_owner_created = False
+                self._native_connection_generation = None
+            elif (
+                receipt.outcome == "api_created_released"
+                and attempt.phase == "api_created"
+                and type(attempt.api_attempt_id) is str
+                and attempt.api_attempt_id == receipt.api_attempt_id
+            ):
+                # Startup cleanup closes an API attempt, not an active session;
+                # keep its zero connection generation out of the active slot.
+                self._native_owner_created = True
+                self._native_connection_generation = None
+            else:
+                return False
+            self._last_native_startup_stop_receipt = receipt
+            if feed is not None and getattr(feed, "_trader", None) is trader:
+                feed._trader = None
+                feed._connected = False
+            self._trader = None
+            self._request_feed = None
+            self._session_scope = None
+            self._service_generation = None
+            self._account_key = None
+            return True
         scope_generation = (
             self._session_scope.connection_generation
             if type(self._session_scope) is _QuerySessionScope

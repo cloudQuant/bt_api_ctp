@@ -267,6 +267,71 @@ class CtpNativeStopReceipt:
         )
 
 
+@dataclass(frozen=True)
+class CtpNativeStartupAttempt:
+    """Finite identity and phase for one failed-start API factory attempt."""
+
+    api_attempt_id: str | None
+    phase: Literal["preflight_no_owner", "factory_uncertain", "api_created"]
+    _client_binding: object = dataclass_field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class CtpNativeStartupStopReceipt:
+    """A generation-zero startup cleanup result, separate from session stops."""
+
+    api_attempt_id: str | None
+    outcome: Literal[
+        "preflight_no_owner",
+        "factory_uncertain",
+        "api_created_unconfirmed",
+        "api_created_released",
+    ]
+    connection_generation: int
+    native_released: bool | None
+    join_required: bool
+    join_completed: bool
+    thread_alive: bool | None
+    timed_out: bool
+    _client_binding: object = dataclass_field(repr=False, compare=False)
+
+    @property
+    def complete(self) -> bool:
+        if type(self.connection_generation) is not int or self.connection_generation != 0:
+            return False
+        if (
+            type(self.outcome) is not str
+            or type(self.api_attempt_id) not in (str, type(None))
+            or type(self.native_released) not in (bool, type(None))
+            or type(self.join_required) is not bool
+            or type(self.join_completed) is not bool
+            or type(self.thread_alive) not in (bool, type(None))
+            or type(self.timed_out) is not bool
+            or type(self._client_binding) is not object
+        ):
+            return False
+        if self.outcome == "preflight_no_owner":
+            return (
+                self.api_attempt_id is None
+                and self.native_released is None
+                and self.join_required is False
+                and self.join_completed is True
+                and self.thread_alive is False
+                and self.timed_out is False
+            )
+        if self.outcome == "api_created_released":
+            return (
+                type(self.api_attempt_id) is str
+                and re.fullmatch(r"[0-9a-f]{32}", self.api_attempt_id, re.ASCII) is not None
+                and type(self.native_released) is bool
+                and self.native_released is True
+                and (self.join_required is False or self.join_completed is True)
+                and self.thread_alive is False
+                and self.timed_out is False
+            )
+        return False
+
+
 class _CtpNativeJoinTracker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -4674,6 +4739,13 @@ class TraderClient:
         self._last_stop_join_required = False
         self._last_stop_join_thread: threading.Thread | None = None
         self._last_stop_join_tracker: _CtpNativeJoinTracker | None = None
+        self._startup_api_attempt_id: str | None = None
+        self._startup_api_phase: Literal[
+            "preflight_no_owner", "factory_uncertain", "api_created"
+        ] = "preflight_no_owner"
+        self._startup_native_api: Any | None = None
+        self._startup_api_client_binding = object()
+        self._startup_base_connection_generation = 0
         self._lifecycle_generation = 0
         self._starting_generation: int | None = None
         self._startup_cancel_event = threading.Event()
@@ -8561,6 +8633,16 @@ class TraderClient:
                 raise RuntimeError("ctp_trader_client_native_join_pending")
             if self._api is not None or self._starting_generation is not None:
                 raise RuntimeError("ctp_trader_client_already_started")
+            if self._startup_api_phase == "factory_uncertain":
+                raise RuntimeError("ctp_trader_client_startup_factory_uncertain")
+            if self._startup_api_phase == "api_created":
+                startup_api = self._startup_native_api
+                if (
+                    startup_api is None
+                    or self._last_stopped_native_api is not startup_api
+                    or not _ctp_native_api_release_confirmed(startup_api)
+                ):
+                    raise RuntimeError("ctp_trader_client_startup_api_custody_unresolved")
             self._lifecycle_generation += 1
             generation = self._lifecycle_generation
             self._starting_generation = generation
@@ -8652,6 +8734,12 @@ class TraderClient:
                 self._pending_native_join_api_ids.add(id(api))
                 _retain_live_ctp_native_session(api, spi, self._thread)
                 observe_join = True
+                # A Join observer is installed below for this exact retained
+                # API.  Record the same bounded join facts the normal stop path
+                # records so a later receipt cannot report join_required=False.
+                self._last_stop_join_required = True
+                self._last_stop_join_thread = self._thread
+                self._last_stop_join_tracker = self._native_join_tracker
             else:
                 self._pending_native_join_api_ids.add(id(api))
                 release_now = True
@@ -8661,6 +8749,10 @@ class TraderClient:
             self._native_init_started = False
             self._starting_generation = None
             self._lifecycle_generation += 1
+            # Record this exact API as the one startup cleanup stopped so a
+            # retry can pass the custody guard once Release is confirmed.
+            self._last_stopped_native_api = api
+            self._last_stopped_connection_generation = self._connection_generation
 
         if observe_join:
             with suppress(Exception):
@@ -8743,28 +8835,72 @@ class TraderClient:
         _check_native_module()
         generation = self._reserve_start_generation()
         with self._query_state_lock:
+            # A fresh start is admitted only after the previous exact API has
+            # left native custody. Reset the single-attempt startup projection
+            # only after that reservation succeeds.
+            self._startup_api_attempt_id = None
+            self._startup_api_phase = "preflight_no_owner"
+            self._startup_native_api = None
+            self._startup_base_connection_generation = self._connection_generation
+            self._last_stopped_native_api = None
+            self._last_stopped_connection_generation = 0
+            self._last_stop_join_required = False
+            self._last_stop_join_thread = None
+            self._last_stop_join_tracker = None
+        with self._query_state_lock:
             self._require_bound_identity_locked(require_active_front=False)
         flow = _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
         api = None
+        api_attempt_id = uuid.uuid4().hex
+        with self._query_state_lock:
+            self._startup_api_attempt_id = api_attempt_id
+            self._startup_api_phase = "factory_uncertain"
         try:
             api = CThostFtdcTraderApi.CreateFtdcTraderApi(flow)
+            if api is None:
+                # A factory that was entered but returned no usable object is
+                # not proof that no native allocation occurred.
+                raise RuntimeError("ctp_native_api_factory_returned_no_api")
+            with self._query_state_lock:
+                self._startup_native_api = api
+                self._startup_api_phase = "api_created"
+                self._native_init_started = False
+                self._join_active = False
+                self._native_join_tracker = _CtpNativeJoinTracker()
             _register_ctp_native_api(api)
         except BaseException:
             with self._query_state_lock:
                 self._poison_callback_ingress_locked("source_gap")
             if api is not None:
                 try:
-                    _release_ctp_native_api_immediately(
-                        api,
-                        None,
-                        state_lock=self._query_state_lock,
-                        pending_api_ids=self._pending_native_join_api_ids,
-                    )
+                    self._stop_uninitialized_native_api(api, spi=None)
                 except BaseException:
                     pass
             self._clear_start_reservation(generation)
             raise
-        spi = _TraderSpi(self, api)
+        with self._query_state_lock:
+            cancelled_before_spi = (
+                self._starting_generation != generation
+                or self._lifecycle_generation != generation
+                or self._startup_cancel_event.is_set()
+            )
+        if cancelled_before_spi:
+            with self._query_state_lock:
+                self._poison_callback_ingress_locked("owner_stop")
+            self._stop_uninitialized_native_api(api, spi=None)
+            self._clear_start_reservation(generation)
+            return
+        try:
+            spi = _TraderSpi(self, api)
+        except BaseException:
+            with self._query_state_lock:
+                self._poison_callback_ingress_locked("source_gap")
+            try:
+                self._stop_uninitialized_native_api(api, spi=None)
+            except BaseException:
+                pass
+            self._clear_start_reservation(generation)
+            raise
         with self._query_state_lock:
             if (
                 self._starting_generation != generation
@@ -8774,6 +8910,9 @@ class TraderClient:
                 cancelled_before_registration = True
             else:
                 cancelled_before_registration = False
+                # Keep the exact API in startup custody while SPI construction
+                # runs. Publishing it on ``_api`` here would let a concurrent
+                # stop call Release while the constructor is still using it.
                 self._api = api
                 self._spi = spi
                 spi._native_api_generation = self._native_api_generation
@@ -8806,12 +8945,7 @@ class TraderClient:
         if cancelled_before_registration:
             with self._query_state_lock:
                 self._poison_callback_ingress_locked("owner_stop")
-            _release_ctp_native_api_immediately(
-                api,
-                spi,
-                state_lock=self._query_state_lock,
-                pending_api_ids=self._pending_native_join_api_ids,
-            )
+            self._stop_uninitialized_native_api(api, spi=spi)
             return
 
         init_invoked = False
@@ -10357,6 +10491,30 @@ class TraderClient:
         """Return the stable public view of the current native trader API."""
         return self._api_view
 
+    def _stop_uninitialized_native_api(self, api: Any, *, spi: Any | None) -> bool:
+        """Publish only after construction ends, then use normal checked cleanup."""
+
+        with self._query_state_lock:
+            current_api = self._api
+            publish = current_api is None or current_api is api
+            if publish:
+                self._api = api
+                if spi is not None:
+                    self._spi = spi
+                self._native_init_started = False
+                self._join_active = False
+        if publish:
+            return self._stop_native_session(expected_api=api)
+        # A different API is already the live session.  The exact API passed
+        # here was never published and cannot be the live one, so release it
+        # independently instead of leaking it behind the live-session guard.
+        return _release_ctp_native_api_immediately(
+            api,
+            spi,
+            state_lock=self._query_state_lock,
+            pending_api_ids=self._pending_native_join_api_ids,
+        )
+
     def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP trader session without freeing a live SWIG director.
 
@@ -10461,14 +10619,227 @@ class TraderClient:
     def stop(self):
         self._stop_native_session()
 
-    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
-        """Stop this trader API and return a bounded lifecycle receipt."""
+    @property
+    def native_startup_attempt(self) -> CtpNativeStartupAttempt:
+        """Return the finite API-factory phase for this exact client."""
 
+        with self._query_state_lock:
+            return CtpNativeStartupAttempt(
+                self._startup_api_attempt_id,
+                self._startup_api_phase,
+                self._startup_api_client_binding,
+            )
+
+    def stop_and_wait(self, timeout: float = 2.0) -> CtpNativeStopReceipt:
+        """Preserve the established active-session stop receipt contract."""
+
+        if type(timeout) not in (int, float):
+            raise ValueError("invalid CTP native stop timeout")
+        try:
+            timeout_seconds = float(timeout)
+        except (OverflowError, ValueError):
+            raise ValueError("invalid CTP native stop timeout") from None
+        if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+            raise ValueError("invalid CTP native stop timeout")
+
+        with self._query_state_lock:
+            phase = self._startup_api_phase
+            startup_api = self._startup_native_api
+            current_api = self._api
+            stopped_api = self._last_stopped_native_api
+            connection_generation = self._connection_generation
+            base_generation = self._startup_base_connection_generation
+            startup_custody_unresolved = phase == "factory_uncertain" or (
+                phase == "api_created"
+                and startup_api is not None
+                and current_api is not startup_api
+                # A positive-generation session was published and served
+                # traffic; a failed Release there must keep the normal retry
+                # receipt.  Only an attempt that never advanced the connection
+                # generation is still startup custody.
+                and connection_generation == base_generation
+                and (
+                    stopped_api is not startup_api
+                    or not _ctp_native_api_release_confirmed(startup_api)
+                )
+            )
+        if startup_custody_unresolved:
+            # Keep this legacy method's concrete return type, but never let an
+            # API hidden in startup custody look like a completed no-owner
+            # stop merely because it has not been published as ``_api`` yet.
+            # The stop call also cancels the reserved generation; startup code
+            # owns release once any in-progress SPI constructor has returned.
+            self._stop_native_session()
+            return CtpNativeStopReceipt(
+                connection_generation=connection_generation,
+                join_required=False,
+                join_completed=False,
+                native_released=False,
+                thread_alive=None,
+                timed_out=False,
+            )
         return _make_ctp_native_stop_receipt(
             self,
             timeout,
             lock=self._query_state_lock,
             api_attribute="_api",
+        )
+
+    def stop_startup_and_wait(
+        self, timeout: float = 2.0
+    ) -> CtpNativeStopReceipt | CtpNativeStartupStopReceipt:
+        """Stop a failed startup attempt with separate generation-zero proof."""
+
+        if type(timeout) not in (int, float):
+            raise ValueError("invalid CTP native stop timeout")
+        try:
+            timeout_seconds = float(timeout)
+        except (OverflowError, ValueError):
+            raise ValueError("invalid CTP native stop timeout") from None
+        if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+            raise ValueError("invalid CTP native stop timeout")
+
+        with self._query_state_lock:
+            attempt_id = self._startup_api_attempt_id
+            phase = self._startup_api_phase
+            created_api = self._startup_native_api
+            stopped_api = self._last_stopped_native_api
+            current_api = self._api
+            base_generation = self._startup_base_connection_generation
+            active_session_api = self._session_native_api
+            starting_generation = self._starting_generation
+            binding = self._startup_api_client_binding
+        startup_custody_unresolved = (
+            phase == "factory_uncertain"
+            or (phase == "preflight_no_owner" and starting_generation is not None)
+            or (
+                phase == "api_created"
+                and created_api is not None
+                and current_api is not created_api
+                and (
+                    stopped_api is not created_api
+                    or not _ctp_native_api_release_confirmed(created_api)
+                )
+            )
+        )
+        if startup_custody_unresolved:
+            # Do not release an API while its factory/SPI construction path
+            # owns it.  Invalidate that startup reservation now so it cannot
+            # progress to registration or Init after construction completes.
+            self._stop_native_session()
+            with self._query_state_lock:
+                attempt_id = self._startup_api_attempt_id
+                phase = self._startup_api_phase
+                created_api = self._startup_native_api
+                stopped_api = self._last_stopped_native_api
+                current_api = self._api
+                starting_generation = self._starting_generation
+                binding = self._startup_api_client_binding
+        if phase == "preflight_no_owner" and starting_generation is not None:
+            # A start reservation is still in flight even after the stop
+            # fence; a no-owner receipt now could race a factory attempt.
+            return CtpNativeStartupStopReceipt(
+                api_attempt_id=None,
+                outcome="factory_uncertain",
+                connection_generation=0,
+                native_released=None,
+                join_required=False,
+                join_completed=False,
+                thread_alive=None,
+                timed_out=False,
+                _client_binding=binding,
+            )
+        if (
+            phase == "preflight_no_owner"
+            and attempt_id is None
+            and created_api is None
+            and current_api is None
+            and stopped_api is None
+            and starting_generation is None
+        ):
+            return CtpNativeStartupStopReceipt(
+                api_attempt_id=None,
+                outcome="preflight_no_owner",
+                connection_generation=0,
+                native_released=None,
+                join_required=False,
+                join_completed=True,
+                thread_alive=False,
+                timed_out=False,
+                _client_binding=binding,
+            )
+        if phase == "factory_uncertain":
+            return CtpNativeStartupStopReceipt(
+                api_attempt_id=attempt_id,
+                outcome="factory_uncertain",
+                connection_generation=0,
+                native_released=None,
+                join_required=False,
+                join_completed=False,
+                thread_alive=None,
+                timed_out=False,
+                _client_binding=binding,
+            )
+        if (
+            phase == "api_created"
+            and created_api is not None
+            and current_api is not created_api
+            and (
+                stopped_api is not created_api
+                or not _ctp_native_api_release_confirmed(created_api)
+            )
+        ):
+            # SPI construction still owns the exact API reference.  It is not
+            # yet published for normal stop, so report uncertainty and leave
+            # release to the start path after construction finishes.
+            return CtpNativeStartupStopReceipt(
+                api_attempt_id=attempt_id,
+                outcome="api_created_unconfirmed",
+                connection_generation=0,
+                native_released=False,
+                join_required=False,
+                join_completed=False,
+                thread_alive=None,
+                timed_out=False,
+                _client_binding=binding,
+            )
+
+        receipt = _make_ctp_native_stop_receipt(
+            self,
+            timeout,
+            lock=self._query_state_lock,
+            api_attribute="_api",
+        )
+        with self._query_state_lock:
+            current_generation = self._connection_generation
+            stopped_api = self._last_stopped_native_api
+        if (
+            receipt.connection_generation != 0
+            and (
+                active_session_api is created_api
+                or current_generation != base_generation
+            )
+        ):
+            return receipt
+        released_exact_api = (
+            phase == "api_created"
+            and type(attempt_id) is str
+            and re.fullmatch(r"[0-9a-f]{32}", attempt_id, re.ASCII) is not None
+            and created_api is not None
+            and stopped_api is created_api
+            and receipt.complete is True
+            and receipt.native_released is True
+        )
+        return CtpNativeStartupStopReceipt(
+            api_attempt_id=attempt_id,
+            outcome=("api_created_released" if released_exact_api else "api_created_unconfirmed"),
+            connection_generation=0,
+            native_released=receipt.native_released,
+            join_required=receipt.join_required,
+            join_completed=receipt.join_completed,
+            thread_alive=receipt.thread_alive,
+            timed_out=receipt.timed_out,
+            _client_binding=self._startup_api_client_binding,
         )
 
     @property

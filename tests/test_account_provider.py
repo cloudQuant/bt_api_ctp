@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import sys
+import threading
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from bt_api_base.account_protocol import AccountKey
@@ -9,7 +13,11 @@ from bt_api_ctp.account_provider import (
     CtpAccountSessionProviderError,
     CtpReadOnlyAccountSessionProvider,
 )
-from bt_api_ctp.ctp.client import CtpNativeStopReceipt
+from bt_api_ctp.ctp import client as ctp_client_module
+from bt_api_ctp.ctp.client import (
+    CtpNativeStartupStopReceipt,
+    CtpNativeStopReceipt,
+)
 from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 from bt_api_ctp.query import (
     QueryResult,
@@ -272,6 +280,128 @@ def test_ctp_account_provider_keeps_interrupted_startup_uncertain_until_receipt(
     assert provider.native_owner_created is True
     assert provider.native_connection_generation == 7
     assert provider.last_native_stop_receipt is complete_receipt
+
+
+def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_package = Path(__file__).resolve().parents[1] / "src" / "bt_api_ctp"
+    assert Path(ctp_client_module.__file__).resolve() == source_package / "ctp" / "client.py"
+    assert (
+        Path(sys.modules[CtpReadOnlyAccountSessionProvider.__module__].__file__).resolve()
+        == source_package / "account_provider.py"
+    )
+    assert (
+        Path(sys.modules[CtpRequestDataFuture.__module__].__file__).resolve()
+        == source_package / "feeds" / "live_ctp_feed.py"
+    )
+
+    class JoinGateApi:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+            self.join_entered = threading.Event()
+            self.allow_join_return = threading.Event()
+            self.join_returned = threading.Event()
+            self.released = threading.Event()
+
+        def RegisterSpi(self, spi: object | None) -> None:
+            self.calls.append(("register_spi", spi))
+
+        def SubscribePrivateTopic(self, mode: int) -> None:
+            self.calls.append(("subscribe_private", mode))
+
+        def SubscribePublicTopic(self, mode: int) -> None:
+            self.calls.append(("subscribe_public", mode))
+
+        def RegisterFront(self, front: str) -> None:
+            self.calls.append(("register_front", front))
+
+        def Init(self) -> None:
+            self.calls.append(("init", None))
+
+        def Join(self) -> int:
+            self.calls.append(("join", None))
+            self.join_entered.set()
+            if not self.allow_join_return.wait(2.0):
+                raise AssertionError("synthetic Join was not released by the test")
+            self.join_returned.set()
+            return 0
+
+        def Release(self) -> None:
+            self.calls.append(("release", None))
+            self.released.set()
+
+    api = JoinGateApi()
+    monkeypatch.setattr(ctp_client_module, "_check_native_module", lambda: None)
+    monkeypatch.setattr(ctp_client_module, "_flow_dir", lambda _prefix: "synthetic-flow")
+    monkeypatch.setattr(ctp_client_module, "_TraderSpi", lambda _client, _api: SimpleNamespace())
+    monkeypatch.setattr(
+        ctp_client_module,
+        "CThostFtdcTraderApi",
+        SimpleNamespace(CreateFtdcTraderApi=lambda _flow: api),
+    )
+
+    feed = CtpRequestDataFuture(
+        broker_id="broker-test",
+        user_id="investor-test",
+        password="synthetic-only",
+        td_front="tcp://127.0.0.1:19991",
+        md_front="tcp://127.0.0.1:19992",
+        auto_settlement_confirm=False,
+    )
+    feed._connect_timeout = 0.01
+    provider = CtpReadOnlyAccountSessionProvider(
+        lambda: feed,
+        stop_timeout_seconds=0.05,
+        monotonic_clock=lambda: 102.0,
+        utc_clock=lambda: datetime(2026, 10, 17, 2, 0, tzinfo=timezone.utc),
+    )
+    trader = None
+
+    try:
+        with pytest.raises(CtpAccountSessionProviderError, match="SESSION_NOT_CONNECTED"):
+            provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=1.0)
+
+        trader = feed._trader
+        assert trader is not None
+        assert api.join_entered.wait(1.0)
+        assert trader._connection_generation == 0
+        with pytest.raises(CtpAccountSessionProviderError, match="NATIVE_CUSTODY_UNCERTAIN"):
+            _ = provider.native_owner_created
+
+        # A bounded close while Join is pending preserves the exact feed/API.
+        assert provider.close() is False
+        assert not api.released.is_set()
+        assert provider._request_feed is feed
+        assert feed._trader is trader
+
+        # Once Join returns, the retained API is released and the provider can
+        # confirm the exact generation-zero startup stop.
+        api.allow_join_return.set()
+        assert api.join_returned.wait(1.0)
+        assert api.released.wait(1.0)
+        assert provider.close() is True
+        receipt = provider.last_native_startup_stop_receipt
+        assert type(receipt) is CtpNativeStartupStopReceipt
+        assert receipt.outcome == "api_created_released"
+        assert receipt.connection_generation == 0
+        assert receipt.complete is True
+        assert receipt.native_released is True
+        assert receipt.join_required is True
+        assert receipt.join_completed is True
+        assert receipt.thread_alive is False
+        assert receipt.timed_out is False
+        assert api.calls.count(("release", None)) == 1
+        assert provider.last_native_stop_receipt is None
+        assert provider._request_feed is None
+        assert feed._trader is None
+    finally:
+        api.allow_join_return.set()
+        current_trader = feed._trader or trader
+        if current_trader is not None:
+            join_thread = current_trader._last_stop_join_thread or current_trader._thread
+            if join_thread is not None and join_thread is not threading.current_thread():
+                join_thread.join(1.0)
 
 
 def test_exact_ctp_feed_constructor_failure_confirms_native_free_close(
