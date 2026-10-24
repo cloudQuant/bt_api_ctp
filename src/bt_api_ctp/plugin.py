@@ -23,10 +23,15 @@ def _ctp_future_subscribe_handler(
 ) -> None:
     topic_list = [t.get("topic") for t in topics]
     has_tick = any(t in topic_list for t in ("tick", "ticker", "depth"))
+    event_waker = getattr(bt_api, "_notify_event_wakers", None)
+    if not callable(event_waker):
+        event_waker = None
     if has_tick:
         market_kwargs = dict(exchange_params.items())
         market_kwargs["stream_name"] = "ctp_market_stream"
         market_kwargs["topics"] = topics
+        if event_waker is not None:
+            market_kwargs["_event_waker"] = event_waker
         market_stream = CtpMarketStream(data_queue, **market_kwargs)
         market_stream.start()
         bt_api._subscription_streams.append(market_stream)
@@ -38,6 +43,8 @@ def _ctp_future_subscribe_handler(
         trade_kwargs = dict(exchange_params.items())
         trade_kwargs["stream_name"] = "ctp_trade_stream"
         trade_kwargs["request_feed"] = getattr(bt_api, "exchange_feeds", {}).get("CTP___FUTURE")
+        if event_waker is not None:
+            trade_kwargs["_event_waker"] = event_waker
         trade_stream = CtpTradeStream(data_queue, **trade_kwargs)
         trade_stream.start()
         bt_api._subscription_streams.append(trade_stream)
