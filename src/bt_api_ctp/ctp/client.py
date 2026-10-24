@@ -2169,11 +2169,14 @@ class _MdSpi(CThostFtdcMdSpi):
             self._c._login_request_generation = None
             generation = self._c._connection_generation
             callback = self._c.on_disconnect
+            generation_callback = self._c.on_disconnect_with_generation
         # 常见原因码：0x1001 网络读失败、0x2001 接收心跳超时、0x2003 收到错误报文。
         _logger.warning(
             "CTP market-data front disconnected (reason=%s, generation=%s)", nReason, generation
         )
-        if callback is not None:
+        if generation_callback is not None:
+            generation_callback(nReason, generation)
+        elif callback is not None:
             callback(nReason)
 
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
@@ -2340,7 +2343,11 @@ class _MdSpi(CThostFtdcMdSpi):
             if not self._is_current_locked():
                 return
             callback = self._c.on_tick
-        if callback is not None:
+            generation_callback = self._c.on_tick_with_generation
+            connection_generation = self._c._connection_generation
+        if generation_callback is not None:
+            generation_callback(pDepthMarketData, connection_generation)
+        elif callback is not None:
             callback(pDepthMarketData)
 
     def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
@@ -2397,6 +2404,11 @@ class MdClient:
         self.__allow_zero_login_response = allow_zero_login_response
 
         self.on_tick = None  # callback(CThostFtdcDepthMarketDataField)
+        # Generation-aware consumers bind this alternative callback.  The SPI
+        # captures the generation under its state lock and calls only one
+        # callback for each event; the legacy one-argument callback remains
+        # unchanged for existing users.
+        self.on_tick_with_generation = None  # callback(payload, connection_generation)
         self.on_login = None  # callback(CThostFtdcRspUserLoginField)
         self.on_error = None  # callback(CThostFtdcRspInfoField)
         # callback(CThostFtdcSpecificInstrumentField, CThostFtdcRspInfoField)
@@ -2407,6 +2419,9 @@ class MdClient:
         self.on_subscribe_response = None
         # callback(nReason) - 前置断开通知，用于把断线时间窗写进完整性报告
         self.on_disconnect = None
+        # callback(nReason, connection_generation), for consumers that must
+        # bind disconnect evidence to the exact SPI generation.
+        self.on_disconnect_with_generation = None
 
         self._connected = False
         self._loggedin = False

@@ -17,11 +17,31 @@ def _client() -> MdClient:
     return MdClient("tcp://127.0.0.1:1", "9999", "user", "pass")
 
 
+class _AdvanceGenerationAfterUnlock:
+    """Model a reconnect taking the lock after callback admission releases it."""
+
+    def __init__(self, lock, client: MdClient) -> None:
+        self._lock = lock
+        self._client = client
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self._lock.release()
+        with self._lock:
+            self._client._connection_generation += 1
+
+
 class TestDisconnectCallback:
     """断线必须能被上层订阅（用于把断线时间窗写进完整性报告）。"""
 
     def test_on_disconnect_defaults_to_none(self) -> None:
-        assert _client().on_disconnect is None
+        client = _client()
+        assert client.on_disconnect is None
+        assert client.on_tick_with_generation is None
+        assert client.on_disconnect_with_generation is None
 
     def test_spi_forwards_disconnect_reason(self) -> None:
         client = _client()
@@ -34,6 +54,56 @@ class TestDisconnectCallback:
         assert seen == [8193]
         assert client._connected is False
         assert client._loggedin is False
+
+    def test_generation_disconnect_callback_keeps_admitted_spi_identity(self) -> None:
+        client = _client()
+        client._connection_generation = 7
+        spi = _MdSpi(client)
+        legacy: list[object] = []
+        generation_aware: list[tuple[object, int]] = []
+        client.on_disconnect = legacy.append
+        client.on_disconnect_with_generation = lambda reason, generation: generation_aware.append(
+            (reason, generation)
+        )
+        original_lock = client._state_lock
+        client._state_lock = _AdvanceGenerationAfterUnlock(original_lock, client)
+
+        spi.OnFrontDisconnected(8193)
+
+        assert generation_aware == [(8193, 7)]
+        assert legacy == []
+        assert client._connection_generation == 8
+
+    def test_legacy_tick_callback_is_called_once_when_generation_callback_absent(self) -> None:
+        client = _client()
+        spi = _MdSpi(client)
+        payload = SimpleNamespace(InstrumentID="rb2701")
+        seen: list[object] = []
+        client.on_tick = seen.append
+
+        spi.OnRtnDepthMarketData(payload)
+
+        assert seen == [payload]
+
+    def test_generation_tick_callback_keeps_admitted_spi_identity(self) -> None:
+        client = _client()
+        client._connection_generation = 11
+        spi = _MdSpi(client)
+        payload = SimpleNamespace(InstrumentID="rb2701")
+        legacy: list[object] = []
+        generation_aware: list[tuple[object, int, bool]] = []
+        client.on_tick = legacy.append
+        original_lock = client._state_lock
+        client.on_tick_with_generation = lambda value, generation: generation_aware.append(
+            (value, generation, original_lock._is_owned())
+        )
+        client._state_lock = _AdvanceGenerationAfterUnlock(original_lock, client)
+
+        spi.OnRtnDepthMarketData(payload)
+
+        assert generation_aware == [(payload, 11, False)]
+        assert legacy == []
+        assert client._connection_generation == 12
 
     def test_spi_tolerates_missing_disconnect_callback(self) -> None:
         client = _client()
