@@ -1,0 +1,20 @@
+{
+  "source_path": "src/bt_api_ctp/ctp/client.py",
+  "source_sha256_pre": "ab11ec060c5f447e1fb70ce462f4add2753cf6b9c5c017b1a1b6bf3fa97518b8",
+  "source_bytes_pre": 494245,
+  "source_sha256_post": "ab11ec060c5f447e1fb70ce462f4add2753cf6b9c5c017b1a1b6bf3fa97518b8",
+  "source_bytes_post": 494245,
+  "test_path": "tests/test_ctp_join_observer_policy.py",
+  "test_sha256_pre": "ba801f6e409c126c96e9488849367e3931db5bd7af5294d30bed31662f5929e2",
+  "test_bytes_pre": 26518,
+  "test_sha256_post": "ba801f6e409c126c96e9488849367e3931db5bd7af5294d30bed31662f5929e2",
+  "test_bytes_post": 26518,
+  "pytest_exit": 0,
+  "tests": 35,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "excluded_passed_startup_nodes": 2,
+  "console_path": "D:\\temp\\i51-ctp-nojoin-tests-20261027\\console-r2.txt",
+  "junit_path": "D:\\temp\\i51-ctp-nojoin-tests-20261027\\focused-r2.xml"
+}

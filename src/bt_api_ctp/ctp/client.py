@@ -218,6 +218,7 @@ _RETURNED_CTP_NATIVE_JOIN_API_IDS: set[int] = set()
 _POISONED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
 _RELEASED_CTP_NATIVE_SESSION_APIS: weakref.WeakSet[Any] = weakref.WeakSet()
 _RELEASED_CTP_NATIVE_SESSION_API_IDS: set[int] = set()
+_MD_NATIVE_REQUEST_NOT_STARTED = object()
 _MAX_NATIVE_JOIN_WAIT_SECONDS = 60.0
 _MAX_CTP_STOP_WAIT_SECONDS = 30.0
 _CTP_STOP_POLL_SECONDS = 0.1
@@ -371,6 +372,25 @@ class _CtpNativeJoinTracker:
         return CtpNativeJoinWaitResult(join_call_finished, observation)
 
 
+def _ctp_native_deferred_owner_cleanup_pending(client: Any, api: Any, lock: Any) -> bool:
+    """Whether this exact API still has an owner-side deferred cleanup record."""
+
+    with lock:
+        for attribute in (
+            "_deferred_native_release",
+            "_callback_ingress_deferred_cleanup",
+        ):
+            pending = getattr(client, attribute, None)
+            if isinstance(pending, tuple) and pending and pending[0] is api:
+                return True
+        startup_cleanups = getattr(client, "_deferred_startup_cleanups", None)
+        if isinstance(startup_cleanups, dict):
+            pending = startup_cleanups.get(id(api))
+            if isinstance(pending, tuple) and pending and pending[0] is api:
+                return True
+    return False
+
+
 def _make_ctp_native_stop_receipt(
     client: Any,
     timeout: float,
@@ -409,6 +429,14 @@ def _make_ctp_native_stop_receipt(
                 native_may_be_live
                 and (client._join_active or (thread is not None and thread.is_alive()))
             ) or _ctp_native_join_claimed(api)
+        policy_entry = getattr(client, "_join_observer_policy_by_api_id", {}).get(id(api))
+        no_join_policy = (
+            policy_entry is not None and policy_entry[0] is api and policy_entry[1] is False
+        )
+        callback_state = getattr(client, "_native_callback_thread_state", None)
+        called_from_callback = bool(
+            callback_state is not None and getattr(callback_state, "depth", 0) > 0
+        )
 
     if api is None:
         return CtpNativeStopReceipt(
@@ -428,13 +456,43 @@ def _make_ctp_native_stop_receipt(
         client._stop_native_session(expected_api=api)
 
     if not join_required:
+        native_released = _ctp_native_api_release_confirmed(api)
+        release_poisoned = _ctp_native_api_release_poisoned(api)
+        timed_out = False
+        owner_cleanup_pending = (
+            _ctp_native_deferred_owner_cleanup_pending(client, api, lock)
+            if no_join_policy
+            else False
+        )
+        if no_join_policy and not release_poisoned and (
+            not native_released or owner_cleanup_pending
+        ):
+            if called_from_callback:
+                # A callback cannot wait for its own callback lease to drain.
+                # Leave Release to the deferred owner and report incomplete.
+                timed_out = True
+            else:
+                deadline = time.monotonic() + wait_seconds
+                while not release_poisoned and (
+                    not native_released or owner_cleanup_pending
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    time.sleep(min(0.01, remaining))
+                    native_released = _ctp_native_api_release_confirmed(api)
+                    release_poisoned = _ctp_native_api_release_poisoned(api)
+                    owner_cleanup_pending = (
+                        _ctp_native_deferred_owner_cleanup_pending(client, api, lock)
+                    )
         return CtpNativeStopReceipt(
             connection_generation=connection_generation,
             join_required=False,
             join_completed=True,
-            native_released=_ctp_native_api_release_confirmed(api),
+            native_released=native_released,
             thread_alive=False,
-            timed_out=False,
+            timed_out=timed_out,
         )
 
     deadline = time.monotonic() + wait_seconds
@@ -519,6 +577,16 @@ def _retain_live_ctp_native_session(
         _RETIRED_CTP_NATIVE_SESSIONS.append((api, spi, join_thread))
 
 
+def _poison_ctp_native_session_after_detach_failure(api: Any, spi: Any) -> None:
+    """Keep an uncertain no-Join session permanently fenced and retained."""
+
+    api_id = id(api)
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        _POISONED_CTP_NATIVE_SESSION_API_IDS.add(api_id)
+        if not any(existing_api is api for existing_api, _, _ in _RETIRED_CTP_NATIVE_SESSIONS):
+            _RETIRED_CTP_NATIVE_SESSIONS.append((api, spi, None))
+
+
 def _ctp_native_api_released_locked(api: Any) -> bool:
     if id(api) in _RELEASED_CTP_NATIVE_SESSION_API_IDS:
         return True
@@ -543,6 +611,23 @@ def _register_ctp_native_api(api: Any) -> None:
 
     with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
         _RELEASED_CTP_NATIVE_SESSION_API_IDS.discard(id(api))
+
+
+def _ctp_native_join_observer_policy(
+    policies: dict[int, tuple[Any, bool]], api: Any
+) -> bool:
+    """Return the immutable policy captured for this exact API generation."""
+
+    entry = policies.get(id(api))
+    return entry[1] if entry is not None and entry[0] is api else True
+
+
+def _clear_ctp_native_join_observer_policy(
+    policies: dict[int, tuple[Any, bool]], api: Any
+) -> None:
+    entry = policies.get(id(api))
+    if entry is not None and entry[0] is api:
+        policies.pop(id(api), None)
 
 
 def _set_retired_ctp_native_session_join_thread(api: Any, join_thread: threading.Thread) -> bool:
@@ -606,6 +691,7 @@ def _release_ctp_native_api_once(
     spi: Any = None,
     join_thread: threading.Thread | None = None,
     after_join: bool = False,
+    after_no_join: bool = False,
 ) -> bool:
     """Detach and release one CTP API through the shared lifecycle fence.
 
@@ -629,6 +715,8 @@ def _release_ctp_native_api_once(
             if entry[0] is api:
                 retained = entry
                 break
+        if after_join and after_no_join:
+            return False
         if after_join:
             if (
                 api_id not in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
@@ -636,11 +724,18 @@ def _release_ctp_native_api_once(
                 or retained is None
             ):
                 return False
+        elif after_no_join:
+            if (
+                api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS
+                or retained is None
+                or retained[2] is not None
+            ):
+                return False
         elif api_id in _CLAIMED_CTP_NATIVE_JOIN_API_IDS or retained is not None:
             return False
         _RELEASING_CTP_NATIVE_SESSION_API_IDS.add(api_id)
 
-    if not after_join:
+    if not after_join and not after_no_join:
         with suppress(Exception):
             api.RegisterSpi(None)
 
@@ -689,6 +784,23 @@ def _release_retired_ctp_native_session_after_join(api: Any) -> bool:
         spi=retained[1],
         join_thread=retained[2],
         after_join=True,
+    )
+
+
+def _release_retired_ctp_native_session_without_join(api: Any) -> bool:
+    """Release a retained session after callback detach and lease drain."""
+
+    with _RETIRED_CTP_NATIVE_SESSIONS_LOCK:
+        retained = next(
+            (entry for entry in _RETIRED_CTP_NATIVE_SESSIONS if entry[0] is api), None
+        )
+    if retained is None:
+        return False
+    return _release_ctp_native_api_once(
+        api,
+        spi=retained[1],
+        join_thread=None,
+        after_no_join=True,
     )
 
 
@@ -2084,6 +2196,33 @@ class _MdLoginError:
     ErrorMsg: str
 
 
+def _fence_md_spi_callback(callback):
+    @wraps(callback)
+    def guarded(self, *args, **kwargs):
+        client = self._c
+        with client._state_lock:
+            client._callback_inflight_refs += 1
+            current = self._is_current_locked()
+        callback_state = client._native_callback_thread_state
+        previous_depth = getattr(callback_state, "depth", 0)
+        if current:
+            callback_state.depth = previous_depth + 1
+        try:
+            if not current:
+                return None
+            return callback(self, *args, **kwargs)
+        finally:
+            if current:
+                callback_state.depth = previous_depth
+            with client._state_lock:
+                client._callback_inflight_refs = max(
+                    0, client._callback_inflight_refs - 1
+                )
+                client._maybe_finish_deferred_native_release_locked()
+
+    return guarded
+
+
 class _MdSpi(CThostFtdcMdSpi):
     def __init__(self, client, native_api=None):
         super().__init__()
@@ -2100,6 +2239,7 @@ class _MdSpi(CThostFtdcMdSpi):
         with self._c._state_lock:
             return self._is_current_locked()
 
+    @_fence_md_spi_callback
     def OnFrontConnected(self):
         with self._c._state_lock:
             if not self._is_current_locked():
@@ -2128,10 +2268,14 @@ class _MdSpi(CThostFtdcMdSpi):
             return
         if api is not None:
             try:
-                result = api.ReqUserLogin(field, request_id)
+                result = self._c._invoke_native_request(
+                    api, "ReqUserLogin", field, request_id
+                )
             except Exception:
                 result = -1
             if result is not None and (type(result) is not int or result != 0):
+                if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                    return
                 with self._c._state_lock:
                     if (
                         self._is_current_locked()
@@ -2157,6 +2301,7 @@ class _MdSpi(CThostFtdcMdSpi):
                 if error_callback is not None:
                     error_callback(_MdLoginError(-1, "login_request_rejected"))
 
+    @_fence_md_spi_callback
     def OnFrontDisconnected(self, nReason):
         with self._c._state_lock:
             if not self._is_current_locked():
@@ -2179,6 +2324,7 @@ class _MdSpi(CThostFtdcMdSpi):
         elif callback is not None:
             callback(nReason)
 
+    @_fence_md_spi_callback
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
 
         subscribe = None
@@ -2326,7 +2472,9 @@ class _MdSpi(CThostFtdcMdSpi):
                 "[redacted]",
             )
         if subscribe is not None and subscribe[0] is not None:
-            subscribe[0].SubscribeMarketData(subscribe[1])
+            self._c._invoke_native_request(
+                subscribe[0], "SubscribeMarketData", subscribe[1]
+            )
         if callback is not None:
             callback(pRspUserLogin)
         if error_callback is not None:
@@ -2338,6 +2486,7 @@ class _MdSpi(CThostFtdcMdSpi):
 
         return value if type(value) is str and value else None
 
+    @_fence_md_spi_callback
     def OnRtnDepthMarketData(self, pDepthMarketData):
         with self._c._state_lock:
             if not self._is_current_locked():
@@ -2350,6 +2499,7 @@ class _MdSpi(CThostFtdcMdSpi):
         elif callback is not None:
             callback(pDepthMarketData)
 
+    @_fence_md_spi_callback
     def OnRspSubMarketData(self, pSpecificInstrument, pRspInfo, nRequestID, bIsLast):
         with self._c._state_lock:
             if not self._is_current_locked():
@@ -2368,6 +2518,7 @@ class _MdSpi(CThostFtdcMdSpi):
                 connection_generation,
             )
 
+    @_fence_md_spi_callback
     def OnRspError(self, pRspInfo, nRequestID, bIsLast):
         with self._c._state_lock:
             if not self._is_current_locked():
@@ -2444,12 +2595,18 @@ class MdClient:
         self._thread = None
         self._join_active = False
         self._native_init_started = False
+        self._join_observer_policy_by_api_id: dict[int, tuple[Any, bool]] = {}
         # Native startup calls must run without ``_state_lock`` because a CTP
         # registration call may synchronously wait for a callback thread that
         # also needs this lock.  Keep a per-API in-flight count so stop can
         # detach/release only after the call has returned.
         self._startup_native_call_refs: dict[int, int] = {}
-        self._deferred_startup_cleanups: dict[int, tuple[Any, Any, bool]] = {}
+        self._deferred_startup_cleanups: dict[int, tuple[Any, Any, bool, bool]] = {}
+        self._native_request_inflight_refs = 0
+        self._callback_inflight_refs = 0
+        self._native_callback_thread_state = threading.local()
+        self._deferred_native_release: tuple[Any, Any] | None = None
+        self._deferred_native_release_scheduled = False
         self._native_join_tracker = _CtpNativeJoinTracker()
         self._pending_native_join_api_ids: set[int] = set()
         self._last_stopped_native_api = None
@@ -2577,6 +2734,125 @@ class MdClient:
             if self._starting_generation == generation:
                 self._starting_generation = None
 
+    def _join_observer_for_api_locked(self, api: Any) -> bool:
+        return _ctp_native_join_observer_policy(
+            self._join_observer_policy_by_api_id, api
+        )
+
+    def _release_native_api_immediately(self, api: Any, spi: Any) -> bool:
+        released = _release_ctp_native_api_immediately(
+            api,
+            spi,
+            state_lock=self._state_lock,
+            pending_api_ids=self._pending_native_join_api_ids,
+        )
+        if released or _ctp_native_api_release_confirmed(api):
+            with self._state_lock:
+                _clear_ctp_native_join_observer_policy(
+                    self._join_observer_policy_by_api_id, api
+                )
+        return released
+
+    def _maybe_finish_deferred_native_release_locked(self) -> None:
+        pending = self._deferred_native_release
+        if pending is None or self._deferred_native_release_scheduled:
+            return
+        api, _spi = pending
+        if (
+            self._startup_native_call_refs.get(id(api), 0) != 0
+            or self._native_request_inflight_refs != 0
+            or self._callback_inflight_refs != 0
+        ):
+            return
+        if self._join_observer_for_api_locked(api):
+            return
+        self._deferred_native_release_scheduled = True
+        cleanup = threading.Thread(
+            target=self._finish_deferred_native_release,
+            args=(api,),
+            name="bt-api-ctp-md-no-join-release",
+            daemon=True,
+        )
+        try:
+            cleanup.start()
+        except BaseException:
+            # Keep the exact retained API/SPI and never fall back to Join.
+            pass
+
+    def _finish_deferred_native_release(self, api: Any) -> None:
+        with self._state_lock:
+            pending = self._deferred_native_release
+            if pending is None or pending[0] is not api:
+                return
+            if (
+                self._startup_native_call_refs.get(id(api), 0) != 0
+                or self._native_request_inflight_refs != 0
+                or self._callback_inflight_refs != 0
+            ):
+                self._deferred_native_release_scheduled = False
+                return
+            _api, spi = pending
+
+        if _ctp_native_join_claimed(api):
+            # Another lifecycle owner has claimed Join; this path never waits
+            # for it or releases an API while it is claimed.
+            return
+        try:
+            api.RegisterSpi(None)
+        except BaseException:
+            _poison_ctp_native_session_after_detach_failure(api, spi)
+            return
+
+        with self._state_lock:
+            pending = self._deferred_native_release
+            if pending is None or pending[0] is not api:
+                return
+            if (
+                self._startup_native_call_refs.get(id(api), 0) != 0
+                or self._native_request_inflight_refs != 0
+                or self._callback_inflight_refs != 0
+            ):
+                self._deferred_native_release_scheduled = False
+                return
+
+        released = _release_retired_ctp_native_session_without_join(api)
+        if released or _ctp_native_api_release_confirmed(api):
+            with self._state_lock:
+                pending = self._deferred_native_release
+                if pending is not None and pending[0] is api:
+                    self._deferred_native_release = None
+                self._deferred_native_release_scheduled = False
+                self._pending_native_join_api_ids.discard(id(api))
+                _clear_ctp_native_join_observer_policy(
+                    self._join_observer_policy_by_api_id, api
+                )
+
+    def _invoke_native_request(self, api: Any, method: str, *args: Any) -> Any:
+        with self._state_lock:
+            if api is None:
+                return _MD_NATIVE_REQUEST_NOT_STARTED
+            join_observer = self._join_observer_for_api_locked(api)
+            if join_observer:
+                # Keep the default generation's historical direct native-call
+                # path. Request leases are needed only when Release may race
+                # an opt-in no-Join generation.
+                track_request = False
+            elif self._api is not api:
+                return _MD_NATIVE_REQUEST_NOT_STARTED
+            else:
+                track_request = True
+                self._native_request_inflight_refs += 1
+        if not track_request:
+            return getattr(api, method)(*args)
+        try:
+            return getattr(api, method)(*args)
+        finally:
+            with self._state_lock:
+                self._native_request_inflight_refs = max(
+                    0, self._native_request_inflight_refs - 1
+                )
+                self._maybe_finish_deferred_native_release_locked()
+
     def _is_start_current_locked(self, api: Any, spi: Any, generation: int) -> bool:
         return (
             self._lifecycle_generation == generation
@@ -2610,7 +2886,7 @@ class MdClient:
                 # A re-entrant stop from Init() must treat the API as live
                 # before the vendor is allowed to create its callback thread.
                 self._native_init_started = True
-                self._join_active = True
+                self._join_active = self._join_observer_for_api_locked(api)
             # stop() sets its event before it waits for this lock.  Repeat the
             # precondition immediately before entering native code so a stop
             # that arrived during the preceding bookkeeping cancels this step.
@@ -2658,20 +2934,26 @@ class MdClient:
         return True, active_after_call
 
     def _complete_deferred_startup_cleanup(
-        self, api: Any, spi: Any, native_may_be_live: bool
+        self, api: Any, spi: Any, native_may_be_live: bool, join_observer: bool
     ) -> None:
         """Finish stop cleanup after the last in-flight startup call returns."""
 
         if not native_may_be_live:
-            _release_ctp_native_api_immediately(
-                api,
-                spi,
-                state_lock=self._state_lock,
-                pending_api_ids=self._pending_native_join_api_ids,
-            )
+            if not join_observer:
+                _retain_live_ctp_native_session(api, spi, None)
+                with self._state_lock:
+                    self._deferred_native_release = (api, spi)
+                    self._maybe_finish_deferred_native_release_locked()
+                return
+            self._release_native_api_immediately(api, spi)
             return
 
         _retain_live_ctp_native_session(api, spi, None)
+        if not join_observer:
+            with self._state_lock:
+                self._deferred_native_release = (api, spi)
+                self._maybe_finish_deferred_native_release_locked()
+            return
         detach_error: BaseException | None = None
         try:
             api.RegisterSpi(None)
@@ -2708,17 +2990,30 @@ class MdClient:
 
         release_now = False
         observe_join = False
+        defer_no_join_release = False
         with self._state_lock:
             if not self._is_start_current_locked(api, spi, generation):
                 return False
             native_live = native_init_may_be_live or self._native_init_started
+            join_observer = self._join_observer_for_api_locked(api)
             if native_live:
                 self._pending_native_join_api_ids.add(id(api))
-                _retain_live_ctp_native_session(api, spi, self._thread)
-                observe_join = True
+                _retain_live_ctp_native_session(
+                    api, spi, self._thread if join_observer else None
+                )
+                if join_observer:
+                    observe_join = True
+                else:
+                    self._deferred_native_release = (api, spi)
+                    defer_no_join_release = True
             else:
                 self._pending_native_join_api_ids.add(id(api))
-                release_now = True
+                if join_observer:
+                    release_now = True
+                else:
+                    _retain_live_ctp_native_session(api, spi, None)
+                    self._deferred_native_release = (api, spi)
+                    defer_no_join_release = True
             self._api = None
             self._spi = None
             self._thread = None
@@ -2749,13 +3044,11 @@ class MdClient:
                 )
             if detach_error is not None:
                 raise detach_error
+        elif defer_no_join_release:
+            with self._state_lock:
+                self._maybe_finish_deferred_native_release_locked()
         elif release_now:
-            _release_ctp_native_api_immediately(
-                api,
-                spi,
-                state_lock=self._state_lock,
-                pending_api_ids=self._pending_native_join_api_ids,
-            )
+            self._release_native_api_immediately(api, spi)
         return True
 
     def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
@@ -2784,6 +3077,13 @@ class MdClient:
                 if retired_session_released:
                     with self._state_lock:
                         self._pending_native_join_api_ids.discard(id(api))
+                        _clear_ctp_native_join_observer_policy(
+                            self._join_observer_policy_by_api_id, api
+                        )
+                        pending = self._deferred_native_release
+                        if pending is not None and pending[0] is api:
+                            self._deferred_native_release = None
+                            self._deferred_native_release_scheduled = False
 
     def wait_native_join(self, timeout: float) -> CtpNativeJoinWaitResult:
         """Wait at most ``timeout`` seconds for the latest native Join call.
@@ -2797,6 +3097,10 @@ class MdClient:
 
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
+
+        with self._state_lock:
+            if not self._join_observer_for_api_locked(api):
+                return False
 
         thread = threading.Thread(
             target=self._join_native_api,
@@ -2822,7 +3126,7 @@ class MdClient:
             api = self._api if self._loggedin else None
             pending_instruments = list(self._pending_instruments)
         if api is not None:
-            api.SubscribeMarketData(pending_instruments)
+            self._invoke_native_request(api, "SubscribeMarketData", pending_instruments)
 
     def subscribe_additional(self, instruments):
         """Add exact instruments without replacing reconnect subscriptions."""
@@ -2834,7 +3138,9 @@ class MdClient:
             additions = [item for item in requested if item not in self._pending_instruments]
             api = self._api if self._loggedin else None
         if api is not None and additions:
-            result = api.SubscribeMarketData(additions)
+            result = self._invoke_native_request(api, "SubscribeMarketData", additions)
+            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                return ()
             if type(result) is int and result != 0:
                 raise RuntimeError("ctp_md_subscribe_rejected")
         with self._state_lock:
@@ -2861,8 +3167,12 @@ class MdClient:
             if not callable(native_unsubscribe):
                 return False
             try:
-                result = native_unsubscribe(removals)
+                result = self._invoke_native_request(
+                    api, "UnSubscribeMarketData", removals
+                )
             except Exception:
+                return False
+            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
                 return False
             if type(result) is int and result != 0:
                 return False
@@ -2907,28 +3217,48 @@ class MdClient:
         for start in range(0, len(pending), batch_size):
             if should_stop is not None and should_stop():
                 return submitted
-            api.SubscribeMarketData(pending[start : start + batch_size])
+            result = self._invoke_native_request(
+                api, "SubscribeMarketData", pending[start : start + batch_size]
+            )
+            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                return submitted
             submitted += 1
             if interval_sec > 0 and start + batch_size < len(pending):
                 time.sleep(interval_sec)
         return submitted
 
-    def start(self, block=True):
+    def start(self, block=True, *, join_observer=True):
         """启动连接
 
         Args:
             block: True=阻塞直到断开, False=后台线程运行
+            join_observer: False opts this generation out of the native Join
+                observer; callback/request leases still govern Release.
         """
+        if type(join_observer) is not bool:
+            raise ValueError("join_observer must be an exact bool")
+        if block and not join_observer:
+            raise ValueError("join_observer=False cannot be combined with block=True")
         _check_native_module()
         generation = self._reserve_start_generation()
         flow = self._native_flow_dir()
         try:
             api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
             _register_ctp_native_api(api)
+            with self._state_lock:
+                self._join_observer_policy_by_api_id[id(api)] = (api, join_observer)
         except BaseException:
             self._clear_start_reservation(generation)
             raise
-        spi = self._create_md_spi(api)
+        try:
+            spi = self._create_md_spi(api)
+        except BaseException:
+            # SPI construction happens before publication and before Init.
+            # The factory-created API is still this start generation's exact
+            # uninitialized owner and must be released once, without Join.
+            self._release_native_api_immediately(api, None)
+            self._clear_start_reservation(generation)
+            raise
         with self._state_lock:
             if (
                 self._starting_generation != generation
@@ -2944,12 +3274,7 @@ class MdClient:
                 self._join_active = False
                 self._native_join_tracker = _CtpNativeJoinTracker()
         if cancelled_before_registration:
-            _release_ctp_native_api_immediately(
-                api,
-                spi,
-                state_lock=self._state_lock,
-                pending_api_ids=self._pending_native_join_api_ids,
-            )
+            self._release_native_api_immediately(api, spi)
             return
 
         init_invoked = False
@@ -2983,14 +3308,14 @@ class MdClient:
                 self._abort_startup(api, spi, generation)
                 return
             if not active:
-                # stop() detached this API while Init was running.  It is
-                # retained already; attach a Join observer so the registry is
-                # released when the native thread exits.
-                self._start_join_observer(api)
+                # stop() detached this API while Init was running. The exact
+                # generation's policy owns its already-scheduled cleanup.
+                if join_observer:
+                    self._start_join_observer(api)
                 return
         except BaseException:
-            # Init is a void vendor call, but if a binding raises after it was
-            # entered, fail safe and retain until Join proves native shutdown.
+            # Init is a void vendor call. Preserve the exact generation's
+            # selected cleanup policy when it raises after entry.
             try:
                 handled = self._abort_startup(
                     api,
@@ -3002,7 +3327,8 @@ class MdClient:
                     # A concurrent stop may have set the cancellation fence
                     # while Init raised.  Attach the observer whether it
                     # already retained the session or is about to do so.
-                    self._start_join_observer(api)
+                    if join_observer:
+                        self._start_join_observer(api)
             except BaseException:
                 _logger.exception(
                     "CTP MD startup cleanup failed while preserving startup error"
@@ -3023,7 +3349,8 @@ class MdClient:
                 self.stop()
             return
 
-        self._start_join_observer(api)
+        if join_observer:
+            self._start_join_observer(api)
 
     def _create_md_spi(self, api: Any) -> _MdSpi:
         return _MdSpi(self, api)
@@ -3060,6 +3387,7 @@ class MdClient:
         # Set this before waiting for a native registration call's lock.  It
         # is the post-call fence that prevents RegisterFront/Init from running
         # when stop races RegisterSpi on another thread.
+        defer_no_join_release = False
         if expected_api is _NO_EXPECTED_NATIVE_API:
             self._startup_cancel_event.set()
         with self._state_lock:
@@ -3089,6 +3417,7 @@ class MdClient:
             if api is None:
                 return False
             join_claimed = _ctp_native_join_claimed(api)
+            join_observer = self._join_observer_for_api_locked(api)
             join_required = bool(join_active or join_claimed)
             self._last_stopped_native_api = api
             self._last_stopped_connection_generation = self._connection_generation
@@ -3118,11 +3447,24 @@ class MdClient:
                     api,
                     spi,
                     native_may_be_live or bool(prior and prior[2]),
+                    join_observer and (prior[3] if prior is not None else True),
                 )
                 if native_may_be_live:
                     _retain_live_ctp_native_session(api, spi, join_thread)
+            elif not join_observer:
+                # No-Join generations are retained before detachment so an
+                # exact once-only Release can be authorized after every
+                # startup, request, and callback lease drains.
+                _retain_live_ctp_native_session(api, spi, None)
+                self._deferred_native_release = (api, spi)
+                defer_no_join_release = True
 
         if startup_call_active:
+            return True
+
+        if defer_no_join_release:
+            with self._state_lock:
+                self._maybe_finish_deferred_native_release_locked()
             return True
 
         if join_active:
@@ -3140,14 +3482,12 @@ class MdClient:
                 if _release_retired_ctp_native_session_after_join(api):
                     with self._state_lock:
                         self._pending_native_join_api_ids.discard(id(api))
+                        _clear_ctp_native_join_observer_policy(
+                            self._join_observer_policy_by_api_id, api
+                        )
             return True
 
-        _release_ctp_native_api_immediately(
-            api,
-            spi,
-            state_lock=self._state_lock,
-            pending_api_ids=self._pending_native_join_api_ids,
-        )
+        self._release_native_api_immediately(api, spi)
         return True
 
     def stop(self):
@@ -3647,6 +3987,10 @@ def _fence_trader_spi_callback(callback):
         with client._query_state_lock:
             client._callback_inflight_refs += 1
             current = self._is_current_locked()
+        callback_state = client._native_callback_thread_state
+        previous_depth = getattr(callback_state, "depth", 0)
+        if current:
+            callback_state.depth = previous_depth + 1
         try:
             if not current:
                 return None
@@ -3654,6 +3998,8 @@ def _fence_trader_spi_callback(callback):
             # state. User callbacks may synchronously start a typed query.
             return callback(self, *args, **kwargs)
         finally:
+            if current:
+                callback_state.depth = previous_depth
             with client._query_state_lock:
                 client._callback_inflight_refs = max(0, client._callback_inflight_refs - 1)
                 client._maybe_finish_deferred_native_release_locked()
@@ -4845,11 +5191,13 @@ class TraderClient:
         self._callback_ingress: _TraderCallbackIngressState | None = None
         self._managed_native_call_leases: dict[str, CtpManagedNativeCallLeaseV2] = {}
         self._managed_callback_thread_state = threading.local()
-        self._callback_ingress_deferred_cleanup: tuple[Any, Any, bool, bool] | None = None
+        self._join_observer_policy_by_api_id: dict[int, tuple[Any, bool]] = {}
+        self._callback_ingress_deferred_cleanup: tuple[Any, Any, bool, bool, bool] | None = None
         self._callback_ingress_cleanup_scheduled = False
         self._native_stop_in_progress = False
         self._native_request_inflight_refs = 0
         self._callback_inflight_refs = 0
+        self._native_callback_thread_state = threading.local()
 
     @property
     def _bound_md_front(self) -> str | None:
@@ -4953,23 +5301,29 @@ class TraderClient:
                     spi = getattr(self, "_spi", None)
                     join_thread = getattr(self, "_thread", None)
                     join_claimed = _ctp_native_join_claimed(current)
+                    join_observer = _ctp_native_join_observer_policy(
+                        self._join_observer_policy_by_api_id, current
+                    )
                     join_required = bool(
                         getattr(self, "_join_active", False)
                         or join_claimed
                         or (join_thread is not None and join_thread.is_alive())
                     )
-                    if join_required:
+                    if join_required or not join_observer:
                         # A replacement can race an active Join just like
                         # stop(). Keep the exact old director alive in the
                         # retired-session registry until Join proves return;
                         # the deferred cleanup tuple only spans callback/Req
                         # reference drain and may be cleared earlier.
-                        _retain_live_ctp_native_session(current, spi, join_thread)
+                        _retain_live_ctp_native_session(
+                            current, spi, join_thread if join_required else None
+                        )
                     self._callback_ingress_deferred_cleanup = (
                         current,
                         spi,
                         join_required,
                         join_claimed,
+                        join_observer,
                     )
                     self._maybe_finish_deferred_native_release_locked()
             self._revoke_native_callback_event_consumer_locked(
@@ -6076,7 +6430,13 @@ class TraderClient:
             name="bt-api-ctp-ingress-release",
             daemon=True,
         )
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            # This can run from a native callback's finally block. Keep the
+            # exact pending custody and do not let scheduler failure escape
+            # through the SDK callback or fall back to Join/Release here.
+            pass
 
     def _finish_deferred_native_release(self) -> None:
         with self._query_state_lock:
@@ -6091,31 +6451,54 @@ class TraderClient:
             ):
                 self._callback_ingress_cleanup_scheduled = False
                 return
-            api, spi, join_required, join_claimed = pending
-            self._callback_ingress_deferred_cleanup = None
-            self._callback_ingress_cleanup_scheduled = False
+            api, spi, join_required, join_claimed, join_observer = pending
+            if join_observer:
+                self._callback_ingress_deferred_cleanup = None
+                self._callback_ingress_cleanup_scheduled = False
 
         # Native lifecycle operations run without SDK locks. The retained
         # exact API/SPI pair remains pinned until both callback and request
         # references have drained.
+        if not join_observer:
+            if _ctp_native_join_claimed(api):
+                # A Join claim is an absolute Release fence, even if an
+                # unexpected external owner claimed this no-Join generation.
+                return
+            try:
+                api.RegisterSpi(None)
+            except BaseException:
+                _poison_ctp_native_session_after_detach_failure(api, spi)
+                return
+            with self._query_state_lock:
+                state = self._callback_ingress
+                if (
+                    (state is not None and state.native_call_refs != 0)
+                    or (state is not None and state.callback_refs != 0)
+                    or self._native_request_inflight_refs != 0
+                    or self._callback_inflight_refs != 0
+                ):
+                    self._callback_ingress_cleanup_scheduled = False
+                    return
+            released = _release_retired_ctp_native_session_without_join(api)
+            if released or _ctp_native_api_release_confirmed(api):
+                with self._query_state_lock:
+                    current = self._callback_ingress_deferred_cleanup
+                    if current is not None and current[0] is api:
+                        self._callback_ingress_deferred_cleanup = None
+                    self._callback_ingress_cleanup_scheduled = False
+                    self._pending_native_join_api_ids.discard(id(api))
+                    _clear_ctp_native_join_observer_policy(
+                        self._join_observer_policy_by_api_id, api
+                    )
+            return
         if join_required or join_claimed:
             with suppress(Exception):
                 api.RegisterSpi(None)
             if _ctp_native_join_returned(api):
                 if not _release_retired_ctp_native_session_after_join(api):
-                    _release_ctp_native_api_immediately(
-                        api,
-                        spi,
-                        state_lock=self._query_state_lock,
-                        pending_api_ids=self._pending_native_join_api_ids,
-                    )
+                    self._release_native_api_immediately(api, spi)
             return
-        _release_ctp_native_api_immediately(
-            api,
-            spi,
-            state_lock=self._query_state_lock,
-            pending_api_ids=self._pending_native_join_api_ids,
-        )
+        self._release_native_api_immediately(api, spi)
 
     def _bound_identity_is_current(self, *, require_active_front: bool = False) -> bool:
         """Check that public compatibility attributes still name this session.
@@ -8696,7 +9079,7 @@ class TraderClient:
                 # A re-entrant stop from Init() must treat the API as live
                 # before the vendor is allowed to create its callback thread.
                 self._native_init_started = True
-                self._join_active = True
+                self._join_active = self._join_observer_for_api_locked(api)
             # stop() sets its event before it waits for this lock.  Repeat the
             # precondition immediately before entering native code so a stop
             # that arrived during the preceding bookkeeping cancels this step.
@@ -8745,19 +9128,28 @@ class TraderClient:
             if not self._is_start_current_locked(api, spi, generation):
                 return False
             native_live = native_init_may_be_live or self._native_init_started
+            join_observer = self._join_observer_for_api_locked(api)
             if native_live:
                 self._pending_native_join_api_ids.add(id(api))
-                _retain_live_ctp_native_session(api, spi, self._thread)
-                observe_join = True
+                _retain_live_ctp_native_session(
+                    api, spi, self._thread if join_observer else None
+                )
+                observe_join = join_observer
                 # A Join observer is installed below for this exact retained
                 # API.  Record the same bounded join facts the normal stop path
                 # records so a later receipt cannot report join_required=False.
-                self._last_stop_join_required = True
+                self._last_stop_join_required = bool(join_observer)
                 self._last_stop_join_thread = self._thread
                 self._last_stop_join_tracker = self._native_join_tracker
             else:
                 self._pending_native_join_api_ids.add(id(api))
-                release_now = True
+                if join_observer:
+                    release_now = True
+                else:
+                    _retain_live_ctp_native_session(api, spi, None)
+                    self._callback_ingress_deferred_cleanup = (
+                        api, spi, False, False, False
+                    )
             self._api = None
             self._thread = None
             self._join_active = False
@@ -8774,12 +9166,14 @@ class TraderClient:
                 api.RegisterSpi(None)
             self._start_join_observer(api)
         elif release_now:
-            _release_ctp_native_api_immediately(
-                api,
-                spi,
-                state_lock=self._query_state_lock,
-                pending_api_ids=self._pending_native_join_api_ids,
-            )
+            self._release_native_api_immediately(api, spi)
+        elif not join_observer:
+            with self._query_state_lock:
+                if self._callback_ingress_deferred_cleanup is None:
+                    self._callback_ingress_deferred_cleanup = (
+                        api, spi, True, False, False
+                    )
+                self._maybe_finish_deferred_native_release_locked()
         return True
 
     def _join_native_api(self, api: Any, *, _already_claimed: bool = False) -> None:
@@ -8808,6 +9202,9 @@ class TraderClient:
                 if retired_session_released:
                     with self._query_state_lock:
                         self._pending_native_join_api_ids.discard(id(api))
+                        _clear_ctp_native_join_observer_policy(
+                            self._join_observer_policy_by_api_id, api
+                        )
 
     def wait_native_join(self, timeout: float) -> CtpNativeJoinWaitResult:
         """Wait at most ``timeout`` seconds for the latest native Join call.
@@ -8822,6 +9219,9 @@ class TraderClient:
     def _start_join_observer(self, api: Any) -> bool:
         """Start one Join observer for either the current or retired session."""
 
+        with self._query_state_lock:
+            if not self._join_observer_for_api_locked(api):
+                return False
         thread = threading.Thread(
             target=self._join_native_api,
             args=(api,),
@@ -8839,8 +9239,13 @@ class TraderClient:
         thread.start()
         return True
 
-    def start(self, block=False):
-        """启动连接（默认后台运行）"""
+    def start(self, block=False, *, join_observer=True):
+        """Start this API generation, optionally without a Join observer."""
+
+        if type(join_observer) is not bool:
+            raise ValueError("join_observer must be an exact bool")
+        if block and not join_observer:
+            raise ValueError("join_observer=False cannot be combined with block=True")
         with self._query_state_lock:
             ingress_state = self._callback_ingress
             if ingress_state is not None and (
@@ -8877,6 +9282,7 @@ class TraderClient:
                 # not proof that no native allocation occurred.
                 raise RuntimeError("ctp_native_api_factory_returned_no_api")
             with self._query_state_lock:
+                self._join_observer_policy_by_api_id[id(api)] = (api, join_observer)
                 self._startup_native_api = api
                 self._startup_api_phase = "api_created"
                 self._native_init_started = False
@@ -9003,14 +9409,14 @@ class TraderClient:
                 self._abort_startup(api, spi, generation)
                 return
             if not active:
-                # stop() detached this API while Init was running.  It is
-                # retained already; attach a Join observer so the registry is
-                # released when the native thread exits.
-                self._start_join_observer(api)
+                # stop() detached this API while Init was running. The exact
+                # generation's policy owns its already-scheduled cleanup.
+                if join_observer:
+                    self._start_join_observer(api)
                 return
         except BaseException:
-            # Init is a void vendor call, but if a binding raises after it was
-            # entered, fail safe and retain until Join proves native shutdown.
+            # Init is a void vendor call. Preserve the exact generation's
+            # selected cleanup policy when it raises after entry.
             handled = self._abort_startup(
                 api,
                 spi,
@@ -9021,7 +9427,8 @@ class TraderClient:
                 # A concurrent stop may have set the cancellation fence while
                 # Init raised.  Attach the observer whether it already
                 # retained the session or is about to do so.
-                self._start_join_observer(api)
+                if join_observer:
+                    self._start_join_observer(api)
             raise
 
         if block:
@@ -9038,7 +9445,8 @@ class TraderClient:
                 self.stop()
             return
 
-        self._start_join_observer(api)
+        if join_observer:
+            self._start_join_observer(api)
 
     def wait_ready(self, timeout=15, *, should_stop: Callable[[], bool] | None = None):
         """Wait for login, direct confirmation and matching server readback."""
@@ -10523,12 +10931,26 @@ class TraderClient:
         # A different API is already the live session.  The exact API passed
         # here was never published and cannot be the live one, so release it
         # independently instead of leaking it behind the live-session guard.
-        return _release_ctp_native_api_immediately(
+        return self._release_native_api_immediately(api, spi)
+
+    def _join_observer_for_api_locked(self, api: Any) -> bool:
+        return _ctp_native_join_observer_policy(
+            self._join_observer_policy_by_api_id, api
+        )
+
+    def _release_native_api_immediately(self, api: Any, spi: Any) -> bool:
+        released = _release_ctp_native_api_immediately(
             api,
             spi,
             state_lock=self._query_state_lock,
             pending_api_ids=self._pending_native_join_api_ids,
         )
+        if released or _ctp_native_api_release_confirmed(api):
+            with self._query_state_lock:
+                _clear_ctp_native_join_observer_policy(
+                    self._join_observer_policy_by_api_id, api
+                )
+        return released
 
     def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP trader session without freeing a live SWIG director.
@@ -10566,6 +10988,7 @@ class TraderClient:
             if api is None:
                 self._poison_callback_ingress_locked("owner_stop")
                 return False
+            join_observer = self._join_observer_for_api_locked(api)
             join_claimed = _ctp_native_join_claimed(api)
             join_required = bool(join_active or join_claimed)
             self._last_stopped_native_api = api
@@ -10573,9 +10996,11 @@ class TraderClient:
             self._last_stop_join_required = join_required
             self._last_stop_join_thread = join_thread
             self._last_stop_join_tracker = self._native_join_tracker
-            if join_active or join_claimed:
+            if join_active or join_claimed or not join_observer:
                 self._pending_native_join_api_ids.add(id(api))
-                _retain_live_ctp_native_session(api, spi, join_thread)
+                _retain_live_ctp_native_session(
+                    api, spi, join_thread if (join_active or join_claimed) else None
+                )
             else:
                 self._pending_native_join_api_ids.add(id(api))
             self._native_stop_in_progress = True
@@ -10586,6 +11011,8 @@ class TraderClient:
             self._native_init_started = False
             ingress_state = self._callback_ingress
             defer_ingress_cleanup = (
+                not join_observer
+                or
                 self._native_request_inflight_refs > 0
                 or self._callback_inflight_refs > 0
                 or (
@@ -10599,7 +11026,13 @@ class TraderClient:
                     spi,
                     join_required,
                     join_claimed,
+                    join_observer,
                 )
+
+        if not join_observer:
+            with self._query_state_lock:
+                self._maybe_finish_deferred_native_release_locked()
+            return True
 
         if defer_ingress_cleanup:
             # The final callback/request lease schedules RegisterSpi(None) and
@@ -10623,12 +11056,7 @@ class TraderClient:
                         self._pending_native_join_api_ids.discard(id(api))
             return True
 
-        _release_ctp_native_api_immediately(
-            api,
-            spi,
-            state_lock=self._query_state_lock,
-            pending_api_ids=self._pending_native_join_api_ids,
-        )
+        self._release_native_api_immediately(api, spi)
         return True
 
     def stop(self):

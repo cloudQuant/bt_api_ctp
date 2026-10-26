@@ -1,0 +1,34 @@
+{
+  "schema": "i51-ctp-nojoin-source-qa-v1",
+  "evidence_level": "SOURCE_FAKE_DEFAULT_LIFECYCLE_REGRESSIONS_ONLY",
+  "command": "C:/anaconda3/python.exe -m pytest -p no:asyncio tests/test_ctp_shutdown.py tests/test_md_startup_locking.py tests/test_md_client_identity.py -q --tb=short --junitxml=D:/temp/i51-ctp-nojoin-source-20261027/default-regressions-junit.xml",
+  "environment": {
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    "PYTHONUTF8": "1",
+    "PYTHONPATH": "unset"
+  },
+  "exit_code": 0,
+  "tests": {
+    "passed": 72,
+    "skipped": 1,
+    "failures": 0,
+    "errors": 0,
+    "total": 73,
+    "skip_reason": "Optional consumer regression for optional backtrader_runtime.ctp_native_shutdown module skipped because that module/file is unavailable in this Backtrader source checkout."
+  },
+  "warning": "one pre-existing PytestConfigWarning: unknown asyncio_default_fixture_loop_scope option",
+  "pins": {
+    "src\\bt_api_ctp\\ctp\\client.py": {
+      "size": 494245,
+      "sha256": "ab11ec060c5f447e1fb70ce462f4add2753cf6b9c5c017b1a1b6bf3fa97518b8"
+    },
+    "D:\\temp\\i51-ctp-nojoin-source-20261027\\default-regressions-stdout.txt": {
+      "size": 737,
+      "sha256": "a65c742fd6c10e45bb326002b0cc02a15e87925151a8f7d66d3c9b58c12557c9"
+    },
+    "D:\\temp\\i51-ctp-nojoin-source-20261027\\default-regressions-junit.xml": {
+      "size": 10589,
+      "sha256": "0f623aaa2f58f49e79f44ae3a2d6a96ba8fe3270ea74fb229db4a9f31dd60ea6"
+    }
+  }
+}

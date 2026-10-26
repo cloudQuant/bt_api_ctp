@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="35" time="2.952" timestamp="2026-10-27T02:07:26.425547" hostname="yun"><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[0-md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[0-trader]" time="0.823"><failure message="AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000018715512550&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;, invalid = 0
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    @pytest.mark.parametrize("invalid", [0, 1, None, "false"])
+    def test_join_observer_policy_requires_exact_bool_before_factory(
+        monkeypatch, client_type, invalid
+    ) -&gt; None:
+        client = client_type("tcp://test", "9999", "account", "secret")
+        factory_calls: list[bool] = []
+        factory_name = "CThostFtdcMdApi" if client_type is MdClient else "CThostFtdcTraderApi"
+        create_name = "CreateFtdcMdApi" if client_type is MdClient else "CreateFtdcTraderApi"
+        monkeypatch.setattr(
+            client_module,
+            factory_name,
+            SimpleNamespace(**{create_name: lambda _flow: factory_calls.append(True)}),
+        )
+    
+        with pytest.raises(ValueError, match="join_observer must be an exact bool"):
+            client.start(block=False, join_observer=invalid)
+        with pytest.raises(ValueError, match="join_observer=False cannot be combined"):
+&gt;           client.start(join_observer=False)
+
+tests\test_ctp_join_observer_policy.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\bt_api_ctp\ctp\client.py:9255: in start
+    _check_native_module()
+src\bt_api_ctp\ctp\client.py:1708: in _check_native_module
+    diagnostics = get_ctp_native_diagnostics()
+src\bt_api_ctp\ctp\client.py:1657: in get_ctp_native_diagnostics
+    binding_classes = {
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+.0 = &lt;tuple_iterator object at 0x0000018715BE7C10&gt;
+
+    binding_classes = {
+        name: {
+&gt;           "module": cls.__module__,
+            "module_path": runtime_modules.get(cls.__module__, ""),
+        }
+        for name, cls in (
+            ("CThostFtdcMdApi", CThostFtdcMdApi),
+            ("CThostFtdcMdSpi", CThostFtdcMdSpi),
+            ("CThostFtdcTraderApi", CThostFtdcTraderApi),
+            ("CThostFtdcTraderSpi", CThostFtdcTraderSpi),
+        )
+    }
+E   AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'
+
+src\bt_api_ctp\ctp\client.py:1659: AttributeError</failure></testcase><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[1-md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[1-trader]" time="0.064"><failure message="AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000018715566090&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;, invalid = 1
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    @pytest.mark.parametrize("invalid", [0, 1, None, "false"])
+    def test_join_observer_policy_requires_exact_bool_before_factory(
+        monkeypatch, client_type, invalid
+    ) -&gt; None:
+        client = client_type("tcp://test", "9999", "account", "secret")
+        factory_calls: list[bool] = []
+        factory_name = "CThostFtdcMdApi" if client_type is MdClient else "CThostFtdcTraderApi"
+        create_name = "CreateFtdcMdApi" if client_type is MdClient else "CreateFtdcTraderApi"
+        monkeypatch.setattr(
+            client_module,
+            factory_name,
+            SimpleNamespace(**{create_name: lambda _flow: factory_calls.append(True)}),
+        )
+    
+        with pytest.raises(ValueError, match="join_observer must be an exact bool"):
+            client.start(block=False, join_observer=invalid)
+        with pytest.raises(ValueError, match="join_observer=False cannot be combined"):
+&gt;           client.start(join_observer=False)
+
+tests\test_ctp_join_observer_policy.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\bt_api_ctp\ctp\client.py:9255: in start
+    _check_native_module()
+src\bt_api_ctp\ctp\client.py:1708: in _check_native_module
+    diagnostics = get_ctp_native_diagnostics()
+src\bt_api_ctp\ctp\client.py:1657: in get_ctp_native_diagnostics
+    binding_classes = {
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+.0 = &lt;tuple_iterator object at 0x00000187153E9090&gt;
+
+    binding_classes = {
+        name: {
+&gt;           "module": cls.__module__,
+            "module_path": runtime_modules.get(cls.__module__, ""),
+        }
+        for name, cls in (
+            ("CThostFtdcMdApi", CThostFtdcMdApi),
+            ("CThostFtdcMdSpi", CThostFtdcMdSpi),
+            ("CThostFtdcTraderApi", CThostFtdcTraderApi),
+            ("CThostFtdcTraderSpi", CThostFtdcTraderSpi),
+        )
+    }
+E   AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'
+
+src\bt_api_ctp\ctp\client.py:1659: AttributeError</failure></testcase><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[None-md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[None-trader]" time="0.061"><failure message="AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000018715533650&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;, invalid = None
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    @pytest.mark.parametrize("invalid", [0, 1, None, "false"])
+    def test_join_observer_policy_requires_exact_bool_before_factory(
+        monkeypatch, client_type, invalid
+    ) -&gt; None:
+        client = client_type("tcp://test", "9999", "account", "secret")
+        factory_calls: list[bool] = []
+        factory_name = "CThostFtdcMdApi" if client_type is MdClient else "CThostFtdcTraderApi"
+        create_name = "CreateFtdcMdApi" if client_type is MdClient else "CreateFtdcTraderApi"
+        monkeypatch.setattr(
+            client_module,
+            factory_name,
+            SimpleNamespace(**{create_name: lambda _flow: factory_calls.append(True)}),
+        )
+    
+        with pytest.raises(ValueError, match="join_observer must be an exact bool"):
+            client.start(block=False, join_observer=invalid)
+        with pytest.raises(ValueError, match="join_observer=False cannot be combined"):
+&gt;           client.start(join_observer=False)
+
+tests\test_ctp_join_observer_policy.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\bt_api_ctp\ctp\client.py:9255: in start
+    _check_native_module()
+src\bt_api_ctp\ctp\client.py:1708: in _check_native_module
+    diagnostics = get_ctp_native_diagnostics()
+src\bt_api_ctp\ctp\client.py:1657: in get_ctp_native_diagnostics
+    binding_classes = {
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+.0 = &lt;tuple_iterator object at 0x00000187153E8760&gt;
+
+    binding_classes = {
+        name: {
+&gt;           "module": cls.__module__,
+            "module_path": runtime_modules.get(cls.__module__, ""),
+        }
+        for name, cls in (
+            ("CThostFtdcMdApi", CThostFtdcMdApi),
+            ("CThostFtdcMdSpi", CThostFtdcMdSpi),
+            ("CThostFtdcTraderApi", CThostFtdcTraderApi),
+            ("CThostFtdcTraderSpi", CThostFtdcTraderSpi),
+        )
+    }
+E   AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'
+
+src\bt_api_ctp\ctp\client.py:1659: AttributeError</failure></testcase><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[false-md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_join_observer_policy_requires_exact_bool_before_factory[false-trader]" time="0.063"><failure message="AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000018714A35750&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;, invalid = 'false'
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    @pytest.mark.parametrize("invalid", [0, 1, None, "false"])
+    def test_join_observer_policy_requires_exact_bool_before_factory(
+        monkeypatch, client_type, invalid
+    ) -&gt; None:
+        client = client_type("tcp://test", "9999", "account", "secret")
+        factory_calls: list[bool] = []
+        factory_name = "CThostFtdcMdApi" if client_type is MdClient else "CThostFtdcTraderApi"
+        create_name = "CreateFtdcMdApi" if client_type is MdClient else "CreateFtdcTraderApi"
+        monkeypatch.setattr(
+            client_module,
+            factory_name,
+            SimpleNamespace(**{create_name: lambda _flow: factory_calls.append(True)}),
+        )
+    
+        with pytest.raises(ValueError, match="join_observer must be an exact bool"):
+            client.start(block=False, join_observer=invalid)
+        with pytest.raises(ValueError, match="join_observer=False cannot be combined"):
+&gt;           client.start(join_observer=False)
+
+tests\test_ctp_join_observer_policy.py:192: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\bt_api_ctp\ctp\client.py:9255: in start
+    _check_native_module()
+src\bt_api_ctp\ctp\client.py:1708: in _check_native_module
+    diagnostics = get_ctp_native_diagnostics()
+src\bt_api_ctp\ctp\client.py:1657: in get_ctp_native_diagnostics
+    binding_classes = {
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+.0 = &lt;tuple_iterator object at 0x00000187153E8790&gt;
+
+    binding_classes = {
+        name: {
+&gt;           "module": cls.__module__,
+            "module_path": runtime_modules.get(cls.__module__, ""),
+        }
+        for name, cls in (
+            ("CThostFtdcMdApi", CThostFtdcMdApi),
+            ("CThostFtdcMdSpi", CThostFtdcMdSpi),
+            ("CThostFtdcTraderApi", CThostFtdcTraderApi),
+            ("CThostFtdcTraderSpi", CThostFtdcTraderSpi),
+        )
+    }
+E   AttributeError: 'types.SimpleNamespace' object has no attribute '__module__'
+
+src\bt_api_ctp\ctp\client.py:1659: AttributeError</failure></testcase><testcase classname="tests.test_ctp_join_observer_policy" name="test_default_start_still_observes_join_and_releases_once[md]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_default_start_still_observes_join_and_releases_once[trader]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_stop_and_wait_bounds_release_only_observation[md]" time="0.032" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_stop_and_wait_bounds_release_only_observation[trader]" time="0.032" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_receipt_waits_for_exact_deferred_owner_to_clear[md]" time="0.041" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_receipt_waits_for_exact_deferred_owner_to_clear[trader]" time="0.030" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_release_wait_from_callback_returns_incomplete_without_deadlock[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_release_wait_from_callback_returns_incomplete_without_deadlock[trader]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_callback_lease_returns[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_callback_lease_returns[trader]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_md_no_join_preinit_stop_waits_for_startup_and_callback_leases" time="0.029" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_startup_call_returns[md]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_startup_call_returns[trader]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_request_lease_returns[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_defers_release_until_request_lease_returns[trader]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_startup_failure_releases_without_join[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_startup_failure_releases_without_join[trader]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_init_exception_after_entry_releases_without_join[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_init_exception_after_entry_releases_without_join[trader]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_spi_constructor_failure_releases_unpublished_api_without_join[md]" time="0.001" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_spi_constructor_failure_releases_unpublished_api_without_join[trader]" time="0.001"><failure message="AssertionError: assert 0 == 1&#10; +  where 0 = &lt;built-in method count of list object at 0x00000187154A1D40&gt;('release')&#10; +    where &lt;built-in method count of list object at 0x00000187154A1D40&gt; = [].count">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001871547F990&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    def test_no_join_spi_constructor_failure_releases_unpublished_api_without_join(
+        monkeypatch, client_type
+    ) -&gt; None:
+        api = _NativeApi()
+        client = _client_with_fake_api(monkeypatch, client_type, api)
+    
+        def fail_spi(*_args):
+            raise RuntimeError("fake_spi_constructor_failure")
+    
+        if client_type is MdClient:
+            monkeypatch.setattr(client, "_create_md_spi", fail_spi)
+        else:
+            monkeypatch.setattr(client_module, "_TraderSpi", fail_spi)
+        with pytest.raises(RuntimeError, match="fake_spi_constructor_failure"):
+            client.start(block=False, join_observer=False)
+    
+&gt;       assert [name for name, _ in api.calls].count("release") == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = &lt;built-in method count of list object at 0x00000187154A1D40&gt;('release')
+E        +    where &lt;built-in method count of list object at 0x00000187154A1D40&gt; = [].count
+
+tests\test_ctp_join_observer_policy.py:565: AssertionError</failure></testcase><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_concurrent_stop_releases_exact_session_once[md]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_concurrent_stop_releases_exact_session_once[trader]" time="0.002" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_failed_release_is_retained_and_never_retried[md]" time="0.012" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_failed_release_is_retained_and_never_retried[trader]" time="0.012" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_cleanup_worker_start_failure_stays_incomplete_without_retry[md]" time="0.032" /><testcase classname="tests.test_ctp_join_observer_policy" name="test_no_join_cleanup_worker_start_failure_stays_incomplete_without_retry[trader]" time="0.001"><failure message="assert False is True&#10; +  where False = CtpNativeStopReceipt(connection_generation=0, join_required=False, join_completed=False, native_released=False, thread_alive=None, timed_out=False).join_completed">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000187154AEE10&gt;
+client_type = &lt;class 'bt_api_ctp.ctp.client.TraderClient'&gt;
+
+    @pytest.mark.parametrize("client_type", [MdClient, TraderClient], ids=["md", "trader"])
+    def test_no_join_cleanup_worker_start_failure_stays_incomplete_without_retry(
+        monkeypatch, client_type
+    ) -&gt; None:
+        api = _NativeApi()
+        client = _client_with_fake_api(monkeypatch, client_type, api)
+        client.start(block=False, join_observer=False)
+        spi = client._spi
+        thread_start_attempts: list[str] = []
+        real_thread_start = threading.Thread.start
+    
+        def fail_cleanup_thread_start(thread, *args, **kwargs):
+            thread_start_attempts.append(thread.name)
+            raise RuntimeError("fake_cleanup_thread_start_failure")
+    
+        monkeypatch.setattr(threading.Thread, "start", fail_cleanup_thread_start)
+        # A failed worker launch must retain custody and report an incomplete stop;
+        # no synchronous Release or fallback Join is safe here.
+        client.stop()
+        first = client.stop_and_wait(timeout=0.01)
+        assert type(first) is CtpNativeStopReceipt
+        assert first.complete is False
+        assert first.join_required is False
+&gt;       assert first.join_completed is True
+E       assert False is True
+E        +  where False = CtpNativeStopReceipt(connection_generation=0, join_required=False, join_completed=False, native_released=False, thread_alive=None, timed_out=False).join_completed
+
+tests\test_ctp_join_observer_policy.py:664: AssertionError</failure></testcase></testsuite></testsuites>

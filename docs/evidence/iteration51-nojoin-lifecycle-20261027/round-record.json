@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "repository": "D:\\bt_api_py\\bt_api\\bt_api_ctp",
+  "branch": "dev",
+  "parent": "48b476ea90665791c7d2f86935720ce238931520",
+  "status": "PASS_SOURCE_FAKE_BASE_CLIENT_NOJOIN_LIFECYCLE_ONLY",
+  "source_sha256": {
+    "src/bt_api_ctp/ctp/client.py": "ab11ec060c5f447e1fb70ce462f4add2753cf6b9c5c017b1a1b6bf3fa97518b8",
+    "tests/test_ctp_join_observer_policy.py": "6a1e1a26464d81e1385822f708bdbee88a3916e9e78006153ce1eea198245ffc"
+  },
+  "independent_review": "STATIC_GO",
+  "default_regression": {
+    "passed": 72,
+    "skipped": 1,
+    "exit_code": 0,
+    "skip_reason": "Optional backtrader_runtime.ctp_native_shutdown module unavailable."
+  },
+  "focused_regression": {
+    "distinct_passed": 37,
+    "runs": {
+      "r2": 35,
+      "r3": 2,
+      "r4": 2
+    },
+    "all_exit_codes": 0,
+    "single_37_case_run_claimed": false,
+    "first_diagnostic_run": "29 passed, 6 fixture expectation failures; corrected test assumptions before r2."
+  },
+  "warning": "Each pytest invocation reports the existing unknown asyncio_default_fixture_loop_scope config option.",
+  "test_pin_delta": {
+    "prior_sha256": "ba801f6e409c126c96e9488849367e3931db5bd7af5294d30bed31662f5929e2",
+    "final_sha256": "6a1e1a26464d81e1385822f708bdbee88a3916e9e78006153ce1eea198245ffc",
+    "removed_line": "    real_thread_start = threading.Thread.start",
+    "after_anchor": "    thread_start_attempts: list[str] = []",
+    "root_reconstruction_verified": true,
+    "affected_nodes_retested_in": "r4"
+  },
+  "qa_metadata_note": "default-result.json received the explanatory skip reason after execution; stdout and JUnit remain original execution outputs.",
+  "native_primitive_context": {
+    "backtrader_commit": "91a63f25a2f648897029f53eba672c5c6d490444",
+    "evidence_path": "docs/_internal/opts/requirements/迭代51-因子流批一体与Alpha003-SimNow实盘示例/evidence/ctp-nojoin-native-20261027/record.json",
+    "scope": "Existing installed native API only, not this new client implementation."
+  },
+  "limits": [
+    "OneShotMdDiagnosticClient override does not expose this option.",
+    "No installed candidate, production client native run, provider/account, or formal Iteration50/51 acceptance.",
+    "No retained host was operated; original account host 86857 remains unchanged."
+  ],
+  "payload_sha256": {
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/review.md": "99c6c258a2bfa97e254237e2b934193f26b68a709c452805af9fa42214622f7b",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/default-stdout.txt": "a65c742fd6c10e45bb326002b0cc02a15e87925151a8f7d66d3c9b58c12557c9",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/default-junit.xml": "0f623aaa2f58f49e79f44ae3a2d6a96ba8fe3270ea74fb229db4a9f31dd60ea6",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/default-result.json": "bc876c7939c7b3947a48d48841c4e97211ac1b9aef076f00d71ff699503df293",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r1.json": "5fb7087156f33a5e02acea66cb1eedbcab1e05301959216a42c9e6c997d9f7f5",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r1.xml": "8b87fd9d89d70a1e17605b01623a2a20c5dd49896d1ad81bcc7b0044c568c473",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r1-stdout.txt": "355ab1e3802c88b79589b20ce761d2209c8b92b530b26b29d10f00ca8658c2f9",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r2.json": "c7a05cd60c1735283a210551dd0f621260b3e7aa11cab559c05d87f5307b084a",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r2.xml": "7fd2f1bd8a046b904f9b99af9f5418eb2c5effca5104d7e627a5be461eb98847",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r2-stdout.txt": "df59d0ea584dd958a04ae8e6ecc79b428266821b60efe106e4db5221fb6a4cb9",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r3.json": "5f10430e47ca34af0f459140365b6f45916116f9b5ea23587469024c476aa999",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r3.xml": "76feb08f038b3c3b0c313eccaf9dffbdb84b086c6d2da4b6016384594442e608",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r3-stdout.txt": "46642cfd1fa01194db396d01ac7343bf21c949584711f3e642a2fef39465b5b6",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r4.json": "fe560cfb9fe2e61992e9a32732254b83e866e265973865022091c13e35aa63ab",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r4.xml": "b234dbbaf56b0410a3cc8a6e7561ae5ca88af2cd2d4605c0b731e7278f0c5718",
+    "docs/evidence/iteration51-nojoin-lifecycle-20261027/focused-r4-stdout.txt": "6cde46ad06b7eaaadeaa86f2f884e0adc0550c33756a961d6c20c4054b3df5fd"
+  }
+}
