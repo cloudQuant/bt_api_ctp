@@ -10563,8 +10563,20 @@ class TraderClient:
         ).first
 
     def query_instrument_commission_rate_result(
-        self, instrument_id, exchange_id="", timeout=5
+        self,
+        instrument_id,
+        exchange_id="",
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
+        """Read instrument commission rates under an optional total query deadline.
+
+        The absolute monotonic deadline bounds query-lane acquisition, rate
+        limiting, request start, and callback waiting. A native request already
+        entered cannot be interrupted; the deadline is checked immediately
+        before and after that call.
+        """
         field = CThostFtdcQryInstrumentCommissionRateField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
@@ -10596,6 +10608,7 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_instrument_commission_rate(self, instrument_id, exchange_id="", timeout=5):

@@ -451,6 +451,141 @@ def test_instrument_query_cancelled_during_rate_wait_is_not_submitted():
     assert result.error_message == "query_cancelled"
 
 
+def test_commission_rate_deadline_bounds_query_lock_without_late_submit():
+    client = read_client()
+    submissions = []
+    client._api = SimpleNamespace(
+        ReqQryInstrumentCommissionRate=lambda *_args: submissions.append(True) or 0
+    )
+    deadline = time.monotonic() + 0.04
+    result_holder = []
+    client._query_lock.acquire()
+    worker = threading.Thread(
+        target=lambda: result_holder.append(
+            client.query_instrument_commission_rate_result(
+                "rb2701",
+                "SHFE",
+                timeout=0.01,
+                deadline_monotonic=deadline,
+            )
+        )
+    )
+    started = time.monotonic()
+    try:
+        worker.start()
+        worker.join(timeout=0.5)
+        returned_before_release = not worker.is_alive()
+        elapsed = time.monotonic() - started
+    finally:
+        client._query_lock.release()
+        worker.join(timeout=1)
+
+    assert returned_before_release
+    assert elapsed < 0.5
+    assert not worker.is_alive()
+    assert len(result_holder) == 1
+    result = result_holder[0]
+    assert result.complete is False
+    assert result.timed_out is True
+    assert result.error_message == "query_deadline_exceeded"
+    assert submissions == []
+
+
+def test_commission_rate_query_completes_before_explicit_deadline():
+    client = read_client()
+    submissions = []
+
+    def submit(field, request_id):
+        submissions.append((field.InstrumentID, field.ExchangeID))
+        client._handle_query_callback(
+            "commission_rate",
+            {"InstrumentID": field.InstrumentID},
+            None,
+            request_id,
+            True,
+        )
+        return 0
+
+    client._api = SimpleNamespace(ReqQryInstrumentCommissionRate=submit)
+    result = client.query_instrument_commission_rate_result(
+        "rb2701",
+        "SHFE",
+        timeout=0.1,
+        deadline_monotonic=time.monotonic() + 1,
+    )
+
+    assert result.complete is True
+    assert result.timed_out is False
+    assert result.records[0]["InstrumentID"] == "rb2701"
+    assert submissions == [("rb2701", "SHFE")]
+
+
+def test_commission_rate_deadline_bounds_callback_wait():
+    client = read_client()
+    submissions = []
+    client._api = SimpleNamespace(
+        ReqQryInstrumentCommissionRate=lambda *_args: submissions.append(True) or 0
+    )
+    deadline = time.monotonic() + 0.04
+    started = time.monotonic()
+
+    result = client.query_instrument_commission_rate_result(
+        "rb2701",
+        "SHFE",
+        timeout=5,
+        deadline_monotonic=deadline,
+    )
+
+    assert time.monotonic() - started < 0.5
+    assert submissions == [True]
+    assert result.complete is False
+    assert result.timed_out is True
+    assert result.error_message == "query_deadline_exceeded"
+
+
+def test_expired_commission_rate_deadline_rejects_before_native_submit():
+    client = read_client()
+    submissions = []
+    client._api = SimpleNamespace(
+        ReqQryInstrumentCommissionRate=lambda *_args: submissions.append(True) or 0
+    )
+
+    result = client.query_instrument_commission_rate_result(
+        "rb2701",
+        "SHFE",
+        timeout=5,
+        deadline_monotonic=time.monotonic() - 1,
+    )
+
+    assert result.complete is False
+    assert result.timed_out is True
+    assert result.error_message == "query_deadline_exceeded"
+    assert submissions == []
+
+
+def test_commission_rate_query_preserves_positional_legacy_call():
+    client = read_client()
+    submissions = []
+
+    def submit(field, request_id):
+        submissions.append((field.InstrumentID, field.ExchangeID))
+        client._handle_query_callback(
+            "commission_rate",
+            {"InstrumentID": field.InstrumentID},
+            None,
+            request_id,
+            True,
+        )
+        return 0
+
+    client._api = SimpleNamespace(ReqQryInstrumentCommissionRate=submit)
+    result = client.query_instrument_commission_rate_result("rb2701", "SHFE", 0.1)
+
+    assert result.complete is True
+    assert result.records[0]["InstrumentID"] == "rb2701"
+    assert submissions == [("rb2701", "SHFE")]
+
+
 def test_trade_query_deadline_bounds_rate_wait_without_native_submission():
     client = read_client()
     submissions = []
