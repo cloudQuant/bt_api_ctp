@@ -1,0 +1,109 @@
+{
+  "repository": "D:\\bt_api_py\\bt_api\\bt_api_ctp",
+  "branch": "dev",
+  "parent_commit": "574cd2dd495a3c675d7cd23fcbf23a797a08c04d",
+  "scope": [
+    "src/bt_api_ctp/ctp/client.py",
+    "src/bt_api_ctp/query.py",
+    "tests/test_query_completion_origin.py",
+    "docs/iteration51-query-origins-20261027.json"
+  ],
+  "acceptance": {
+    "level": "SOURCE_NATIVE_SYNTHETIC_ONLY",
+    "lane": "sdk",
+    "exit_code": 0,
+    "elapsed_seconds": 3.327999999979511,
+    "test_count": 40,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "source_pins_unchanged": true,
+    "source_pins_before": {
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+        "size_bytes": 498343,
+        "sha256": "b1fd825080319658770f3d8a13e7414145b408c321e0309a85014632facaad5b"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+        "size_bytes": 13265,
+        "sha256": "bba0c8dcd885d0a85f09119c540dc3f713ae3a3e04d888548526c53fc9c44b24"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+        "size_bytes": 18156,
+        "sha256": "53177a7be19fd044719cb67b41ad7c1e177a9367da73ff3a7cb5a338c62013be"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_instrument_queries.py": {
+        "size_bytes": 22588,
+        "sha256": "247648720709f87a01fb71ba8cfe2cc9e662c636e71f8bd642bdcd4736da9edd"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+        "size_bytes": 102616,
+        "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\feeds\\live_ctp_feed.py": {
+        "size_bytes": 145851,
+        "sha256": "198fe3d4aecadd75959e5a13b596bef9b67e929afd07167b4611cd443ea952a5"
+      }
+    },
+    "source_pins_after": {
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+        "size_bytes": 498343,
+        "sha256": "b1fd825080319658770f3d8a13e7414145b408c321e0309a85014632facaad5b"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+        "size_bytes": 13265,
+        "sha256": "bba0c8dcd885d0a85f09119c540dc3f713ae3a3e04d888548526c53fc9c44b24"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+        "size_bytes": 18156,
+        "sha256": "53177a7be19fd044719cb67b41ad7c1e177a9367da73ff3a7cb5a338c62013be"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_instrument_queries.py": {
+        "size_bytes": 22588,
+        "sha256": "247648720709f87a01fb71ba8cfe2cc9e662c636e71f8bd642bdcd4736da9edd"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+        "size_bytes": 102616,
+        "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+      },
+      "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\feeds\\live_ctp_feed.py": {
+        "size_bytes": 145851,
+        "sha256": "198fe3d4aecadd75959e5a13b596bef9b67e929afd07167b4611cd443ea952a5"
+      }
+    },
+    "nodes": [
+      "tests/test_query_completion_origin.py",
+      "tests/test_instrument_queries.py::test_instrument_query_cancels_pending_wait_and_seals_late_callbacks",
+      "tests/test_instrument_queries.py::test_instrument_query_cancelled_during_rate_wait_is_not_submitted",
+      "tests/test_instrument_queries.py::test_trade_query_deadline_bounds_rate_wait_without_native_submission",
+      "tests/test_instrument_queries.py::test_order_query_deadline_covers_synchronous_native_submit",
+      "tests/test_iter22_contracts.py::test_query_result_accumulates_only_matching_request_and_terminal_packet",
+      "tests/test_iter22_contracts.py::test_query_timeout_and_late_callback_never_become_empty_success",
+      "tests/test_iter22_contracts.py::test_query_callback_after_terminal_packet_is_counted_as_late",
+      "tests/test_iter22_contracts.py::test_old_generation_query_callback_is_orphaned"
+    ],
+    "spec": {
+      "size_bytes": 2271,
+      "sha256": "76c1ba394e43313521302d6e3294a053865ddae6aa9fb759a42b2d023e76747e"
+    },
+    "runner": {
+      "size_bytes": 4408,
+      "sha256": "2e7e707c9bd53f0e160f5a4cc4a10345b1ee333779a1877e948ea8265d1e0e10"
+    },
+    "boundary": "Real SDK/SPI and query fields; synthetic request/OS leaves. Network denied. No provider/account acceptance."
+  },
+  "warning_count": 1,
+  "warning": "Existing pytest asyncio_default_fixture_loop_scope configuration warning.",
+  "independent_review": "capacity_review GO on exact frozen source; source/local-synthetic only.",
+  "behavior": [
+    "Whitelist first and latest completion origins without changing legacy error semantics.",
+    "Forward optional absolute deadlines for instrument and depth queries.",
+    "Native request calls cannot be interrupted; managed waits and pre/post checks enforce deadlines."
+  ],
+  "failed_harness_preserved": {
+    "path": "D:/temp/i51-query-origins-sdk-qa-20261027-r1",
+    "test_count": 0,
+    "cause": "Relative spec path became invalid after child cwd change.",
+    "repair": "Absolute spec argument; unchanged candidate and runner."
+  },
+  "boundary": "No provider/account or formal acceptance. No push. Commit identified by git history for this record."
+}

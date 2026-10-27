@@ -13,6 +13,23 @@ from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
 
+QUERY_COMPLETION_ORIGINS = frozenset(
+    {
+        "unknown",
+        "query_response",
+        "response_error",
+        "front_disconnected",
+        "client_stop",
+        "local_cancel",
+        "submit_exception",
+        "submit_rejected",
+        "timeout",
+        "deadline",
+        "success",
+        "local_preflight",
+    }
+)
+
 # These seals are intentionally module-private.  A regular ``QueryResult``
 # constructed by a caller has no source provenance and cannot be promoted to
 # account evidence merely because its string fields happen to match a session.
@@ -248,7 +265,15 @@ class QueryResult(Generic[T]):
     late_callback_count: int = 0
     unsupported: bool = False
     submit_code: int | None = None
+    first_completion_origin: str = "unknown"
+    completion_origin: str = "unknown"
     _source: _QuerySource | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        for name in ("first_completion_origin", "completion_origin"):
+            value = getattr(self, name)
+            if type(value) is not str or value not in QUERY_COMPLETION_ORIGINS:
+                raise ValueError(f"invalid {name}")
 
     @property
     def query_source(self) -> _QuerySource | None:
@@ -289,6 +314,8 @@ class QueryResult(Generic[T]):
             "late_callback_count": self.late_callback_count,
             "unsupported": self.unsupported,
             "submit_code": self.submit_code,
+            "first_completion_origin": self.first_completion_origin,
+            "completion_origin": self.completion_origin,
         }
         if include_records:
             data["records"] = list(self.records)
@@ -326,4 +353,4 @@ class QueryResult(Generic[T]):
         )
 
 
-__all__ = ["QueryResult"]
+__all__ = ["QueryResult", "QUERY_COMPLETION_ORIGINS"]

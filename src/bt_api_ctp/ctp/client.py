@@ -78,6 +78,7 @@ from bt_api_ctp.md_diagnostics import (
 from bt_api_ctp.md_identity import MdIdentityObservation
 from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
+    QUERY_COMPLETION_ORIGINS,
     QueryResult,
     _attach_query_source,
     _new_query_session_scope,
@@ -2131,6 +2132,15 @@ class _QueryAccumulator:
     completed_monotonic: float | None = None
     source_records_sha256: str | None = None
     source_tags: tuple[str, str, str, str, int, int] | None = None
+    first_completion_origin: str = "unknown"
+    completion_origin: str = "unknown"
+
+    def record_completion_origin(self, origin: str) -> None:
+        if type(origin) is not str or origin not in QUERY_COMPLETION_ORIGINS:
+            raise ValueError("invalid query completion origin")
+        if self.first_completion_origin == "unknown":
+            self.first_completion_origin = origin
+        self.completion_origin = origin
 
     def result(self) -> QueryResult[Any]:
         complete = (
@@ -2156,6 +2166,8 @@ class _QueryAccumulator:
             late_callback_count=self.late_callback_count,
             unsupported=self.unsupported,
             submit_code=self.submit_code,
+            first_completion_origin=self.first_completion_origin,
+            completion_origin=self.completion_origin,
         )
         if self.source_issuer is None:
             return result
@@ -8615,7 +8627,9 @@ class TraderClient:
             self._settlement_readback_verified = False
             self._last_session_error = {}
 
-    def _on_front_disconnected(self, reason: Any) -> None:
+    def _on_front_disconnected(
+        self, reason: Any, *, query_completion_origin: str = "front_disconnected"
+    ) -> None:
         with self._query_state_lock:
             self._revoke_execution_gate_locked("ctp_execution_gate_disconnected")
             self._session_native_api = None
@@ -8643,6 +8657,7 @@ class TraderClient:
             for accumulator in self._query_history.values():
                 if accumulator.sealed:
                     continue
+                accumulator.record_completion_origin(query_completion_origin)
                 accumulator.error_code = -2
                 accumulator.error_message = "connection_lost"
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
@@ -9553,6 +9568,7 @@ class TraderClient:
         unsupported: bool = False,
         timed_out: bool = False,
         include_query_source: bool = True,
+        completion_origin: str = "local_preflight",
     ) -> QueryResult[Any]:
         accumulator = self._new_query_accumulator(request_type)
         if not include_query_source:
@@ -9561,6 +9577,7 @@ class TraderClient:
         accumulator.error_message = message
         accumulator.unsupported = unsupported
         accumulator.timed_out = timed_out
+        accumulator.record_completion_origin(completion_origin)
         accumulator.completed_at_utc = datetime.now(timezone.utc)
         accumulator.completed_monotonic = time.monotonic()
         accumulator.sealed = True
@@ -9574,6 +9591,8 @@ class TraderClient:
         rsp_info: Any,
         request_id: int,
         is_last: bool,
+        *,
+        completion_origin: str = "query_response",
     ) -> None:
         error_code, error_message = _rsp_error(rsp_info)
         terminal_callback_at_utc = None
@@ -9641,6 +9660,10 @@ class TraderClient:
             if is_last:
                 accumulator.is_last_seen = True
             if is_last or error_code not in (None, 0):
+                terminal_origin = completion_origin
+                if completion_origin == "query_response" and error_code in (None, 0):
+                    terminal_origin = "success"
+                accumulator.record_completion_origin(terminal_origin)
                 # The terminal callback is the authoritative completion
                 # boundary.  Capture both clocks and the raw-row digest before
                 # releasing the state lock; a slow native return or a later
@@ -9664,7 +9687,14 @@ class TraderClient:
         with self._query_state_lock:
             accumulator = self._query_history.get(int(request_id))
             request_type = accumulator.request_type if accumulator is not None else "unknown"
-        self._handle_query_callback(request_type, None, rsp_info, request_id, is_last)
+        self._handle_query_callback(
+            request_type,
+            None,
+            rsp_info,
+            request_id,
+            is_last,
+            completion_origin="response_error",
+        )
 
     def _execute_query(
         self,
@@ -9710,10 +9740,15 @@ class TraderClient:
         )
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
             return self._local_query_failure(
-                request_type, "query_deadline_exceeded", timed_out=True
+                request_type,
+                "query_deadline_exceeded",
+                timed_out=True,
+                completion_origin="deadline",
             )
         if should_stop is not None and should_stop():
-            return self._local_query_failure(request_type, "query_cancelled")
+            return self._local_query_failure(
+                request_type, "query_cancelled", completion_origin="local_cancel"
+            )
         if not self.is_read_only_ready:
             return self._local_query_failure(request_type, "trader_not_logged_in")
         if not callable(submit):
@@ -9725,11 +9760,17 @@ class TraderClient:
         with _query_lock_until(self._query_lock, issue_deadline) as lock_acquired:
             if not lock_acquired:
                 return self._local_query_failure(
-                    request_type, "query_deadline_exceeded", timed_out=True
+                    request_type,
+                    "query_deadline_exceeded",
+                    timed_out=True,
+                    completion_origin="deadline",
                 )
             if issue_deadline is not None and time.monotonic() >= issue_deadline:
                 return self._local_query_failure(
-                    request_type, "query_deadline_exceeded", timed_out=True
+                    request_type,
+                    "query_deadline_exceeded",
+                    timed_out=True,
+                    completion_origin="deadline",
                 )
             elapsed = time.monotonic() - self._last_query_submitted_at
             wait_time = self._query_interval - elapsed
@@ -9741,7 +9782,11 @@ class TraderClient:
                     wait_deadline = time.monotonic() + wait_time
                     while True:
                         if should_stop is not None and should_stop():
-                            return self._local_query_failure(request_type, "query_cancelled")
+                            return self._local_query_failure(
+                                request_type,
+                                "query_cancelled",
+                                completion_origin="local_cancel",
+                            )
                         now = time.monotonic()
                         remaining = wait_deadline - now
                         if issue_deadline is not None:
@@ -9751,13 +9796,17 @@ class TraderClient:
                                     request_type,
                                     "query_deadline_exceeded",
                                     timed_out=True,
+                                    completion_origin="deadline",
                                 )
                         if remaining <= 0:
                             break
                         stop_wait.wait(min(_CTP_STOP_POLL_SECONDS, remaining))
             if issue_deadline is not None and time.monotonic() >= issue_deadline:
                 return self._local_query_failure(
-                    request_type, "query_deadline_exceeded", timed_out=True
+                    request_type,
+                    "query_deadline_exceeded",
+                    timed_out=True,
+                    completion_origin="deadline",
                 )
             try:
                 request_intent_items = _query_filter_items(request_intent_filters)
@@ -9788,10 +9837,15 @@ class TraderClient:
                     include_query_source=False,
                 )
             if should_stop is not None and should_stop():
-                return self._local_query_failure(request_type, "query_cancelled")
+                return self._local_query_failure(
+                    request_type, "query_cancelled", completion_origin="local_cancel"
+                )
             if issue_deadline is not None and time.monotonic() >= issue_deadline:
                 return self._local_query_failure(
-                    request_type, "query_deadline_exceeded", timed_out=True
+                    request_type,
+                    "query_deadline_exceeded",
+                    timed_out=True,
+                    completion_origin="deadline",
                 )
             accumulator = self._new_query_accumulator(
                 request_type,
@@ -9809,6 +9863,7 @@ class TraderClient:
         if should_stop is not None and should_stop():
             with self._query_state_lock:
                 if not accumulator.event.is_set() and not accumulator.is_last_seen:
+                    accumulator.record_completion_origin("local_cancel")
                     accumulator.error_code = -1
                     accumulator.error_message = "query_cancelled"
                     accumulator.completed_at_utc = datetime.now(timezone.utc)
@@ -9825,6 +9880,7 @@ class TraderClient:
             ret = submit(accumulator.request_id)
         except Exception as exc:
             with self._query_state_lock:
+                accumulator.record_completion_origin("submit_exception")
                 accumulator.error_code = -4
                 accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
@@ -9836,13 +9892,15 @@ class TraderClient:
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
             return self._mark_query_deadline_exceeded(accumulator)
         if ret not in (None, 0):
-            accumulator.error_code = int(ret)
-            accumulator.error_message = "query_submit_rejected"
-            accumulator.completed_at_utc = datetime.now(timezone.utc)
-            accumulator.completed_monotonic = time.monotonic()
-            accumulator.sealed = True
-            accumulator.event.set()
-            return accumulator.result()
+            with self._query_state_lock:
+                accumulator.record_completion_origin("submit_rejected")
+                accumulator.error_code = int(ret)
+                accumulator.error_message = "query_submit_rejected"
+                accumulator.completed_at_utc = datetime.now(timezone.utc)
+                accumulator.completed_monotonic = time.monotonic()
+                accumulator.sealed = True
+                accumulator.event.set()
+                return accumulator.result()
         cancelled = False
         if progressive_idle_timeout is not None and progressive_max_duration is not None:
             # The idle timeout bounds silence between response packets; valid
@@ -9882,6 +9940,7 @@ class TraderClient:
                         )
 
                     if cancelled:
+                        accumulator.record_completion_origin("local_cancel")
                         accumulator.error_code = -1
                         accumulator.error_message = "query_cancelled"
                         accumulator.completed_at_utc = datetime.now(timezone.utc)
@@ -9898,11 +9957,12 @@ class TraderClient:
                         # packets. A terminal callback already recorded above
                         # still wins the deadline race.
                         accumulator.timed_out = True
-                        accumulator.error_message = (
-                            "query_deadline_exceeded"
-                            if issue_deadline is not None and now >= issue_deadline
-                            else "query_timeout"
-                        )
+                        if issue_deadline is not None and now >= issue_deadline:
+                            accumulator.record_completion_origin("deadline")
+                            accumulator.error_message = "query_deadline_exceeded"
+                        else:
+                            accumulator.record_completion_origin("timeout")
+                            accumulator.error_message = "query_timeout"
                         accumulator.completed_at_utc = datetime.now(timezone.utc)
                         accumulator.completed_monotonic = now
                         accumulator.sealed = True
@@ -9946,21 +10006,23 @@ class TraderClient:
                 and accumulator.completed_monotonic > issue_deadline
             )
             if deadline_callback_late:
+                accumulator.record_completion_origin("deadline")
                 accumulator.timed_out = True
                 accumulator.error_message = "query_deadline_exceeded"
                 terminal_observed = False
             if not observed and not terminal_observed:
                 if cancelled:
+                    accumulator.record_completion_origin("local_cancel")
                     accumulator.error_code = -1
                     accumulator.error_message = "query_cancelled"
                 else:
                     accumulator.timed_out = True
-                    accumulator.error_message = (
-                        "query_deadline_exceeded"
-                        if issue_deadline is not None
-                        and time.monotonic() >= issue_deadline
-                        else "query_timeout"
-                    )
+                    if issue_deadline is not None and time.monotonic() >= issue_deadline:
+                        accumulator.record_completion_origin("deadline")
+                        accumulator.error_message = "query_deadline_exceeded"
+                    else:
+                        accumulator.record_completion_origin("timeout")
+                        accumulator.error_message = "query_timeout"
             if accumulator.completed_at_utc is None:
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
                 accumulator.completed_monotonic = time.monotonic()
@@ -9972,6 +10034,7 @@ class TraderClient:
         self, accumulator: _QueryAccumulator
     ) -> QueryResult[Any]:
         with self._query_state_lock:
+            accumulator.record_completion_origin("deadline")
             accumulator.timed_out = True
             accumulator.error_message = "query_deadline_exceeded"
             if accumulator.completed_at_utc is None:
@@ -10173,6 +10236,7 @@ class TraderClient:
         *,
         should_stop: Callable[[], bool] | None = None,
         max_duration: float | None = None,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         """Read all visible instruments with empty filters, including options.
 
@@ -10181,10 +10245,16 @@ class TraderClient:
         is limited to the connected front, account and trading day. When
         ``max_duration`` is set, ``timeout`` bounds packet silence and the
         maximum duration remains a hard cap for the whole query.
+        ``deadline_monotonic`` optionally supplies the caller's absolute
+        monotonic deadline for query-lock and rate waits. It is checked
+        immediately before and after the native request call, which cannot be
+        interrupted once entered.
         """
         _progressive_query_wait_limits(timeout, max_duration)
         if should_stop is not None and should_stop():
-            return self._local_query_failure("instruments", "query_cancelled")
+            return self._local_query_failure(
+                "instruments", "query_cancelled", completion_origin="local_cancel"
+            )
         field = CThostFtdcQryInstrumentField()
         intent_filters = {"InstrumentID": str(instrument_id or "")}
         field.InstrumentID = intent_filters["InstrumentID"]
@@ -10221,6 +10291,7 @@ class TraderClient:
             request_intent_filters=intent_filters,
             should_stop=should_stop,
             max_duration=max_duration,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_instrument(self, instrument_id, exchange_id="", timeout=5):
@@ -10321,7 +10392,16 @@ class TraderClient:
             instrument_id, exchange_id=exchange_id, timeout=timeout
         ).first
 
-    def _query_reference_result(self, request_type, field_type, method_name, values, timeout):
+    def _query_reference_result(
+        self,
+        request_type,
+        field_type,
+        method_name,
+        values,
+        timeout,
+        *,
+        deadline_monotonic: float | None = None,
+    ):
         """Build a read request without silently dropping unsupported ABI fields."""
         try:
             field = field_type()
@@ -10353,15 +10433,25 @@ class TraderClient:
             request_intent_parameters={
                 name: value for name, value in values.items() if type(value) is float
             },
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_depth_market_data_result(
-        self, instrument_id="", exchange_id="", timeout=5
+        self,
+        instrument_id="",
+        exchange_id="",
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         """Query TD reference quotes, or all visible quotes with empty filters.
 
         Raw source timestamps and prices are retained. A successful query is
         not evidence that the quotes are fresh, synchronized or executable.
+        ``deadline_monotonic`` is an optional caller-owned absolute monotonic
+        deadline for query-lock and rate waits. It is checked immediately
+        before and after the native request call, which cannot be interrupted
+        once entered.
         """
         return self._query_reference_result(
             "depth_market_data",
@@ -10372,6 +10462,7 @@ class TraderClient:
                 "ExchangeID": str(exchange_id or ""),
             },
             timeout,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_option_instrument_trade_cost_result(
@@ -10439,7 +10530,9 @@ class TraderClient:
         should_stop: Callable[[], bool] | None = None,
     ) -> QueryResult[Any]:
         if should_stop is not None and should_stop():
-            return self._local_query_failure("settlement_confirmation", "query_cancelled")
+            return self._local_query_failure(
+                "settlement_confirmation", "query_cancelled", completion_origin="local_cancel"
+            )
         field = CThostFtdcQrySettlementInfoConfirmField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
@@ -10480,7 +10573,9 @@ class TraderClient:
     ) -> QueryResult[Any]:
         """Read server confirmation and promote this matching session to trading ready."""
         if should_stop is not None and should_stop():
-            return self._local_query_failure("settlement_confirmation", "query_cancelled")
+            return self._local_query_failure(
+                "settlement_confirmation", "query_cancelled", completion_origin="local_cancel"
+            )
         with self._query_state_lock:
             expected_generation = self._connection_generation
             expected_fingerprint = self._account_fingerprint
@@ -10978,7 +11073,9 @@ class TraderClient:
             # reserved generation before start() can register it.
             self._lifecycle_generation += 1
             self._starting_generation = None
-            self._on_front_disconnected("client_stop")
+            self._on_front_disconnected(
+                "client_stop", query_completion_origin="client_stop"
+            )
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
