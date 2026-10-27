@@ -401,6 +401,154 @@ def test_native_start_installs_owner_before_spi_and_acks_before_login_exposure(
         client.stop()
 
 
+def test_commission_query_native_stall_outlives_deadline_and_fences_session_work(
+    monkeypatch,
+):
+    client, api, _sink, owner = _new_active_client(monkeypatch)
+    entered = threading.Event()
+    release = threading.Event()
+    native_request_ids = []
+    query_results = []
+    query_errors = []
+    deadline = time.monotonic() + 0.08
+    observer = None
+
+    def blocked_commission_query(_field, request_id):
+        native_request_ids.append(request_id)
+        entered.set()
+        if not release.wait(2):
+            raise AssertionError("test did not release the fake native request")
+        return 0
+
+    api.ReqQryInstrumentCommissionRate = blocked_commission_query
+    client._query_interval = 0
+    client._last_query_submitted_at = 0.0
+
+    def run_blocked_query():
+        try:
+            query_results.append(
+                client.query_instrument_commission_rate_result(
+                    "rb2610",
+                    "SHFE",
+                    timeout=1,
+                    deadline_monotonic=deadline,
+                )
+            )
+        except BaseException as exc:
+            query_errors.append(exc)
+
+    query_thread = threading.Thread(target=run_blocked_query)
+    try:
+        query_thread.start()
+        assert entered.wait(1)
+        assert len(native_request_ids) == 1
+
+        # The SDK's deadline cannot interrupt a synchronous native Req call.
+        remaining = max(0.0, deadline - time.monotonic()) + 0.03
+        assert release.wait(remaining) is False
+        assert time.monotonic() > deadline
+        assert query_thread.is_alive()
+        with client._query_state_lock:
+            assert client._callback_ingress.native_call_refs == 1
+            assert client._native_request_inflight_refs == 1
+
+        # Other threads can still read query state, while same-session native
+        # work and a managed write lease remain fenced by the in-flight Req.
+        visible = {}
+        visible_done = threading.Event()
+
+        def read_query_state():
+            visible["counts"] = client.get_request_counts()
+            with client._query_state_lock:
+                visible["native_call_refs"] = client._callback_ingress.native_call_refs
+            visible_done.set()
+
+        observer = threading.Thread(target=read_query_state)
+        observer.start()
+        assert visible_done.wait(0.5)
+        observer.join(timeout=1)
+        assert not observer.is_alive()
+        assert visible["counts"]["query_commission_rate"] == 1
+        assert visible["native_call_refs"] == 1
+
+        core_result = client.query_instruments_result(
+            timeout=0.5,
+            deadline_monotonic=time.monotonic() + 1,
+        )
+        assert core_result.complete is False
+        assert core_result.error_message == "query_submit_exception:CtpExecutionGateError"
+        assert not any(call[0] == "ReqQryInstrument" for call in api.calls)
+
+        binding = _binding(owner, client._callback_ingress.active_session, _request_payload())
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_managed_native_call_owner_unavailable",
+        ):
+            client.acquire_managed_native_call_lease(owner, binding)
+        assert not any(call[0] == "ReqOrderInsert" for call in api.calls)
+
+        release.set()
+        query_thread.join(timeout=1)
+        assert not query_thread.is_alive()
+        assert query_errors == []
+        assert len(query_results) == 1
+        assert query_results[0].timed_out is True
+        assert query_results[0].error_message == "query_deadline_exceeded"
+        with client._query_state_lock:
+            assert client._callback_ingress.native_call_refs == 0
+            assert client._native_request_inflight_refs == 0
+
+        def complete_instrument_query(field, request_id):
+            api.calls.append(("ReqQryInstrument", field, request_id))
+            api.spi.OnRspQryInstrument(
+                SimpleNamespace(InstrumentID="rb2610"), None, request_id, True
+            )
+            return 0
+
+        def complete_commission_query(field, request_id):
+            api.calls.append(("ReqQryInstrumentCommissionRate", field, request_id))
+            api.spi.OnRspQryInstrumentCommissionRate(
+                SimpleNamespace(InstrumentID=field.InstrumentID),
+                None,
+                request_id,
+                True,
+            )
+            return 0
+
+        api.ReqQryInstrument = complete_instrument_query
+        api.ReqQryInstrumentCommissionRate = complete_commission_query
+        recovered_core = client.query_instruments_result(
+            timeout=0.5,
+            deadline_monotonic=time.monotonic() + 1,
+        )
+        recovered_commission = client.query_instrument_commission_rate_result(
+            "rb2610",
+            "SHFE",
+            timeout=0.5,
+            deadline_monotonic=time.monotonic() + 1,
+        )
+        assert recovered_core.complete is True
+        assert recovered_core.first["InstrumentID"] == "rb2610"
+        assert recovered_commission.complete is True
+        assert recovered_commission.first["InstrumentID"] == "rb2610"
+
+        recovered_binding = _binding(
+            owner,
+            client._callback_ingress.active_session,
+            _request_payload(),
+            request_id=42,
+        )
+        assert client.acquire_managed_native_call_lease(owner, recovered_binding)
+    finally:
+        release.set()
+        query_thread.join(timeout=2)
+        if observer is not None:
+            observer.join(timeout=1)
+        client.stop()
+        assert not query_thread.is_alive()
+        assert observer is None or not observer.is_alive()
+
+
 def test_store_binding_sends_detached_insert_and_consumes_one_lease(monkeypatch):
     client, api, _sink, owner = _new_active_client(monkeypatch)
     try:
