@@ -1,0 +1,268 @@
+{
+  "schema": "iteration51_product_query_scope_dev_round.v1",
+  "repository": "D:\\bt_api_py\\bt_api\\bt_api_ctp",
+  "branch": "dev",
+  "parent_commit": "a7f69954a6e898d03044b3e8ff6ba67ea3b41a7b",
+  "scope": [
+    "src/bt_api_ctp/query.py",
+    "src/bt_api_ctp/ctp/client.py",
+    "src/bt_api_ctp/ctp/callback_ingress.py",
+    "tests/test_query_completion_origin.py",
+    "tests/test_ctp_callback_ingress_client.py"
+  ],
+  "accepted_level": "SOURCE_NATIVE_STRUCT_AND_SYNTHETIC_SPI_QUERY_ONLY",
+  "behavior": [
+    "Typed futures-product query with generation/request-id completion evidence.",
+    "Optional ProductClass depth filter; native ProductID casing preserved.",
+    "Optional per-request row cap; first overflow seals incomplete, bounded ingress witness and late counts.",
+    "Capped callback processing serialized per request without waiting under global query-state lock."
+  ],
+  "qa": [
+    {
+      "path": "D:\\temp\\i51-products-sdk-qa-20261027-r2\\result.json",
+      "pin": {
+        "size_bytes": 5124,
+        "sha256": "bd2fcfcd0bfbf26394bc5ad7107ce3e70288c602999aaf781d41d0d93b5c7fc9"
+      },
+      "result": {
+        "level": "SOURCE_NATIVE_SYNTHETIC_ONLY",
+        "lane": "sdk",
+        "exit_code": 1,
+        "elapsed_seconds": 7.156000000075437,
+        "test_count": 16,
+        "failures": 1,
+        "errors": 0,
+        "skips": 0,
+        "source_pins_unchanged": true,
+        "source_pins_before": {
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+            "size_bytes": 14630,
+            "sha256": "bf6bfcdf41614c216c79d2e137756bacfc1a45b7e903bb4335399d65e8bb3dfb"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+            "size_bytes": 508688,
+            "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\callback_ingress.py": {
+            "size_bytes": 73492,
+            "sha256": "c7dbae9aad0aafc7ab1afb4e7a682957f6125abb3b4ba270dd516acdf70294f7"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+            "size_bytes": 18184,
+            "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_ctp_callback_ingress_client.py": {
+            "size_bytes": 77988,
+            "sha256": "3417ccb2d298d0e54d8b37e8cfdff1365f8ee3e7de9ef27b1d083eaf06d0034a"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\ctp_structs_query.py": {
+            "size_bytes": 171254,
+            "sha256": "acc1f36ca84b0e5c48d3942ddd700f8a17c5638f8ee6b60228c91c9b5d318e48"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+            "size_bytes": 102616,
+            "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+          }
+        },
+        "source_pins_after": {
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+            "size_bytes": 14630,
+            "sha256": "bf6bfcdf41614c216c79d2e137756bacfc1a45b7e903bb4335399d65e8bb3dfb"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+            "size_bytes": 508688,
+            "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\callback_ingress.py": {
+            "size_bytes": 73492,
+            "sha256": "c7dbae9aad0aafc7ab1afb4e7a682957f6125abb3b4ba270dd516acdf70294f7"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+            "size_bytes": 18184,
+            "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_ctp_callback_ingress_client.py": {
+            "size_bytes": 77988,
+            "sha256": "3417ccb2d298d0e54d8b37e8cfdff1365f8ee3e7de9ef27b1d083eaf06d0034a"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\ctp_structs_query.py": {
+            "size_bytes": 171254,
+            "sha256": "acc1f36ca84b0e5c48d3942ddd700f8a17c5638f8ee6b60228c91c9b5d318e48"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+            "size_bytes": 102616,
+            "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+          }
+        },
+        "nodes": [
+          "tests/test_ctp_callback_ingress_client.py::test_query_products_uses_real_spi_ingress_and_preserves_exact_filter_case",
+          "tests/test_ctp_callback_ingress_client.py::test_query_products_empty_filters_accept_a_complete_empty_terminal_result",
+          "tests/test_ctp_callback_ingress_client.py::test_query_products_isolates_request_ids_and_counts_late_rows",
+          "tests/test_ctp_callback_ingress_client.py::test_query_products_error_is_incomplete_and_error_message_is_not_ingress_captured",
+          "tests/test_ctp_callback_ingress_client.py::test_catalog_query_caps_stop_before_appending_overflow_row",
+          "tests/test_ctp_callback_ingress_client.py::test_depth_product_class_is_forwarded_only_when_explicit",
+          "tests/test_ctp_callback_ingress_client.py::test_product_query_deadline_and_record_limit_validation_happen_before_req",
+          "tests/test_ctp_callback_ingress_client.py::test_product_instrument_and_depth_filters_read_back_from_real_request_structs",
+          "tests/test_ctp_callback_ingress_client.py::test_record_limit_ingress_reservation_is_bounded_under_concurrent_callbacks",
+          "tests/test_query_completion_origin.py::test_query_result_origins_are_additive_and_whitelisted",
+          "tests/test_iter22_contracts.py::test_query_result_accumulates_only_matching_request_and_terminal_packet",
+          "tests/test_iter22_contracts.py::test_query_timeout_and_late_callback_never_become_empty_success",
+          "tests/test_iter22_contracts.py::test_query_callback_after_terminal_packet_is_counted_as_late",
+          "tests/test_iter22_contracts.py::test_old_generation_query_callback_is_orphaned"
+        ],
+        "spec": {
+          "size_bytes": 3270,
+          "sha256": "b124344441931d208534a626215d70dd96868ff35f7ba4c48e7c7c357f64f7aa"
+        },
+        "runner": {
+          "size_bytes": 4408,
+          "sha256": "2e7e707c9bd53f0e160f5a4cc4a10345b1ee333779a1877e948ea8265d1e0e10"
+        },
+        "boundary": "Real SDK/SPI and query fields; synthetic request/OS leaves. Network denied. No provider/account acceptance."
+      }
+    },
+    {
+      "path": "D:\\temp\\i51-products-sdk-qa-20261027-r3\\result.json",
+      "pin": {
+        "size_bytes": 3656,
+        "sha256": "24d8069aefee7a3665a2db3badbe3113359eec7ef8099bf5112bea2461a4b44c"
+      },
+      "result": {
+        "level": "SOURCE_NATIVE_SYNTHETIC_ONLY",
+        "lane": "sdk",
+        "exit_code": 0,
+        "elapsed_seconds": 1.0309999999590218,
+        "test_count": 1,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "source_pins_unchanged": true,
+        "source_pins_before": {
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+            "size_bytes": 14630,
+            "sha256": "bf6bfcdf41614c216c79d2e137756bacfc1a45b7e903bb4335399d65e8bb3dfb"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+            "size_bytes": 508688,
+            "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\callback_ingress.py": {
+            "size_bytes": 73492,
+            "sha256": "c7dbae9aad0aafc7ab1afb4e7a682957f6125abb3b4ba270dd516acdf70294f7"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+            "size_bytes": 18184,
+            "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_ctp_callback_ingress_client.py": {
+            "size_bytes": 77988,
+            "sha256": "c07e0fd267666adf13a88833ed12f26033443884d8878f6883c548413cb37107"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\ctp_structs_query.py": {
+            "size_bytes": 171254,
+            "sha256": "acc1f36ca84b0e5c48d3942ddd700f8a17c5638f8ee6b60228c91c9b5d318e48"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+            "size_bytes": 102616,
+            "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+          }
+        },
+        "source_pins_after": {
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\query.py": {
+            "size_bytes": 14630,
+            "sha256": "bf6bfcdf41614c216c79d2e137756bacfc1a45b7e903bb4335399d65e8bb3dfb"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\client.py": {
+            "size_bytes": 508688,
+            "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\callback_ingress.py": {
+            "size_bytes": 73492,
+            "sha256": "c7dbae9aad0aafc7ab1afb4e7a682957f6125abb3b4ba270dd516acdf70294f7"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_query_completion_origin.py": {
+            "size_bytes": 18184,
+            "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_ctp_callback_ingress_client.py": {
+            "size_bytes": 77988,
+            "sha256": "c07e0fd267666adf13a88833ed12f26033443884d8878f6883c548413cb37107"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\src\\bt_api_ctp\\ctp\\ctp_structs_query.py": {
+            "size_bytes": 171254,
+            "sha256": "acc1f36ca84b0e5c48d3942ddd700f8a17c5638f8ee6b60228c91c9b5d318e48"
+          },
+          "D:\\bt_api_py\\bt_api\\bt_api_ctp\\tests\\test_iter22_contracts.py": {
+            "size_bytes": 102616,
+            "sha256": "c8a4bb8dddd5a10654656bd554d6f3c9756866b3c20f688e433f7fd0aec47bf9"
+          }
+        },
+        "nodes": [
+          "tests/test_ctp_callback_ingress_client.py::test_query_products_error_is_incomplete_and_error_message_is_not_ingress_captured"
+        ],
+        "spec": {
+          "size_bytes": 1802,
+          "sha256": "04229d11a3a279167f4d5d25f56f9ca8066445fb94afa099d87817ccc3e9347b"
+        },
+        "runner": {
+          "size_bytes": 4408,
+          "sha256": "2e7e707c9bd53f0e160f5a4cc4a10345b1ee333779a1877e948ea8265d1e0e10"
+        },
+        "boundary": "Real SDK/SPI and query fields; synthetic request/OS leaves. Network denied. No provider/account acceptance."
+      }
+    }
+  ],
+  "accepted_distinct_cases": 16,
+  "qa_note": "R2 passed 15; corrected one test expectation for OnRspQryProduct error origin, then R3 passed that one case. Not a single final 16-case run.",
+  "warnings": [
+    "Each run has one inherited unknown asyncio_default_fixture_loop_scope pytest-config warning."
+  ],
+  "independent_static_review": "capacity_review GO; Root verified the sole post-QA fixture delta.",
+  "source_pins": {
+    "src/bt_api_ctp/query.py": {
+      "size_bytes": 14630,
+      "sha256": "bf6bfcdf41614c216c79d2e137756bacfc1a45b7e903bb4335399d65e8bb3dfb"
+    },
+    "src/bt_api_ctp/ctp/client.py": {
+      "size_bytes": 508688,
+      "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+    },
+    "src/bt_api_ctp/ctp/callback_ingress.py": {
+      "size_bytes": 73492,
+      "sha256": "c7dbae9aad0aafc7ab1afb4e7a682957f6125abb3b4ba270dd516acdf70294f7"
+    },
+    "tests/test_query_completion_origin.py": {
+      "size_bytes": 18184,
+      "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+    },
+    "tests/test_ctp_callback_ingress_client.py": {
+      "size_bytes": 77988,
+      "sha256": "c07e0fd267666adf13a88833ed12f26033443884d8878f6883c548413cb37107"
+    }
+  },
+  "expected_git_lf_pins": {
+    "src/bt_api_ctp/query.py": {
+      "size_bytes": 14249,
+      "sha256": "3d2c09880a77ba2d341af89f3c07cdaee11580ab69c11026a6e1037697c1e6d1"
+    },
+    "src/bt_api_ctp/ctp/client.py": {
+      "size_bytes": 508688,
+      "sha256": "5caca800ccba1169253d8cf1d1853e66c85806f84f81e8ead600957f7285445c"
+    },
+    "src/bt_api_ctp/ctp/callback_ingress.py": {
+      "size_bytes": 71688,
+      "sha256": "b5fc021d5286a2bbf43af907279bf65a047d1d5c87ca0069fded928ebf3b9176"
+    },
+    "tests/test_query_completion_origin.py": {
+      "size_bytes": 18184,
+      "sha256": "90be62c19e8aa297ef27b94e6b2c612cbf33fb64e6f9d776b2d21ffba54a7a8e"
+    },
+    "tests/test_ctp_callback_ingress_client.py": {
+      "size_bytes": 75908,
+      "sha256": "243a70218f60803aab8c0fb18d7611c9407b4551e0ab67f5d958c29eb6039827"
+    }
+  },
+  "boundary": "Real local request structs and SDK/SPI with fake Req/lifecycle leaves, network denied. No provider/account acceptance. SDK retains up to 256 query accumulators; caller result deletion is not full raw-row release.",
+  "formal_case_increment": 0,
+  "push_requested_for_this_round": false
+}

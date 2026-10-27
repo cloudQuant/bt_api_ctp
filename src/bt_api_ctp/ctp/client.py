@@ -121,6 +121,7 @@ from .ctp_structs_query import (
     CThostFtdcQryOptionInstrCommRateField,
     CThostFtdcQryOptionInstrTradeCostField,
     CThostFtdcQryOrderField,
+    CThostFtdcQryProductField,
     CThostFtdcQrySettlementInfoConfirmField,
     CThostFtdcQryTradeField,
     CThostFtdcQryTradingAccountField,
@@ -179,6 +180,7 @@ CTP_REQUEST_COUNT_KEYS = (
     "query_positions",
     "query_orders",
     "query_trades",
+    "query_products",
     "query_instruments",
     "query_margin_rate",
     "query_commission_rate",
@@ -190,6 +192,7 @@ CTP_REQUEST_COUNT_KEYS = (
 
 _QUERY_FILTER_UNSET = object()
 _TRADER_LOGIN_IDENTITY_SEAL = object()
+_MAX_QUERY_RECORDS = 100_000
 
 
 # The CTP vendor API owns a native callback thread after ``Init()``.  On the
@@ -2134,6 +2137,12 @@ class _QueryAccumulator:
     source_tags: tuple[str, str, str, str, int, int] | None = None
     first_completion_origin: str = "unknown"
     completion_origin: str = "unknown"
+    record_limit: int | None = None
+    record_limit_exceeded: bool = False
+    record_limit_callback_pending: bool = False
+    callback_dispatch_lock: Any = dataclass_field(
+        default_factory=threading.RLock, repr=False
+    )
 
     def record_completion_origin(self, origin: str) -> None:
         if type(origin) is not str or origin not in QUERY_COMPLETION_ORIGINS:
@@ -2148,6 +2157,7 @@ class _QueryAccumulator:
             and self.is_last_seen
             and not self.timed_out
             and not self.unsupported
+            and not self.record_limit_exceeded
             and self.error_code in (None, 0)
         )
         result = QueryResult(
@@ -2168,6 +2178,8 @@ class _QueryAccumulator:
             submit_code=self.submit_code,
             first_completion_origin=self.first_completion_origin,
             completion_origin=self.completion_origin,
+            record_limit=self.record_limit,
+            record_limit_exceeded=self.record_limit_exceeded,
         )
         if self.source_issuer is None:
             return result
@@ -2193,6 +2205,8 @@ class _QueryAccumulator:
                 request_parameters=self.request_parameters,
                 explicit_request_filters=self.explicit_request_filters,
                 source_tags=self.source_tags,
+                record_limit=self.record_limit,
+                record_limit_exceeded=self.record_limit_exceeded,
             ),
         )
 
@@ -4192,6 +4206,7 @@ _CTP_INGRESS_SAFE_REQUEST_METHODS = frozenset(
         "ReqQryInvestorPosition",
         "ReqQryOrder",
         "ReqQryTrade",
+        "ReqQryProduct",
         "ReqQryInstrument",
         "ReqQryInstrumentMarginRate",
         "ReqQryInstrumentCommissionRate",
@@ -4820,6 +4835,12 @@ class _TraderSpi(CThostFtdcTraderSpi):
         self._c._handle_query_callback("trades", pTrade, pRspInfo, nRequestID, bIsLast)
 
     @_fence_trader_spi_callback
+    def OnRspQryProduct(self, pProduct, pRspInfo, nRequestID, bIsLast):
+        if not self._is_current():
+            return
+        self._c._handle_query_callback("products", pProduct, pRspInfo, nRequestID, bIsLast)
+
+    @_fence_trader_spi_callback
     def OnRspQryInstrument(self, pInstrument, pRspInfo, nRequestID, bIsLast):
         if not self._is_current():
             return
@@ -4985,6 +5006,7 @@ def _ctp_query_callback_name(request_type: str) -> str | None:
         "positions": "OnRspQryInvestorPosition",
         "orders": "OnRspQryOrder",
         "trades": "OnRspQryTrade",
+        "products": "OnRspQryProduct",
         "instruments": "OnRspQryInstrument",
         "depth_market_data": "OnRspQryDepthMarketData",
         "option_trade_cost": "OnRspQryOptionInstrTradeCost",
@@ -6215,11 +6237,43 @@ class TraderClient:
             original(spi, *args, **dict(kwargs))
             return _CALLBACK_INGRESS_SKIP_ORIGINAL
 
+        query_dispatch_lock = None
+        query_dispatch_lock_acquired = False
+
         record = None
         disposition = CtpTraderCallbackDisposition.POISON
         call_original_on_poison = callback_name == "OnFrontDisconnected"
         callback_failed = False
         try:
+            if (
+                callback_name
+                in {
+                    "OnRspQryProduct",
+                    "OnRspQryInstrument",
+                    "OnRspQryDepthMarketData",
+                }
+                and len(args) > 2
+                and type(args[2]) is int
+            ):
+                with self._query_state_lock:
+                    limited_query = self._query_history.get(args[2])
+                    if (
+                        limited_query is not None
+                        and limited_query.connection_generation == self._connection_generation
+                        and _ctp_query_callback_name(limited_query.request_type) == callback_name
+                        and limited_query.record_limit is not None
+                    ):
+                        query_dispatch_lock = limited_query.callback_dispatch_lock
+            if query_dispatch_lock is not None:
+                # Serialize only this capped query's callback capture/handler pair.
+                # The global query-state lock is released before waiting here and
+                # before invoking the handler, so other requests and lifecycle
+                # operations remain independent. This makes a row's accumulator
+                # append visible before the next callback reserves the one bounded
+                # overflow witness.
+                query_dispatch_lock.acquire()
+                query_dispatch_lock_acquired = True
+
             with self._query_state_lock:
                 if self._callback_ingress is not state or state.poisoned:
                     return _CALLBACK_INGRESS_SKIP_ORIGINAL
@@ -6229,6 +6283,46 @@ class TraderClient:
                     source_tags = None
                 else:
                     callback_without_ingress = False
+                    if (
+                        callback_name
+                        in {
+                            "OnRspQryProduct",
+                            "OnRspQryInstrument",
+                            "OnRspQryDepthMarketData",
+                        }
+                        and len(args) > 2
+                        and type(args[2]) is int
+                    ):
+                        limited_query = self._query_history.get(args[2])
+                        if (
+                            limited_query is not None
+                            and limited_query.connection_generation == self._connection_generation
+                            and _ctp_query_callback_name(limited_query.request_type) == callback_name
+                            and limited_query.record_limit is not None
+                        ):
+                            if (
+                                limited_query.record_limit_exceeded
+                                or limited_query.record_limit_callback_pending
+                                or limited_query.sealed
+                                or limited_query.is_last_seen
+                                or limited_query.error_code not in (None, 0)
+                            ):
+                                # After the first over-limit row, or any
+                                # accepted terminal response, later rows for
+                                # this capped request are counted as late
+                                # without growing its journal or accumulator.
+                                limited_query.late_callback_count += 1
+                                return _CALLBACK_INGRESS_SKIP_ORIGINAL
+                            if (
+                                len(args) > 0
+                                and args[0] is not None
+                                and len(limited_query.records) >= limited_query.record_limit
+                            ):
+                                # Reserve the single bounded overflow witness
+                                # before releasing this lock to build ingress.
+                                # A concurrent callback must not grow the
+                                # durable journal while the first row seals.
+                                limited_query.record_limit_callback_pending = True
                     source_tags = getattr(spi, "_callback_source_tags", None)
                 if callback_without_ingress:
                     pass
@@ -6417,13 +6511,17 @@ class TraderClient:
                         return _CALLBACK_INGRESS_SKIP_ORIGINAL
             return _CALLBACK_INGRESS_SKIP_ORIGINAL
         finally:
-            with self._query_state_lock:
-                current_state = self._callback_ingress
-                if current_state is not None:
-                    current_state.callback_refs = max(0, current_state.callback_refs - 1)
-                    if callback_failed:
-                        self._poison_callback_ingress_locked("callback_handler_error")
-                    self._maybe_finish_deferred_native_release_locked()
+            try:
+                with self._query_state_lock:
+                    current_state = self._callback_ingress
+                    if current_state is not None:
+                        current_state.callback_refs = max(0, current_state.callback_refs - 1)
+                        if callback_failed:
+                            self._poison_callback_ingress_locked("callback_handler_error")
+                        self._maybe_finish_deferred_native_release_locked()
+            finally:
+                if query_dispatch_lock_acquired:
+                    query_dispatch_lock.release()
 
     def _maybe_finish_deferred_native_release_locked(self) -> None:
         state = self._callback_ingress
@@ -9505,6 +9603,7 @@ class TraderClient:
         request_intent_filters: Mapping[str, str] | None = None,
         request_parameters: Mapping[str, float] | None = None,
         request_intent_parameters: Mapping[str, float] | None = None,
+        record_limit: int | None = None,
     ) -> _QueryAccumulator:
         request_id = self._next_request_id()
         filter_items = _query_filter_items(request_filters)
@@ -9549,6 +9648,7 @@ class TraderClient:
             explicit_request_filters=tuple(sorted(explicit_request_filters)),
             started_monotonic=time.monotonic(),
             source_tags=source_tags,
+            record_limit=record_limit,
         )
         with self._query_state_lock:
             self._query_history[request_id] = accumulator
@@ -9640,6 +9740,40 @@ class TraderClient:
             # waits read this timestamp under the same lock before timing out.
             accumulator.last_callback_monotonic = time.monotonic()
             if record is not None:
+                if (
+                    accumulator.record_limit is not None
+                    and len(accumulator.records) >= accumulator.record_limit
+                ):
+                    # Seal on the first over-limit row before snapshotting or
+                    # appending it. The partial rows remain diagnostic only;
+                    # this result can never prove a complete catalog.
+                    accumulator.record_limit_exceeded = True
+                    accumulator.record_limit_callback_pending = False
+                    accumulator.error_message = "query_record_limit_exceeded"
+                    if error_code not in (None, 0):
+                        accumulator.error_code = error_code
+                    if is_last:
+                        accumulator.is_last_seen = True
+                    accumulator.record_completion_origin("record_limit")
+                    accumulator.completed_at_utc = (
+                        terminal_callback_at_utc
+                        if terminal_callback_at_utc is not None
+                        else datetime.now(timezone.utc)
+                    )
+                    accumulator.completed_monotonic = (
+                        terminal_callback_monotonic
+                        if terminal_callback_monotonic is not None
+                        else time.monotonic()
+                    )
+                    try:
+                        accumulator.source_records_sha256 = _query_records_digest(
+                            tuple(accumulator.records)
+                        )
+                    except (TypeError, ValueError):
+                        accumulator.source_records_sha256 = None
+                    accumulator.sealed = True
+                    accumulator.event.set()
+                    return
                 snapshot = _snapshot_query_record(record)
                 if request_type == "instruments":
                     snapshot.update(normalize_ctp_instrument(snapshot))
@@ -9709,7 +9843,14 @@ class TraderClient:
         should_stop: Callable[[], bool] | None = None,
         max_duration: float | None = None,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ) -> QueryResult[Any]:
+        if max_records is not None and (
+            type(max_records) is not int
+            or max_records < 1
+            or max_records > _MAX_QUERY_RECORDS
+        ):
+            raise ValueError("max_records must be an exact integer from 1 to 100000")
         issue_deadline: float | None = None
         if deadline_monotonic is not None:
             if type(deadline_monotonic) not in (int, float):
@@ -9854,6 +9995,7 @@ class TraderClient:
                 request_intent_filters=dict(request_intent_items),
                 request_parameters=dict(request_parameter_items),
                 request_intent_parameters=dict(request_intent_parameter_items),
+                record_limit=max_records,
             )
             self._last_query_submitted_at = time.monotonic()
 
@@ -10237,6 +10379,7 @@ class TraderClient:
         should_stop: Callable[[], bool] | None = None,
         max_duration: float | None = None,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ) -> QueryResult[Any]:
         """Read all visible instruments with empty filters, including options.
 
@@ -10292,11 +10435,79 @@ class TraderClient:
             should_stop=should_stop,
             max_duration=max_duration,
             deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
         )
 
     def query_instrument(self, instrument_id, exchange_id="", timeout=5):
         return self.query_instruments_result(
             instrument_id=instrument_id, exchange_id=exchange_id, timeout=timeout
+        ).first
+
+    def query_products_result(
+        self,
+        product_class="",
+        exchange_id="",
+        product_id="",
+        timeout=5,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+        max_duration: float | None = None,
+        deadline_monotonic: float | None = None,
+        max_records: int | None = None,
+    ) -> QueryResult[Any]:
+        """Read the visible product catalog with optional exact CTP filters.
+
+        Empty filters retain the native all-visible query behavior. A result is
+        catalog-complete only when the matching request receives its successful
+        terminal callback and no configured record cap is exceeded.
+        """
+        _progressive_query_wait_limits(timeout, max_duration)
+        if should_stop is not None and should_stop():
+            return self._local_query_failure(
+                "products", "query_cancelled", completion_origin="local_cancel"
+            )
+        field = CThostFtdcQryProductField()
+        intent_filters = {
+            "ProductClass": str(product_class or ""),
+            "ExchangeID": str(exchange_id or ""),
+            "ProductID": str(product_id or ""),
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "products",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
+        api = self._api
+        method = getattr(api, "ReqQryProduct", None) if api is not None else None
+        return self._execute_query(
+            "products",
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryProduct", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
+            timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
+            should_stop=should_stop,
+            max_duration=max_duration,
+            deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
+        )
+
+    def query_product(self, product_class="", exchange_id="", product_id="", timeout=5):
+        return self.query_products_result(
+            product_class=product_class,
+            exchange_id=exchange_id,
+            product_id=product_id,
+            timeout=timeout,
         ).first
 
     def query_instrument_margin_rate_result(
@@ -10400,7 +10611,9 @@ class TraderClient:
         values,
         timeout,
         *,
+        max_duration: float | None = None,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ):
         """Build a read request without silently dropping unsupported ABI fields."""
         try:
@@ -10433,7 +10646,9 @@ class TraderClient:
             request_intent_parameters={
                 name: value for name, value in values.items() if type(value) is float
             },
+            max_duration=max_duration,
             deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
         )
 
     def query_depth_market_data_result(
@@ -10442,7 +10657,10 @@ class TraderClient:
         exchange_id="",
         timeout=5,
         *,
+        product_class: str | None = None,
+        max_duration: float | None = None,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ) -> QueryResult[Any]:
         """Query TD reference quotes, or all visible quotes with empty filters.
 
@@ -10453,16 +10671,23 @@ class TraderClient:
         before and after the native request call, which cannot be interrupted
         once entered.
         """
+        if product_class is not None and type(product_class) is not str:
+            raise TypeError("product_class must be an exact string or None")
+        filters = {
+            "InstrumentID": str(instrument_id or ""),
+            "ExchangeID": str(exchange_id or ""),
+        }
+        if product_class is not None:
+            filters["ProductClass"] = product_class
         return self._query_reference_result(
             "depth_market_data",
             CThostFtdcQryDepthMarketDataField,
             "ReqQryDepthMarketData",
-            {
-                "InstrumentID": str(instrument_id or ""),
-                "ExchangeID": str(exchange_id or ""),
-            },
+            filters,
             timeout,
+            max_duration=max_duration,
             deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
         )
 
     def query_option_instrument_trade_cost_result(

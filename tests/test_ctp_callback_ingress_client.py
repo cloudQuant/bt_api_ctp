@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 import bt_api_ctp.ctp.client as client_module
-from bt_api_ctp.ctp.callback_ingress import CtpTraderCallbackIngressAckV2
+from bt_api_ctp.ctp.callback_ingress import (
+    CALLBACK_SPECS,
+    SAFE_FIELD_KINDS,
+    CtpTraderCallbackIngressAckV2,
+)
 from bt_api_ctp.ctp.client import CtpExecutionGateError, TraderClient
 from bt_api_ctp.ctp.ctp_structs_order import (
     CThostFtdcInputOrderActionField,
@@ -73,6 +77,7 @@ class _FakeTraderApi:
         self.order_insert_result = 0
         self.order_action_result = 0
         self.query_result = 0
+        self.query_callbacks = {}
         self.callback_during_insert = None
         self.block_insert = False
         self.insert_entered = threading.Event()
@@ -160,6 +165,27 @@ class _FakeTraderApi:
 
     def ReqQryTradingAccount(self, field, request_id):
         self.calls.append(("ReqQryTradingAccount", field, request_id))
+        return self.query_result
+
+    def ReqQryProduct(self, field, request_id):
+        self.calls.append(("ReqQryProduct", field, request_id))
+        callback = self.query_callbacks.get("ReqQryProduct")
+        if callback is not None:
+            callback(field, request_id)
+        return self.query_result
+
+    def ReqQryInstrument(self, field, request_id):
+        self.calls.append(("ReqQryInstrument", field, request_id))
+        callback = self.query_callbacks.get("ReqQryInstrument")
+        if callback is not None:
+            callback(field, request_id)
+        return self.query_result
+
+    def ReqQryDepthMarketData(self, field, request_id):
+        self.calls.append(("ReqQryDepthMarketData", field, request_id))
+        callback = self.query_callbacks.get("ReqQryDepthMarketData")
+        if callback is not None:
+            callback(field, request_id)
         return self.query_result
 
 
@@ -1425,5 +1451,630 @@ def test_generic_managed_req_rejects_non_integer_result(native_result, monkeypat
         assert client._callback_ingress.poisoned
         assert client._callback_ingress.native_call_refs == 0
         assert client._native_request_inflight_refs == 0
+    finally:
+        client.stop()
+
+
+class _FakeNativeQueryField:
+    """Attribute-backed stand-in for one native request struct."""
+
+
+def _query_callback_row(callback_name, **overrides):
+    safe_fields = dict(CALLBACK_SPECS[callback_name].safe_fields_by_slot)[0]
+    defaults = {"string": "", "char": "1", "integer": 0, "float": 0.0}
+    values = {name: defaults[SAFE_FIELD_KINDS[name]] for name in safe_fields}
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _query_callback_info(error_id=0):
+    return SimpleNamespace(ErrorID=error_id, ErrorMsg="not captured by safe ingress")
+
+
+def _install_query_field_fakes(monkeypatch):
+    monkeypatch.setattr(client_module, "CThostFtdcQryProductField", _FakeNativeQueryField)
+    monkeypatch.setattr(client_module, "CThostFtdcQryInstrumentField", _FakeNativeQueryField)
+    monkeypatch.setattr(
+        client_module, "CThostFtdcQryDepthMarketDataField", _FakeNativeQueryField
+    )
+
+
+def test_query_products_uses_real_spi_ingress_and_preserves_exact_filter_case(monkeypatch):
+    _install_query_field_fakes(monkeypatch)
+    client, api, sink, _owner = _new_active_client(monkeypatch)
+    try:
+        callback_request_ids = []
+
+        def respond(_field, request_id):
+            callback_request_ids.append(request_id)
+            api.spi.OnRspQryProduct(
+                _query_callback_row(
+                    "OnRspQryProduct",
+                    ProductClass="1",
+                    ExchangeID="DCE",
+                    ProductID="i",
+                ),
+                _query_callback_info(),
+                request_id,
+                False,
+            )
+            api.spi.OnRspQryProduct(
+                None, _query_callback_info(), request_id, True
+            )
+
+        api.query_callbacks["ReqQryProduct"] = respond
+        result = client.query_products_result(
+            product_class="1",
+            exchange_id="DCE",
+            product_id="i",
+            timeout=0.5,
+            max_duration=1.0,
+            max_records=2,
+        )
+
+        request_calls = [call for call in api.calls if call[0] == "ReqQryProduct"]
+        assert len(request_calls) == 1
+        request_field, request_id = request_calls[0][1:]
+        assert request_field.ProductClass == "1"
+        assert request_field.ExchangeID == "DCE"
+        assert request_field.ProductID == "i"
+        assert callback_request_ids == [request_id]
+        assert result.request_type == "products"
+        assert result.request_id == request_id
+        assert result.complete
+        assert [row["ProductID"] for row in result.records] == ["i"]
+        assert result.query_source.request_filters == (
+            ("ExchangeID", "DCE"),
+            ("ProductClass", "1"),
+            ("ProductID", "i"),
+        )
+        product_callbacks = [
+            record for record in sink.records if record.callback_name == "OnRspQryProduct"
+        ]
+        assert [record.scalar_argument(3) for record in product_callbacks] == [False, True]
+        assert all(record.capture_complete for record in product_callbacks)
+        product_id_value = product_callbacks[0].field_value(0, "ProductID")
+        assert product_id_value.present and product_id_value.value == "i"
+        assert product_callbacks[0].field_value(1, "ErrorMsg") is None
+    finally:
+        client.stop()
+
+
+def test_query_products_empty_filters_accept_a_complete_empty_terminal_result(monkeypatch):
+    _install_query_field_fakes(monkeypatch)
+    client, api, sink, _owner = _new_active_client(monkeypatch)
+    try:
+        api.query_callbacks["ReqQryProduct"] = lambda _field, request_id: api.spi.OnRspQryProduct(
+            None, _query_callback_info(), request_id, True
+        )
+
+        result = client.query_products_result(timeout=0.5)
+
+        request_calls = [call for call in api.calls if call[0] == "ReqQryProduct"]
+        assert len(request_calls) == 1
+        request_field = request_calls[0][1]
+        assert request_field.ProductClass == ""
+        assert request_field.ExchangeID == ""
+        assert request_field.ProductID == ""
+        assert result.complete
+        assert result.records == ()
+        assert result.query_source.request_filters == (
+            ("ExchangeID", ""),
+            ("ProductClass", ""),
+            ("ProductID", ""),
+        )
+        product_callback = next(
+            record for record in reversed(sink.records) if record.callback_name == "OnRspQryProduct"
+        )
+        assert product_callback.capture_complete
+        assert product_callback.named_args[0].pointer_is_null
+    finally:
+        client.stop()
+
+
+def test_product_instrument_and_depth_filters_read_back_from_real_request_structs(
+    monkeypatch,
+):
+    """Exercise the actual SWIG request fields while all API calls stay fake."""
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        api.query_callbacks["ReqQryProduct"] = lambda _field, request_id: api.spi.OnRspQryProduct(
+            None, _query_callback_info(), request_id, True
+        )
+        api.query_callbacks["ReqQryInstrument"] = (
+            lambda _field, request_id: api.spi.OnRspQryInstrument(
+                None, _query_callback_info(), request_id, True
+            )
+        )
+        api.query_callbacks["ReqQryDepthMarketData"] = (
+            lambda _field, request_id: api.spi.OnRspQryDepthMarketData(
+                None, _query_callback_info(), request_id, True
+            )
+        )
+
+        products = client.query_products_result(
+            product_class="1", exchange_id="DCE", product_id="i", timeout=0.5
+        )
+        instruments = client.query_instruments_result(
+            instrument_id="i2710",
+            exchange_id="DCE",
+            product_id="i",
+            timeout=0.5,
+        )
+        depth = client.query_depth_market_data_result(
+            instrument_id="i2710",
+            exchange_id="DCE",
+            product_class="1",
+            timeout=0.5,
+        )
+
+        requests = {
+            call[0]: call[1]
+            for call in api.calls
+            if call[0]
+            in {"ReqQryProduct", "ReqQryInstrument", "ReqQryDepthMarketData"}
+        }
+        assert (
+            type(requests["ReqQryProduct"])
+            is client_module.CThostFtdcQryProductField
+        )
+        assert requests["ReqQryProduct"].ProductClass == "1"
+        assert requests["ReqQryProduct"].ExchangeID == "DCE"
+        assert requests["ReqQryProduct"].ProductID == "i"
+        assert products.complete
+        assert products.query_source.request_filters == (
+            ("ExchangeID", "DCE"),
+            ("ProductClass", "1"),
+            ("ProductID", "i"),
+        )
+
+        assert (
+            type(requests["ReqQryInstrument"])
+            is client_module.CThostFtdcQryInstrumentField
+        )
+        assert requests["ReqQryInstrument"].InstrumentID == "i2710"
+        assert requests["ReqQryInstrument"].ExchangeID == "DCE"
+        assert requests["ReqQryInstrument"].ProductID == "i"
+        assert instruments.complete
+        assert instruments.query_source.request_filters == (
+            ("ExchangeID", "DCE"),
+            ("InstrumentID", "i2710"),
+            ("ProductID", "i"),
+        )
+
+        assert (
+            type(requests["ReqQryDepthMarketData"])
+            is client_module.CThostFtdcQryDepthMarketDataField
+        )
+        assert requests["ReqQryDepthMarketData"].InstrumentID == "i2710"
+        assert requests["ReqQryDepthMarketData"].ExchangeID == "DCE"
+        assert requests["ReqQryDepthMarketData"].ProductClass == "1"
+        assert depth.complete
+        assert depth.query_source.request_filters == (
+            ("ExchangeID", "DCE"),
+            ("InstrumentID", "i2710"),
+            ("ProductClass", "1"),
+        )
+    finally:
+        client.stop()
+
+
+def test_query_products_isolates_request_ids_and_counts_late_rows(monkeypatch):
+    _install_query_field_fakes(monkeypatch)
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        first_ids = []
+        second_call = False
+
+        def respond(_field, request_id):
+            nonlocal second_call
+            if not second_call:
+                first_ids.append(request_id)
+                api.spi.OnRspQryProduct(
+                    _query_callback_row("OnRspQryProduct", ProductID="old"),
+                    _query_callback_info(),
+                    request_id,
+                    True,
+                )
+                second_call = True
+                return
+            api.spi.OnRspQryProduct(
+                _query_callback_row("OnRspQryProduct", ProductID="late"),
+                _query_callback_info(),
+                first_ids[0],
+                False,
+            )
+            api.spi.OnRspQryProduct(
+                _query_callback_row("OnRspQryProduct", ProductID="MA"),
+                _query_callback_info(),
+                request_id,
+                True,
+            )
+
+        api.query_callbacks["ReqQryProduct"] = respond
+        first = client.query_products_result(timeout=0.5)
+        second = client.query_products_result(product_id="MA", timeout=0.5)
+
+        assert first.request_id != second.request_id
+        assert [row["ProductID"] for row in second.records] == ["MA"]
+        assert second.query_source.request_filters[-1] == ("ProductID", "MA")
+        first_current = client.get_query_result(first.request_id)
+        assert first_current is not None
+        assert first_current.late_callback_count == 1
+        assert sum(call[0] == "ReqQryProduct" for call in api.calls) == 2
+    finally:
+        client.stop()
+
+
+def test_query_products_error_is_incomplete_and_error_message_is_not_ingress_captured(
+    monkeypatch,
+):
+    _install_query_field_fakes(monkeypatch)
+    client, api, sink, _owner = _new_active_client(monkeypatch)
+    try:
+        api.query_callbacks["ReqQryProduct"] = lambda _field, request_id: api.spi.OnRspQryProduct(
+            None, _query_callback_info(73), request_id, True
+        )
+
+        result = client.query_products_result(timeout=0.5)
+
+        assert not result.complete
+        assert result.error_code == 73
+        assert result.completion_origin == "query_response"
+        assert result.query_source is not None
+        callback = next(
+            record for record in reversed(sink.records) if record.callback_name == "OnRspQryProduct"
+        )
+        error_id = callback.field_value(1, "ErrorID")
+        assert error_id.present and error_id.value == 73
+        assert callback.field_value(1, "ErrorMsg") is None
+    finally:
+        client.stop()
+
+
+@pytest.mark.parametrize(
+    ("request_type", "request_method", "callback_method", "query_kwargs", "row_values"),
+    [
+        (
+            "products",
+            "ReqQryProduct",
+            "OnRspQryProduct",
+            {"product_id": "MA"},
+            {"ProductID": "MA"},
+        ),
+        (
+            "instruments",
+            "ReqQryInstrument",
+            "OnRspQryInstrument",
+            {"exchange_id": "SHFE", "product_id": "rb"},
+            {"InstrumentID": "rb2710", "ExchangeID": "SHFE", "ProductID": "rb"},
+        ),
+        (
+            "depth_market_data",
+            "ReqQryDepthMarketData",
+            "OnRspQryDepthMarketData",
+            {"instrument_id": "MA2610", "exchange_id": "CZCE", "product_class": "1"},
+            {"InstrumentID": "MA2610", "ExchangeID": "CZCE"},
+        ),
+    ],
+)
+def test_catalog_query_caps_stop_before_appending_overflow_row(
+    request_type,
+    request_method,
+    callback_method,
+    query_kwargs,
+    row_values,
+    monkeypatch,
+):
+    _install_query_field_fakes(monkeypatch)
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        rows_sent = []
+
+        def respond(_field, request_id):
+            for index in range(4):
+                values = dict(row_values)
+                if request_type == "instruments":
+                    values["InstrumentID"] = f"rb{2710 + index}"
+                elif request_type == "depth_market_data":
+                    values["LastPrice"] = float(3000 + index)
+                else:
+                    values["ProductID"] = "MA" if index == 0 else f"p{index}"
+                if index >= 2:
+                    values["UnboundedPayload"] = f"overflow-{index}"
+                rows_sent.append(values)
+                getattr(api.spi, callback_method)(
+                    _query_callback_row(callback_method, **values),
+                    _query_callback_info(),
+                    request_id,
+                    index == 2,
+                )
+
+        api.query_callbacks[request_method] = respond
+        result = getattr(client, f"query_{request_type}_result")(
+            **query_kwargs,
+            timeout=0.5,
+            max_records=2,
+        )
+
+        assert len(rows_sent) == 4
+        assert rows_sent[0] != rows_sent[1]
+        assert rows_sent[1] != rows_sent[2]
+        assert rows_sent[2] != rows_sent[3]
+        assert len([call for call in api.calls if call[0] == request_method]) == 1
+        assert len(result.records) == 2
+        if request_type == "products":
+            assert [row["ProductID"] for row in result.records] == ["MA", "p1"]
+        elif request_type == "instruments":
+            assert [row["InstrumentID"] for row in result.records] == [
+                "rb2710",
+                "rb2711",
+            ]
+        else:
+            assert [row["LastPrice"] for row in result.records] == [3000.0, 3001.0]
+        assert all("UnboundedPayload" not in row for row in result.records)
+        assert result.record_limit == 2
+        assert result.record_limit_exceeded is True
+        assert result.completion_origin == "record_limit"
+        assert result.first_completion_origin == "record_limit"
+        assert result.error_message == "query_record_limit_exceeded"
+        assert result.is_last_seen
+        assert not result.complete
+        assert result.query_source.record_limit == 2
+        assert result.query_source.record_limit_exceeded is True
+        assert result.late_callback_count == 1
+        serialized = result.as_dict()
+        assert serialized["record_limit"] == 2
+        assert serialized["record_limit_exceeded"] is True
+        assert serialized["evidence_complete"] is False
+        # The first over-limit callback is captured as the bounded rejection
+        # witness; the later callback is counted but not copied into ingress.
+        assert sum(record.callback_name == callback_method for record in _sink.records) == 3
+        overflow_witness = next(
+            record
+            for record in reversed(_sink.records)
+            if record.callback_name == callback_method
+        )
+        assert overflow_witness.capture_complete
+        assert overflow_witness.field_value(0, "UnboundedPayload") is None
+        if request_type == "instruments":
+            assert result.query_source.request_filters == (
+                ("ExchangeID", "SHFE"),
+                ("InstrumentID", ""),
+                ("ProductID", "rb"),
+            )
+        elif request_type == "products":
+            assert result.query_source.request_filters[-1] == ("ProductID", "MA")
+        else:
+            assert ("ProductClass", "1") in result.query_source.request_filters
+    finally:
+        client.stop()
+
+
+def test_record_limit_ingress_reservation_is_bounded_under_concurrent_callbacks(
+    monkeypatch,
+):
+    _install_query_field_fakes(monkeypatch)
+    handler_entered = threading.Event()
+    release_handler = threading.Event()
+    late_callbacks_waiting = threading.Event()
+    callback_errors = []
+    callback_threads = []
+    errors_lock = threading.Lock()
+
+    class _ObservedRLock:
+        """Expose that every overflow callback reached the per-query gate."""
+
+        def __init__(self):
+            self._lock = threading.RLock()
+            self._state_lock = threading.Lock()
+            self._waiting = 0
+
+        def acquire(self):
+            if self._lock.acquire(blocking=False):
+                return True
+            with self._state_lock:
+                self._waiting += 1
+                if self._waiting == 3:
+                    late_callbacks_waiting.set()
+            try:
+                return self._lock.acquire()
+            finally:
+                with self._state_lock:
+                    self._waiting -= 1
+
+        def release(self):
+            self._lock.release()
+
+    dispatch_lock = _ObservedRLock()
+    original_handler = TraderClient._handle_query_callback
+
+    def delayed_handler(
+        self, request_type, record, rsp_info, request_id, is_last, **kwargs
+    ):
+        if request_type == "products" and getattr(record, "ProductID", None) == "p1":
+            handler_entered.set()
+            if not release_handler.wait(5):
+                with errors_lock:
+                    callback_errors.append(AssertionError("delayed capped handler timed out"))
+        return original_handler(
+            self, request_type, record, rsp_info, request_id, is_last, **kwargs
+        )
+
+    monkeypatch.setattr(TraderClient, "_handle_query_callback", delayed_handler)
+    client, api, sink, _owner = _new_active_client(monkeypatch)
+    query_results = []
+    query_errors = []
+
+    def send_row(product_id, is_last=False):
+        try:
+            api.spi.OnRspQryProduct(
+                _query_callback_row(
+                    "OnRspQryProduct",
+                    ProductClass="1",
+                    ExchangeID="DCE",
+                    ProductID=product_id,
+                    UnboundedPayload=f"payload-{product_id}",
+                ),
+                _query_callback_info(),
+                request_id,
+                is_last,
+            )
+        except BaseException as exc:
+            with errors_lock:
+                callback_errors.append(exc)
+
+    def respond(_field, current_request_id):
+        nonlocal request_id
+        request_id = current_request_id
+        send_row("p0")
+        with client._query_state_lock:
+            accumulator = client._query_history[current_request_id]
+            accumulator.callback_dispatch_lock = dispatch_lock
+
+        first_row = threading.Thread(target=send_row, args=("p1",))
+        callback_threads.append(first_row)
+        first_row.start()
+        if not handler_entered.wait(4):
+            with errors_lock:
+                callback_errors.append(AssertionError("N-th handler did not pause"))
+            release_handler.set()
+            return
+
+        start_together = threading.Barrier(4)
+
+        def concurrent_row(product_id, is_last):
+            try:
+                start_together.wait(timeout=3)
+            except BaseException as exc:
+                with errors_lock:
+                    callback_errors.append(exc)
+                return
+            send_row(product_id, is_last=is_last)
+
+        for product_id, is_last in (("p2", False), ("p3", False), ("p4", True)):
+            thread = threading.Thread(
+                target=concurrent_row,
+                args=(product_id, is_last),
+            )
+            callback_threads.append(thread)
+            thread.start()
+        try:
+            start_together.wait(timeout=3)
+        except BaseException as exc:
+            with errors_lock:
+                callback_errors.append(exc)
+            release_handler.set()
+            return
+
+        if not late_callbacks_waiting.wait(4):
+            with errors_lock:
+                callback_errors.append(
+                    AssertionError("concurrent callbacks did not queue at the cap")
+                )
+        release_handler.set()
+        for thread in callback_threads:
+            thread.join(5)
+            if thread.is_alive():
+                with errors_lock:
+                    callback_errors.append(AssertionError("callback thread did not finish"))
+
+    api.query_callbacks["ReqQryProduct"] = respond
+    request_id = None
+
+    def run_query():
+        try:
+            query_results.append(
+                client.query_products_result(timeout=0.5, max_records=2)
+            )
+        except BaseException as exc:
+            query_errors.append(exc)
+
+    query_thread = threading.Thread(target=run_query)
+    query_thread.start()
+    try:
+        assert late_callbacks_waiting.wait(4), "concurrent callbacks never reached cap gate"
+    finally:
+        release_handler.set()
+        query_thread.join(7)
+        for thread in callback_threads:
+            if thread.is_alive():
+                thread.join(5)
+        client.stop()
+
+    assert not query_thread.is_alive()
+    assert not any(thread.is_alive() for thread in callback_threads)
+    assert not callback_errors
+    assert not query_errors
+    assert len(query_results) == 1
+    result = query_results[0]
+    assert [row["ProductID"] for row in result.records] == ["p0", "p1"]
+    assert result.record_limit_exceeded is True
+    assert result.completion_origin == "record_limit"
+    assert not result.complete
+    assert len(result.records) == 2
+    assert result.late_callback_count == 2
+    query_callback_records = [
+        record for record in sink.records if record.callback_name == "OnRspQryProduct"
+    ]
+    assert len(query_callback_records) == 3
+    assert all(record.capture_complete for record in query_callback_records)
+    overflow_witness = query_callback_records[-1]
+    assert overflow_witness.field_value(0, "UnboundedPayload") is None
+    assert api.release_completed.wait(1)
+    assert api.spi is None
+
+
+def test_depth_product_class_is_forwarded_only_when_explicit(monkeypatch):
+    _install_query_field_fakes(monkeypatch)
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        api.query_callbacks["ReqQryDepthMarketData"] = (
+            lambda _field, request_id: api.spi.OnRspQryDepthMarketData(
+                None, _query_callback_info(), request_id, True
+            )
+        )
+
+        scoped = client.query_depth_market_data_result(
+            instrument_id="MA2610",
+            exchange_id="CZCE",
+            product_class="1",
+            timeout=0.5,
+            max_duration=1.0,
+            max_records=4,
+        )
+        legacy = client.query_depth_market_data_result(timeout=0.5)
+
+        request_calls = [call for call in api.calls if call[0] == "ReqQryDepthMarketData"]
+        assert len(request_calls) == 2
+        assert request_calls[0][1].ProductClass == "1"
+        assert scoped.query_source.request_filters == (
+            ("ExchangeID", "CZCE"),
+            ("InstrumentID", "MA2610"),
+            ("ProductClass", "1"),
+        )
+        assert not hasattr(request_calls[1][1], "ProductClass")
+        assert legacy.query_source.request_filters == (("ExchangeID", ""), ("InstrumentID", ""))
+    finally:
+        client.stop()
+
+
+def test_product_query_deadline_and_record_limit_validation_happen_before_req(monkeypatch):
+    _install_query_field_fakes(monkeypatch)
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        expired = client.query_products_result(deadline_monotonic=time.monotonic() - 1)
+        assert expired.completion_origin == "deadline"
+        assert not expired.complete
+        assert not any(call[0] == "ReqQryProduct" for call in api.calls)
+
+        for invalid in (True, 0, 100_001):
+            with pytest.raises(ValueError, match="max_records"):
+                client.query_products_result(max_records=invalid)
+        cancelled = client.query_products_result(should_stop=lambda: True)
+        assert cancelled.completion_origin == "local_cancel"
+        assert cancelled.error_message == "query_cancelled"
+        assert not cancelled.complete
+        assert not any(call[0] == "ReqQryProduct" for call in api.calls)
     finally:
         client.stop()

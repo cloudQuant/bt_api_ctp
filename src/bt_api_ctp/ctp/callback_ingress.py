@@ -962,6 +962,8 @@ def _safe_fields_for(name: str) -> tuple[tuple[int, tuple[str, ...]], ...]:
         mapping = {0: _SAFE_POSITION_FIELDS, 1: _SAFE_RSP_INFO_FIELDS}
     elif name in ("OnRspQryInstrument", "OnRspQryClassifiedInstrument"):
         mapping = {0: _SAFE_INSTRUMENT_FIELDS, 1: _SAFE_RSP_INFO_FIELDS}
+    elif name == "OnRspQryProduct":
+        mapping = {0: ("ProductClass", "ExchangeID", "ProductID"), 1: _SAFE_RSP_INFO_FIELDS}
     elif name == "OnRspQryDepthMarketData":
         mapping = {0: _SAFE_DEPTH_FIELDS, 1: _SAFE_RSP_INFO_FIELDS}
     elif name == "OnRspError":

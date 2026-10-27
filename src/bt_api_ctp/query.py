@@ -25,6 +25,7 @@ QUERY_COMPLETION_ORIGINS = frozenset(
         "submit_rejected",
         "timeout",
         "deadline",
+        "record_limit",
         "success",
         "local_preflight",
     }
@@ -44,6 +45,7 @@ _QUERY_MONOTONIC_CLOCK_DOMAIN = "python.time.monotonic"
 # window in ctp_position_evidence.py.
 _QUERY_EVIDENCE_MAX_TTL_SECONDS = 35.0
 _QUERY_POSITION_EVIDENCE_MAX_TTL_SECONDS = 5.0
+_MAX_QUERY_RECORD_LIMIT = 100_000
 
 
 def _canonical_query_value(value: Any) -> Any:
@@ -129,6 +131,8 @@ class _QuerySource:
     trusted_expires_at_utc: datetime | None
     trusted_expires_monotonic: float | None
     source_tags: tuple[str, str, str, str, int, int] | None = None
+    record_limit: int | None = None
+    record_limit_exceeded: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,8 @@ def _new_query_source(
     request_parameters: tuple[tuple[str, float], ...] = (),
     explicit_request_filters: tuple[str, ...] = (),
     source_tags: tuple[str, str, str, str, int, int] | None = None,
+    record_limit: int | None = None,
+    record_limit_exceeded: bool = False,
 ) -> _QuerySource:
     trusted_expires_at_utc = None
     trusted_expires_monotonic = None
@@ -202,6 +208,8 @@ def _new_query_source(
         trusted_expires_at_utc=trusted_expires_at_utc,
         trusted_expires_monotonic=trusted_expires_monotonic,
         source_tags=source_tags,
+        record_limit=record_limit,
+        record_limit_exceeded=record_limit_exceeded,
     )
 
 
@@ -267,6 +275,8 @@ class QueryResult(Generic[T]):
     submit_code: int | None = None
     first_completion_origin: str = "unknown"
     completion_origin: str = "unknown"
+    record_limit: int | None = None
+    record_limit_exceeded: bool = False
     _source: _QuerySource | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -274,6 +284,19 @@ class QueryResult(Generic[T]):
             value = getattr(self, name)
             if type(value) is not str or value not in QUERY_COMPLETION_ORIGINS:
                 raise ValueError(f"invalid {name}")
+        if self.record_limit is not None and (
+            type(self.record_limit) is not int
+            or not 1 <= self.record_limit <= _MAX_QUERY_RECORD_LIMIT
+        ):
+            raise ValueError("record_limit must be an exact integer from 1 to 100000 or None")
+        if type(self.record_limit_exceeded) is not bool:
+            raise ValueError("record_limit_exceeded must be a bool")
+        if self.record_limit_exceeded and self.record_limit is None:
+            raise ValueError("record_limit_exceeded requires a record limit")
+        if self.record_limit_exceeded and self.completion_origin != "record_limit":
+            raise ValueError("record-limited result must use record_limit completion origin")
+        if self.complete and self.record_limit_exceeded:
+            raise ValueError("a record-limited result cannot be complete")
 
     @property
     def query_source(self) -> _QuerySource | None:
@@ -316,6 +339,8 @@ class QueryResult(Generic[T]):
             "submit_code": self.submit_code,
             "first_completion_origin": self.first_completion_origin,
             "completion_origin": self.completion_origin,
+            "record_limit": self.record_limit,
+            "record_limit_exceeded": self.record_limit_exceeded,
         }
         if include_records:
             data["records"] = list(self.records)
