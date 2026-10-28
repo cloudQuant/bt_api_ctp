@@ -881,6 +881,17 @@ class CtpExecutionGateError(RuntimeError):
         super().__init__(code)
 
 
+class _CtpNativeRequestDeadlineExpired(CtpExecutionGateError):
+    """A native request was definitely not entered because its deadline elapsed."""
+
+
+@dataclass
+class _CtpNativeRequestDispatchOutcome:
+    """Internal call-boundary fact used to distinguish pre-dispatch timeout."""
+
+    native_call_started: bool = False
+
+
 @dataclass(frozen=True)
 class CtpRuntimeSimNowCredentialBinding:
     """Owner-bound approval handle for one configured SimNow TD/MD pair.
@@ -5590,17 +5601,43 @@ class TraderClient:
         request_submitter: Callable[[Any, tuple[Any, ...]], Any] | None = None,
         settlement_authorization: Any = None,
         simnow_write_authorization: _CtpRuntimeSimNowWriteAuthorization | None = None,
+        deadline_monotonic: float | None = None,
+        dispatch_outcome: _CtpNativeRequestDispatchOutcome | None = None,
         pre_dispatch: Callable[[], None] | None = None,
     ) -> Any:
         """Invoke a pinned session Req with every SDK lock released.
 
         This internal lease is limited to authentication, login, and read-only
         queries. Managed order/action sends use their Store-issued one-shot
-        `CtpManagedNativeCallLeaseV2` instead.
+        `CtpManagedNativeCallLeaseV2` instead. A direct ReqOrderAction may
+        carry an absolute monotonic deadline; after SDK state-lock validation,
+        it is checked immediately before entering the native method. OS
+        scheduling can still pause the thread between that check and method
+        entry, and an entered native call cannot be interrupted.
         """
 
         if not method_name.startswith("Req"):
             raise CtpExecutionGateError("ctp_managed_native_request_kind_blocked")
+        if deadline_monotonic is not None:
+            if (
+                method_name != "ReqOrderAction"
+                or request_submitter is not None
+                or pre_dispatch is not None
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_scope_mismatch")
+            if (
+                type(deadline_monotonic) is not float
+                or not math.isfinite(deadline_monotonic)
+                or deadline_monotonic < 0.0
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_invalid")
+        if dispatch_outcome is not None and (
+            type(dispatch_outcome) is not _CtpNativeRequestDispatchOutcome
+            or method_name != "ReqOrderAction"
+            or deadline_monotonic is None
+            or dispatch_outcome.native_call_started is not False
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_scope_mismatch")
         with self._query_state_lock:
             state = self._callback_ingress
             if api is None or self._api is not api or (state is not None and self._spi is None):
@@ -5711,13 +5748,23 @@ class TraderClient:
 
         call_failed = False
         invalid_return_type = False
+        native_call_started = False
+        result = None
         try:
             if request_submitter is None:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise _CtpNativeRequestDeadlineExpired(
+                        "ctp_execution_gate_cancel_deadline_expired"
+                    )
+                native_call_started = True
+                if dispatch_outcome is not None:
+                    dispatch_outcome.native_call_started = True
                 result = method(*args)
             else:
+                native_call_started = True
                 result = request_submitter(api, args)
         except BaseException:
-            call_failed = True
+            call_failed = native_call_started
             raise
         finally:
             with self._query_state_lock:
@@ -5730,10 +5777,14 @@ class TraderClient:
                         state.command_lease = None
                     if call_failed:
                         self._poison_callback_ingress_locked("native_call_ambiguous")
-                    elif type(result) is not int:
+                    elif native_call_started and type(result) is not int:
                         invalid_return_type = True
                         self._poison_callback_ingress_locked("native_call_ambiguous")
-                    elif result != 0 and method_name in {"ReqAuthenticate", "ReqUserLogin"}:
+                    elif (
+                        native_call_started
+                        and result != 0
+                        and method_name in {"ReqAuthenticate", "ReqUserLogin"}
+                    ):
                         self._poison_callback_ingress_locked("lifecycle_transition")
                 self._maybe_finish_deferred_native_release_locked()
         if invalid_return_type:
@@ -8337,6 +8388,7 @@ class TraderClient:
         request_id: int,
         *,
         execution_capability: object | None = None,
+        deadline_monotonic: float | None = None,
         runtime_order_id: str | None = None,
         managed_intent_id: str | None = None,
         runtime_action_id: str | None = None,
@@ -8346,8 +8398,27 @@ class TraderClient:
 
         Supplying the managed identity tuple opts into the strict I9 target
         contract. Calls that omit it preserve the legacy OrderRef/OrderSysID
-        target alternatives for existing public callers.
+        target alternatives for existing public callers. ``deadline_monotonic``
+        is an optional absolute ``time.monotonic()`` deadline. It is checked
+        before admission work and again immediately before native
+        ``ReqOrderAction`` after SDK state-lock waits.
         """
+
+        if deadline_monotonic is not None:
+            if (
+                type(deadline_monotonic) is not float
+                or not math.isfinite(deadline_monotonic)
+                or deadline_monotonic < 0.0
+            ):
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_invalid")
+            if time.monotonic() >= deadline_monotonic:
+                raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_expired")
+        dispatch_outcome = (
+            _CtpNativeRequestDispatchOutcome()
+            if deadline_monotonic is not None
+            else None
+        )
+        request_count_recorded = False
 
         managed_cancel = _validate_managed_cancel_identity(
             runtime_order_id=runtime_order_id,
@@ -8454,6 +8525,7 @@ class TraderClient:
                 # provider saw the request, so this action ID is never retried.
                 self._managed_cancel_actions_seen.add(managed_cancel_intent_id)
             self._record_request("order_action")
+            request_count_recorded = True
         try:
             ret = self._invoke_session_native_request(
                 api,
@@ -8461,13 +8533,31 @@ class TraderClient:
                 request_field,
                 request_id,
                 simnow_write_authorization=authorization,
+                deadline_monotonic=deadline_monotonic,
+                dispatch_outcome=dispatch_outcome,
             )
-        except Exception:
+        except Exception as exc:
             with self._query_state_lock:
                 if key in self._order_action_history:
-                    self._order_action_history[key] = replace(
-                        self._order_action_history[key], reason="native_submit_exception"
-                    )
+                    if (
+                        type(exc) is _CtpNativeRequestDeadlineExpired
+                        and dispatch_outcome is not None
+                        and dispatch_outcome.native_call_started is False
+                    ):
+                        if request_count_recorded:
+                            self._request_counts["order_action"] = max(
+                                0, self._request_counts.get("order_action", 0) - 1
+                            )
+                        self._order_action_history.pop(key, None)
+                        self._order_action_identities.pop(key, None)
+                        if managed_cancel:
+                            self._managed_cancel_actions_seen.discard(
+                                managed_cancel_intent_id
+                            )
+                    else:
+                        self._order_action_history[key] = replace(
+                            self._order_action_history[key], reason="native_submit_exception"
+                        )
             raise
         try:
             submit_code = int(ret) if ret is not None else None
