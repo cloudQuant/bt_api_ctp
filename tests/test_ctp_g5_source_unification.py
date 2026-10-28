@@ -71,6 +71,13 @@ def _client_with_api():
     client._require_execution_write_locked = lambda *_args, **_kwargs: None
     client._require_native_field_identity_locked = lambda *_args, **_kwargs: None
     client._require_native_field_identity_snapshot_locked = lambda *_args, **_kwargs: None
+    # This suite isolates native callback/source correlation; final direct
+    # write admission is exercised with real proof state in the dedicated
+    # direct-simulation admission tests.
+    client._mint_direct_native_write_authorization_locked = lambda **_kwargs: object()
+    client._consume_direct_native_write_authorization_locked = (
+        lambda *_args, **_kwargs: None
+    )
     return client, api, spi
 
 

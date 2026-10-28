@@ -47,6 +47,12 @@ def _client(submit_code=0, submit_error=None):
     # evidence after a test caller has crossed the write gate.
     client._require_execution_write_locked = lambda *_args, **_kwargs: None
     client._require_native_field_identity_locked = lambda *_args, **_kwargs: None
+    # The direct dispatch snapshot is a separate gate from the callback
+    # evidence contract exercised here; this fixture deliberately crosses it.
+    client._mint_direct_native_write_authorization_locked = lambda **_kwargs: object()
+    client._consume_direct_native_write_authorization_locked = (
+        lambda *_args, **_kwargs: None
+    )
     return client
 
 

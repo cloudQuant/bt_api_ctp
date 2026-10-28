@@ -887,7 +887,7 @@ class _CtpNativeRequestDeadlineExpired(CtpExecutionGateError):
 
 @dataclass
 class _CtpNativeRequestDispatchOutcome:
-    """Internal call-boundary fact used to distinguish pre-dispatch timeout."""
+    """Internal call-boundary fact used to distinguish pre-dispatch rejection."""
 
     native_call_started: bool = False
 
@@ -922,6 +922,7 @@ class CtpRuntimeSimNowCredentialBinding:
 
 
 _CTP_SIMNOW_WRITE_AUTHORIZATION_SEAL = object()
+_CTP_DIRECT_NATIVE_WRITE_AUTHORIZATION_SEAL = object()
 
 
 class _CtpRuntimeSimNowWriteAuthorization:
@@ -993,6 +994,80 @@ class _CtpRuntimeSimNowWriteAuthorization:
         self._runtime_action_id = runtime_action_id
         self._managed_cancel_intent_id = managed_cancel_intent_id
         self._preflight_epoch = preflight_epoch
+        self._used = False
+
+
+class _CtpDirectNativeWriteAuthorization:
+    """One-use snapshot binding direct ReqOrder writes to the admitted session."""
+
+    __slots__ = (
+        "_seal",
+        "_client_ref",
+        "_capability",
+        "_api",
+        "_proof",
+        "_proof_sha256",
+        "_preflight_epoch",
+        "_operation",
+        "_instrument_id",
+        "_exchange_id",
+        "_request_id",
+        "_native_field",
+        "_field_identity",
+        "_user_id",
+        "_connection_generation",
+        "_native_api_generation",
+        "_account_fingerprint",
+        "_trading_day",
+        "_bound_front",
+        "_bound_md_front",
+        "_session_native_front",
+        "_direct_sim_admission_profile",
+        "_environment_profile",
+        "_ctp_environment_profile",
+        "_runtime_simnow_credential_binding",
+        "_used",
+    )
+
+    def __init__(
+        self,
+        *,
+        client: object,
+        capability: object,
+        api: Any,
+        operation: str,
+        instrument_id: str,
+        exchange_id: str,
+        request_id: int,
+        native_field: Any,
+        field_identity: Any,
+        user_id: str,
+    ) -> None:
+        self._seal = _CTP_DIRECT_NATIVE_WRITE_AUTHORIZATION_SEAL
+        self._client_ref = weakref.ref(client)
+        self._capability = capability
+        self._api = api
+        self._proof = client._execution_gate_proof
+        self._proof_sha256 = client._execution_gate_proof_sha256
+        self._preflight_epoch = client._execution_preflight_epoch
+        self._operation = operation
+        self._instrument_id = instrument_id
+        self._exchange_id = exchange_id
+        self._request_id = request_id
+        self._native_field = native_field
+        self._field_identity = field_identity
+        self._user_id = user_id
+        self._connection_generation = client._connection_generation
+        self._native_api_generation = client._native_api_generation
+        self._account_fingerprint = client._account_fingerprint
+        self._trading_day = client._trading_day
+        self._bound_front = client._bound_front
+        self._bound_md_front = client._bound_md_front
+        self._session_native_front = client._session_native_front
+        self._direct_sim_admission_profile = client._direct_sim_admission_profile
+        self._environment_profile = client._execution_gate_environment_profile
+        self._ctp_environment_profile = client.ctp_env_profile
+        self._runtime_simnow_credential_binding = client._runtime_simnow_credential_binding
         self._used = False
 
 def _parse_utc_timestamp(value: Any) -> datetime:
@@ -5601,6 +5676,7 @@ class TraderClient:
         request_submitter: Callable[[Any, tuple[Any, ...]], Any] | None = None,
         settlement_authorization: Any = None,
         simnow_write_authorization: _CtpRuntimeSimNowWriteAuthorization | None = None,
+        direct_write_authorization: _CtpDirectNativeWriteAuthorization | None = None,
         deadline_monotonic: float | None = None,
         dispatch_outcome: _CtpNativeRequestDispatchOutcome | None = None,
         pre_dispatch: Callable[[], None] | None = None,
@@ -5609,11 +5685,14 @@ class TraderClient:
 
         This internal lease is limited to authentication, login, and read-only
         queries. Managed order/action sends use their Store-issued one-shot
-        `CtpManagedNativeCallLeaseV2` instead. A direct ReqOrderAction may
-        carry an absolute monotonic deadline; after SDK state-lock validation,
-        it is checked immediately before entering the native method. OS
-        scheduling can still pause the thread between that check and method
-        entry, and an entered native call cannot be interrupted.
+        `CtpManagedNativeCallLeaseV2` instead. Direct ReqOrderInsert/Action
+        calls revalidate their typed session authorization under the final
+        state-lock gate. A direct ReqOrderAction may also carry an absolute
+        monotonic deadline; after SDK state-lock validation, it is checked
+        immediately before entering the native method. The SDK lock is not
+        held across native code. OS scheduling can still pause the thread
+        between the final checks and method entry, and an entered native call
+        cannot be interrupted.
         """
 
         if not method_name.startswith("Req"):
@@ -5633,11 +5712,10 @@ class TraderClient:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_invalid")
         if dispatch_outcome is not None and (
             type(dispatch_outcome) is not _CtpNativeRequestDispatchOutcome
-            or method_name != "ReqOrderAction"
-            or deadline_monotonic is None
+            or method_name not in {"ReqOrderInsert", "ReqOrderAction"}
             or dispatch_outcome.native_call_started is not False
         ):
-            raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_scope_mismatch")
+            raise CtpExecutionGateError("ctp_native_request_dispatch_outcome_scope_mismatch")
         with self._query_state_lock:
             state = self._callback_ingress
             if api is None or self._api is not api or (state is not None and self._spi is None):
@@ -5645,12 +5723,23 @@ class TraderClient:
                     self._poison_callback_ingress_locked("source_identity_mismatch")
                 raise CtpExecutionGateError("ctp_managed_native_request_source_mismatch")
             if method_name in {"ReqOrderInsert", "ReqOrderAction"}:
-                if (
+                if state is not None:
+                    if (
+                        simnow_write_authorization is not None
+                        or direct_write_authorization is not None
+                    ):
+                        raise CtpExecutionGateError(
+                            "ctp_simnow_write_authorization_scope_mismatch"
+                        )
+                elif (
                     self._is_simnow_write_restricted_locked()
                     and not self._direct_sim_admission_is_current_locked()
                 ):
                     authorization = simnow_write_authorization
-                    if type(authorization) is not _CtpRuntimeSimNowWriteAuthorization:
+                    if (
+                        type(authorization) is not _CtpRuntimeSimNowWriteAuthorization
+                        or direct_write_authorization is not None
+                    ):
                         raise CtpExecutionGateError("ctp_simnow_write_authorization_required")
                     if len(args) != 2:
                         raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
@@ -5669,10 +5758,31 @@ class TraderClient:
                         runtime_action_id=authorization._runtime_action_id,
                         managed_cancel_intent_id=authorization._managed_cancel_intent_id,
                     )
-                elif simnow_write_authorization is not None:
+                else:
+                    if simnow_write_authorization is not None:
+                        raise CtpExecutionGateError(
+                            "ctp_simnow_write_authorization_scope_mismatch"
+                        )
+                    if len(args) != 2:
+                        raise CtpExecutionGateError(
+                            "ctp_execution_gate_direct_write_authorization_scope_mismatch"
+                        )
+                    self._consume_direct_native_write_authorization_locked(
+                        direct_write_authorization,
+                        api=api,
+                        method_name=method_name,
+                        native_field=args[0],
+                        request_id=args[1],
+                    )
+            elif (
+                simnow_write_authorization is not None
+                or direct_write_authorization is not None
+            ):
+                if simnow_write_authorization is not None:
                     raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
-            elif simnow_write_authorization is not None:
-                raise CtpExecutionGateError("ctp_simnow_write_authorization_scope_mismatch")
+                raise CtpExecutionGateError(
+                    "ctp_execution_gate_direct_write_authorization_scope_mismatch"
+                )
             if state is not None:
                 if state.poisoned or state.phase not in {"PRE_LOGIN", "ACTIVE"}:
                     raise CtpExecutionGateError("ctp_callback_ingress_owner_poisoned")
@@ -5762,6 +5872,8 @@ class TraderClient:
                 result = method(*args)
             else:
                 native_call_started = True
+                if dispatch_outcome is not None:
+                    dispatch_outcome.native_call_started = True
                 result = request_submitter(api, args)
         except BaseException:
             call_failed = native_call_started
@@ -6713,6 +6825,134 @@ class TraderClient:
         ) or official_simnow_profile_for_td_front(self._bound_front)
         return bool(expected) and expected == profile
 
+    def _mint_direct_native_write_authorization_locked(
+        self,
+        *,
+        capability: object,
+        api: Any,
+        operation: str,
+        instrument_id: str,
+        exchange_id: str,
+        request_id: int,
+        native_field: Any,
+        field_identity: Any,
+        user_id: str,
+    ) -> _CtpDirectNativeWriteAuthorization:
+        """Bind a direct write's initial admission to its final dispatch gate."""
+
+        if (
+            api is None
+            or self._api is not api
+            or self._session_native_api is not api
+            or self._execution_gate_native_api is not api
+            or self._execution_gate_proof is None
+            or self._execution_gate_proof_sha256 is None
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_direct_write_session_mismatch")
+        return _CtpDirectNativeWriteAuthorization(
+            client=self,
+            capability=capability,
+            api=api,
+            operation=operation,
+            instrument_id=instrument_id,
+            exchange_id=exchange_id,
+            request_id=request_id,
+            native_field=native_field,
+            field_identity=field_identity,
+            user_id=user_id,
+        )
+
+    def _consume_direct_native_write_authorization_locked(
+        self,
+        authorization: _CtpDirectNativeWriteAuthorization | None,
+        *,
+        api: Any,
+        method_name: str,
+        native_field: Any,
+        request_id: Any,
+    ) -> None:
+        """Recheck the exact direct-write admission at the final locked gate."""
+
+        if (
+            type(authorization) is not _CtpDirectNativeWriteAuthorization
+            or authorization._seal is not _CTP_DIRECT_NATIVE_WRITE_AUTHORIZATION_SEAL
+            or authorization._client_ref() is not self
+            or authorization._used
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_direct_write_authorization_required")
+        authorization._used = True
+        operation = "insert" if method_name == "ReqOrderInsert" else "cancel"
+        if (
+            authorization._operation != operation
+            or authorization._api is not api
+            or authorization._native_field is not native_field
+            or type(request_id) is not int
+            or authorization._request_id != request_id
+        ):
+            raise CtpExecutionGateError(
+                "ctp_execution_gate_direct_write_authorization_scope_mismatch"
+            )
+        try:
+            current_identity = (
+                _order_insert_identity(native_field)
+                if operation == "insert"
+                else _order_action_identity(native_field)
+            )
+            current_user_id = str(getattr(native_field, "UserID", "") or "")
+            current_proof_sha256 = (
+                _execution_gate_proof(self._execution_gate_proof)[1]
+                if self._execution_gate_proof is not None
+                else None
+            )
+        except (CtpExecutionGateError, AttributeError, TypeError, ValueError):
+            raise CtpExecutionGateError(
+                "ctp_execution_gate_direct_write_authorization_scope_mismatch"
+            ) from None
+        if (
+            current_identity != authorization._field_identity
+            or authorization._instrument_id != current_identity.instrument_id
+            or authorization._exchange_id != current_identity.exchange_id
+            or current_user_id != authorization._user_id
+        ):
+            raise CtpExecutionGateError(
+                "ctp_execution_gate_direct_write_authorization_scope_mismatch"
+            )
+        if (
+            authorization._capability is not self._execution_gate_capability
+            or authorization._proof is not self._execution_gate_proof
+            or authorization._proof_sha256 != self._execution_gate_proof_sha256
+            or authorization._proof_sha256 != current_proof_sha256
+            or authorization._preflight_epoch != self._execution_preflight_epoch
+            or authorization._connection_generation != self._connection_generation
+            or authorization._native_api_generation != self._native_api_generation
+            or authorization._api is not self._api
+            or authorization._api is not self._session_native_api
+            or authorization._api is not self._execution_gate_native_api
+            or authorization._account_fingerprint != self._account_fingerprint
+            or authorization._trading_day != self._trading_day
+            or authorization._bound_front != self._bound_front
+            or authorization._bound_md_front != self._bound_md_front
+            or authorization._session_native_front != self._session_native_front
+            or authorization._environment_profile != self._execution_gate_environment_profile
+            or authorization._ctp_environment_profile != self.ctp_env_profile
+            or authorization._direct_sim_admission_profile
+            != self._direct_sim_admission_profile
+            or authorization._runtime_simnow_credential_binding
+            is not self._runtime_simnow_credential_binding
+            or not self._bound_identity_is_current(require_active_front=True)
+            or self.auto_settlement_confirm is not False
+            or not self.is_trading_ready
+            or (
+                self._is_simnow_write_restricted_locked()
+                and not self._direct_sim_admission_is_current_locked()
+            )
+            or (
+                authorization._direct_sim_admission_profile
+                and not self._direct_sim_admission_is_current_locked()
+            )
+        ):
+            raise CtpExecutionGateError("ctp_execution_gate_direct_write_session_mismatch")
+
     def _require_bound_identity_locked(self, *, require_active_front: bool = False) -> None:
         """Fail closed before a managed native write can use mutable identity."""
 
@@ -6728,7 +6968,7 @@ class TraderClient:
         field: Any,
         *,
         require_user_id: bool,
-    ) -> None:
+    ) -> str:
         """Bind each typed order field to the immutable authenticated account."""
 
         self._require_bound_identity_locked(require_active_front=True)
@@ -6743,6 +6983,7 @@ class TraderClient:
         ):
             self._revoke_execution_gate_locked("ctp_execution_gate_native_field_identity_mismatch")
             raise CtpExecutionGateError("ctp_execution_gate_native_field_identity_mismatch")
+        return user_id
 
     def _require_native_field_identity_snapshot_locked(
         self,
@@ -8093,7 +8334,9 @@ class TraderClient:
                 runtime_order_id=runtime_order_id,
                 managed_intent_id=managed_intent_id,
             )
-            self._require_native_field_identity_locked(field, require_user_id=True)
+            native_field_user_id = self._require_native_field_identity_locked(
+                field, require_user_id=True
+            )
             api = self._api
             if api is None:
                 raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
@@ -8132,14 +8375,34 @@ class TraderClient:
                 known_request_id == request_id for known_request_id, _ in self._order_insert_history
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
+            direct_authorization = (
+                None
+                if authorization is not None
+                else self._mint_direct_native_write_authorization_locked(
+                    capability=execution_capability,
+                    api=api,
+                    operation="insert",
+                    instrument_id=identity.instrument_id,
+                    exchange_id=identity.exchange_id,
+                    request_id=request_id,
+                    native_field=field,
+                    field_identity=identity,
+                    user_id=native_field_user_id,
+                )
+            )
+        dispatch_outcome = _CtpNativeRequestDispatchOutcome()
+        attempt_evidence: CtpOrderInsertEvidence | None = None
+        attempt_count_recorded = False
+
         def record_dispatch() -> None:
+            nonlocal attempt_evidence, attempt_count_recorded
             # Called under the final native-request lock only after the
             # SimNow verifier has accepted the exact outgoing field.
             if key in self._order_insert_history or any(
                 known_request_id == request_id for known_request_id, _ in self._order_insert_history
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
-            self._order_insert_history[key] = CtpOrderInsertEvidence(
+            evidence = CtpOrderInsertEvidence(
                 request_id=request_id,
                 order_ref=identity.order_ref,
                 status="unknown",
@@ -8158,8 +8421,11 @@ class TraderClient:
                 observed_at_utc=None,
                 submit_code=None,
             )
+            self._order_insert_history[key] = evidence
+            attempt_evidence = evidence
             self._order_insert_identities[key] = identity
             self._record_request("order_insert")
+            attempt_count_recorded = True
         try:
             result = self._invoke_session_native_request(
                 api,
@@ -8167,14 +8433,28 @@ class TraderClient:
                 field,
                 request_id,
                 simnow_write_authorization=authorization,
+                direct_write_authorization=direct_authorization,
+                dispatch_outcome=dispatch_outcome,
                 pre_dispatch=record_dispatch,
             )
         except BaseException:
             with self._query_state_lock:
-                if key in self._order_insert_history:
-                    self._order_insert_history[key] = replace(
-                        self._order_insert_history[key], reason="native_submit_exception"
-                    )
+                if (
+                    not dispatch_outcome.native_call_started
+                    and attempt_evidence is not None
+                    and self._order_insert_history.get(key) is attempt_evidence
+                ):
+                    self._order_insert_history.pop(key, None)
+                    self._order_insert_identities.pop(key, None)
+                    if attempt_count_recorded:
+                        self._request_counts["order_insert"] = max(
+                            0, self._request_counts.get("order_insert", 0) - 1
+                        )
+                elif dispatch_outcome.native_call_started and attempt_evidence is not None:
+                    if self._order_insert_history.get(key) is attempt_evidence:
+                        self._order_insert_history[key] = replace(
+                            attempt_evidence, reason="native_submit_exception"
+                        )
             raise
         with self._query_state_lock:
             if key in self._order_insert_history:
@@ -8413,11 +8693,7 @@ class TraderClient:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_invalid")
             if time.monotonic() >= deadline_monotonic:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_expired")
-        dispatch_outcome = (
-            _CtpNativeRequestDispatchOutcome()
-            if deadline_monotonic is not None
-            else None
-        )
+        dispatch_outcome = _CtpNativeRequestDispatchOutcome()
         request_count_recorded = False
 
         managed_cancel = _validate_managed_cancel_identity(
@@ -8449,6 +8725,7 @@ class TraderClient:
                     snapshot,
                     require_user_id=False,
                 )
+                native_field_user_id = snapshot.user_id
                 api = self._api
                 if api is None:
                     raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
@@ -8465,7 +8742,9 @@ class TraderClient:
                     runtime_action_id=runtime_action_id,
                     managed_cancel_intent_id=managed_cancel_intent_id,
                 )
-                self._require_native_field_identity_locked(field, require_user_id=False)
+                native_field_user_id = self._require_native_field_identity_locked(
+                    field, require_user_id=False
+                )
                 api = self._api
                 if api is None:
                     raise CtpExecutionGateError("ctp_execution_gate_native_api_unavailable")
@@ -8493,6 +8772,21 @@ class TraderClient:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_request_id_reused")
             if managed_cancel and managed_cancel_intent_id in self._managed_cancel_actions_seen:
                 raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_action_reused")
+            direct_authorization = (
+                None
+                if authorization is not None
+                else self._mint_direct_native_write_authorization_locked(
+                    capability=execution_capability,
+                    api=api,
+                    operation="cancel",
+                    instrument_id=identity.instrument_id,
+                    exchange_id=identity.exchange_id,
+                    request_id=request_id,
+                    native_field=request_field,
+                    field_identity=identity,
+                    user_id=native_field_user_id,
+                )
+            )
 
             now = datetime.now(timezone.utc)
             self._order_action_history[key] = CtpOrderActionEvidence(
@@ -8533,17 +8827,14 @@ class TraderClient:
                 request_field,
                 request_id,
                 simnow_write_authorization=authorization,
+                direct_write_authorization=direct_authorization,
                 deadline_monotonic=deadline_monotonic,
                 dispatch_outcome=dispatch_outcome,
             )
-        except Exception as exc:
+        except BaseException:
             with self._query_state_lock:
                 if key in self._order_action_history:
-                    if (
-                        type(exc) is _CtpNativeRequestDeadlineExpired
-                        and dispatch_outcome is not None
-                        and dispatch_outcome.native_call_started is False
-                    ):
+                    if not dispatch_outcome.native_call_started:
                         if request_count_recorded:
                             self._request_counts["order_action"] = max(
                                 0, self._request_counts.get("order_action", 0) - 1

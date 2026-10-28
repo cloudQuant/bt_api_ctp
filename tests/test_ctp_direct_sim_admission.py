@@ -17,8 +17,8 @@ import bt_api_ctp.ctp.client as ctp_client_module
 from bt_api_ctp.ctp.client import (
     CtpExecutionGateError,
     TraderClient,
-    _TraderSpi,
     _issue_ctp_execution_authority_for_core,
+    _TraderSpi,
 )
 
 _SIMNOW_TD = "tcp://182.254.243.31:30002"
@@ -30,7 +30,12 @@ _SIMNOW_MD_GROUP1 = "tcp://182.254.243.31:30011"
 class _CountingNativeApi:
     def __init__(self):
         self.calls = []
+        self.authenticate_calls = []
         self.order_action_error = None
+
+    def ReqAuthenticate(self, field, request_id):
+        self.authenticate_calls.append((field, request_id))
+        return 0
 
     def ReqOrderInsert(self, field, request_id):
         self.calls.append(("insert", field, request_id))
@@ -43,9 +48,23 @@ class _CountingNativeApi:
         return 0
 
 
-def _trading_ready_client(td_front):
+class _BlockingInsertNativeApi(_CountingNativeApi):
+    def __init__(self):
+        super().__init__()
+        self.insert_entered = threading.Event()
+        self.allow_insert = threading.Event()
+
+    def ReqOrderInsert(self, field, request_id):
+        self.calls.append(("insert", field, request_id))
+        self.insert_entered.set()
+        if not self.allow_insert.wait(timeout=5):
+            raise RuntimeError("test native insert release timed out")
+        return 0
+
+
+def _trading_ready_client(td_front, native=None):
     client = TraderClient(td_front, "3070", "offline-account", "unused")
-    native = _CountingNativeApi()
+    native = native or _CountingNativeApi()
     client._api = native
     client._session_native_api = native
     client._session_native_front = td_front
@@ -194,6 +213,21 @@ def _arm(client, md_front, *, instrument="SA2701", exchange="CZCE"):
     )
 
 
+def _install_same_api_reconnect_before_dispatch(client, native):
+    spi = _TraderSpi(client, native_api=native)
+    client._spi = spi
+    invoke_native_request = client._invoke_session_native_request
+
+    def reconnect_then_invoke(api, method_name, *args, **kwargs):
+        if method_name in {"ReqOrderInsert", "ReqOrderAction"}:
+            spi.OnFrontDisconnected(-1)
+            spi.OnFrontConnected()
+        return invoke_native_request(api, method_name, *args, **kwargs)
+
+    client._invoke_session_native_request = reconnect_then_invoke
+    return spi
+
+
 def test_official_simnow_pair_arms_and_dispatches_one_insert():
     client, native = _trading_ready_client(_SIMNOW_TD)
     capability, state = _arm(client, _SIMNOW_MD)
@@ -204,6 +238,230 @@ def test_official_simnow_pair_arms_and_dispatches_one_insert():
     assert result == 0
     assert len(native.calls) == 1
     assert native.calls[0][0] == "insert"
+
+
+def test_direct_insert_rejects_same_api_reconnect_before_native_dispatch():
+    client, native = _trading_ready_client(_SIMNOW_TD)
+    capability, _state = _arm(client, _SIMNOW_MD)
+    requests_before = client.get_request_counts()["order_insert"]
+    _install_same_api_reconnect_before_dispatch(client, native)
+
+    with pytest.raises(
+        CtpExecutionGateError,
+        match="ctp_execution_gate_direct_write_session_mismatch",
+    ):
+        client.submit_order_insert(
+            _insert_field(), 11, execution_capability=capability
+        )
+
+    assert client._api is native
+    assert client._session_native_api is native
+    assert client._connection_generation == 8
+    assert client.is_trading_ready is False
+    assert len(native.authenticate_calls) == 1
+    assert native.calls == []
+    assert client._order_insert_history == {}
+    assert client._order_insert_identities == {}
+    assert client._native_request_inflight_refs == 0
+    assert client.get_request_counts()["order_insert"] == requests_before
+
+
+def test_direct_cancel_rejects_same_api_reconnect_before_native_dispatch():
+    client, native = _trading_ready_client(_SIMNOW_TD)
+    capability, _state = _arm(client, _SIMNOW_MD)
+    requests_before = client.get_request_counts()["order_action"]
+    _install_same_api_reconnect_before_dispatch(client, native)
+
+    with pytest.raises(
+        CtpExecutionGateError,
+        match="ctp_execution_gate_direct_write_session_mismatch",
+    ):
+        client.submit_order_action(
+            _cancel_field(), 12, execution_capability=capability
+        )
+
+    assert client._api is native
+    assert client._session_native_api is native
+    assert client._connection_generation == 8
+    assert client.is_trading_ready is False
+    assert len(native.authenticate_calls) == 1
+    assert native.calls == []
+    assert client._order_action_history == {}
+    assert client._order_action_identities == {}
+    assert client._native_request_inflight_refs == 0
+    assert client.get_request_counts()["order_action"] == requests_before
+
+
+def test_direct_cancel_rejects_caller_user_id_change_before_native_dispatch():
+    client, native = _trading_ready_client(_SIMNOW_TD)
+    capability, _state = _arm(client, _SIMNOW_MD)
+    requests_before = client.get_request_counts()["order_action"]
+    field = _cancel_field()
+    invoke_native_request = client._invoke_session_native_request
+
+    def change_user_id_before_final_gate(api, method_name, *args, **kwargs):
+        if method_name == "ReqOrderAction":
+            args[0].UserID = "another-account"
+        return invoke_native_request(api, method_name, *args, **kwargs)
+
+    client._invoke_session_native_request = change_user_id_before_final_gate
+
+    with pytest.raises(
+        CtpExecutionGateError,
+        match="ctp_execution_gate_direct_write_authorization_scope_mismatch",
+    ):
+        client.submit_order_action(
+            field,
+            12,
+            execution_capability=capability,
+        )
+
+    assert field.UserID == "another-account"
+    assert native.calls == []
+    assert client._order_action_history == {}
+    assert client._order_action_identities == {}
+    assert client._native_request_inflight_refs == 0
+    assert client.get_request_counts()["order_action"] == requests_before
+
+
+def test_direct_cancel_deadline_and_same_api_reconnect_are_rechecked_after_real_lock_wait(
+    monkeypatch,
+):
+    deadline = 11.0
+    clock = _FakeMonotonicClock(10.0)
+    monkeypatch.setattr(ctp_client_module.time, "monotonic", clock.monotonic)
+    client, native = _trading_ready_client(_SIMNOW_TD)
+    capability, _state = _arm(client, _SIMNOW_MD)
+    requests_before = client.get_request_counts()["order_action"]
+    lock = _ObservedRLock()
+    client._query_state_lock = lock
+    spi = _TraderSpi(client, native_api=native)
+    client._spi = spi
+    invoke_ready = threading.Event()
+    lock_held = threading.Event()
+    invoke_native_request = client._invoke_session_native_request
+
+    def wait_for_competing_lock_holder(api, method_name, *args, **kwargs):
+        if method_name == "ReqOrderAction":
+            invoke_ready.set()
+            if not lock_held.wait(timeout=5):
+                raise RuntimeError("SDK lock holder did not start")
+        return invoke_native_request(api, method_name, *args, **kwargs)
+
+    client._invoke_session_native_request = wait_for_competing_lock_holder
+
+    def reconnect_while_holding_sdk_lock():
+        if not invoke_ready.wait(timeout=5):
+            return
+        with lock:
+            lock_held.set()
+            if not lock.native_lock_waited.wait(timeout=5):
+                return
+            spi.OnFrontDisconnected(-1)
+            spi.OnFrontConnected()
+            clock.now = deadline + 0.25
+
+    waiter = threading.Thread(target=reconnect_while_holding_sdk_lock)
+    waiter.start()
+    try:
+        with pytest.raises(
+            CtpExecutionGateError,
+            match="ctp_execution_gate_direct_write_session_mismatch",
+        ):
+            client.submit_order_action(
+                _cancel_field(),
+                12,
+                execution_capability=capability,
+                deadline_monotonic=deadline,
+            )
+    finally:
+        waiter.join(timeout=5)
+
+    assert not waiter.is_alive()
+    assert lock.contended.is_set()
+    assert lock.native_lock_waited.is_set()
+    assert client._api is native
+    assert client._session_native_api is native
+    assert client._connection_generation == 8
+    assert client.is_trading_ready is False
+    assert len(native.authenticate_calls) == 1
+    assert native.calls == []
+    assert client._order_action_history == {}
+    assert client._order_action_identities == {}
+    assert client._native_request_inflight_refs == 0
+    assert client.get_request_counts()["order_action"] == requests_before
+
+
+def test_concurrent_direct_insert_same_key_cleans_only_its_own_predispatch_attempt():
+    client, native = _trading_ready_client(
+        _SIMNOW_TD,
+        native=_BlockingInsertNativeApi(),
+    )
+    capability, _state = _arm(client, _SIMNOW_MD)
+    requests_before = client.get_request_counts()["order_insert"]
+    invoke_barrier = threading.Barrier(2)
+    invoke_native_request = client._invoke_session_native_request
+    invoke_start_lock = threading.Lock()
+    worker_finished = threading.Event()
+    worker_finish_count = 0
+    results = []
+    errors = []
+
+    def wait_for_both_initial_admissions(api, method_name, *args, **kwargs):
+        if method_name == "ReqOrderInsert":
+            invoke_barrier.wait(timeout=5)
+        return invoke_native_request(api, method_name, *args, **kwargs)
+
+    client._invoke_session_native_request = wait_for_both_initial_admissions
+
+    def submit_same_key():
+        nonlocal worker_finish_count
+        try:
+            results.append(
+                client.submit_order_insert(
+                    _insert_field(),
+                    11,
+                    execution_capability=capability,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            with invoke_start_lock:
+                worker_finish_count += 1
+                if worker_finish_count == 1:
+                    worker_finished.set()
+
+    workers = [threading.Thread(target=submit_same_key) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    try:
+        assert native.insert_entered.wait(timeout=5)
+        assert worker_finished.wait(timeout=5)
+        assert len(native.calls) == 1
+        assert len(results) == 0
+        assert len(errors) == 1
+        assert isinstance(errors[0], CtpExecutionGateError)
+        assert errors[0].code == "ctp_execution_gate_order_insert_request_id_reused"
+        assert client.get_order_insert_evidence(
+            11, order_ref="000000000101"
+        ) is not None
+        assert client.get_request_counts()["order_insert"] == requests_before + 1
+    finally:
+        native.allow_insert.set()
+        for worker in workers:
+            worker.join(timeout=5)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert len(native.calls) == 1
+    assert results == [0]
+    assert len(errors) == 1
+    evidence = client.get_order_insert_evidence(11, order_ref="000000000101")
+    assert evidence is not None
+    assert evidence.reason == "awaiting_native_callback"
+    assert client._order_insert_identities[(11, "000000000101")].order_ref == "000000000101"
+    assert client._native_request_inflight_refs == 0
+    assert client.get_request_counts()["order_insert"] == requests_before + 1
 
 
 def test_official_simnow_pair_arms_without_md_front():
