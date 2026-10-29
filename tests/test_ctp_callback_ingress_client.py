@@ -1720,6 +1720,34 @@ def test_query_products_empty_filters_accept_a_complete_empty_terminal_result(mo
         client.stop()
 
 
+def test_query_products_empty_char_filter_uses_real_swig_field_and_fake_req(monkeypatch):
+    """Keep the SWIG char encoding local while exercising the fake native Req."""
+    client, api, _sink, _owner = _new_active_client(monkeypatch)
+    try:
+        api.query_callbacks["ReqQryProduct"] = lambda _field, request_id: api.spi.OnRspQryProduct(
+            None, _query_callback_info(), request_id, True
+        )
+
+        result = client.query_products_result(timeout=0.5)
+
+        request_calls = [call for call in api.calls if call[0] == "ReqQryProduct"]
+        assert len(request_calls) == 1
+        request_field = request_calls[0][1]
+        assert type(request_field) is client_module.CThostFtdcQryProductField
+        # CThostFtdcQryProductField.ProductClass is a CTP char field, so the
+        # actual SWIG setter represents an empty assignment with NUL.
+        assert request_field.ProductClass == "\x00"
+        assert result.complete
+        assert result.query_source.request_intent_filters == (
+            ("ExchangeID", ""),
+            ("ProductClass", ""),
+            ("ProductID", ""),
+        )
+        assert result.query_source.request_filters == result.query_source.request_intent_filters
+    finally:
+        client.stop()
+
+
 def test_product_instrument_and_depth_filters_read_back_from_real_request_structs(
     monkeypatch,
 ):

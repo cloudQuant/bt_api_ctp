@@ -2105,6 +2105,17 @@ def _read_native_query_filter_items(
             raise ValueError(f"native query filter getter unavailable:{name}") from exc
         if type(actual_value) is not str:
             raise TypeError(f"native query filter getter type invalid:{name}")
+        # In the pinned CTP headers ProductClass is a single char, unlike the
+        # string-array filters on this request. SWIG stores an assigned empty
+        # string as '\\0'; normalize only that exact encoding for this exact
+        # request field while retaining the original empty intent separately.
+        if (
+            type(field) is CThostFtdcQryProductField
+            and name == "ProductClass"
+            and intended_value == ""
+            and actual_value == "\x00"
+        ):
+            actual_value = ""
         if actual_value != intended_value:
             raise ValueError(f"native query filter readback mismatch:{name}")
         readback.append((name, actual_value))

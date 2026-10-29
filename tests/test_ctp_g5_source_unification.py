@@ -374,6 +374,31 @@ def test_unassigned_optional_query_fields_are_not_claimed_as_filter_readback(mon
     assert "ProductID" not in dict(source.request_filters)
 
 
+def test_empty_product_class_nul_normalization_is_exactly_scoped_to_product_request():
+    product_field = client_module.CThostFtdcQryProductField()
+    product_field.ProductClass = ""
+    assert product_field.ProductClass == "\x00"
+    assert client_module._read_native_query_filter_items(
+        product_field, (("ProductClass", ""),)
+    ) == (("ProductClass", ""),)
+
+    # A NUL from this same char field does not satisfy non-empty intent.
+    with pytest.raises(ValueError, match="readback mismatch:ProductClass"):
+        client_module._read_native_query_filter_items(
+            product_field, (("ProductClass", "1"),)
+        )
+
+    # ProductClass exists on another CTP request struct too, but the exception
+    # is deliberately scoped to CThostFtdcQryProductField only.
+    depth_field = client_module.CThostFtdcQryDepthMarketDataField()
+    depth_field.ProductClass = ""
+    assert depth_field.ProductClass == "\x00"
+    with pytest.raises(ValueError, match="readback mismatch:ProductClass"):
+        client_module._read_native_query_filter_items(
+            depth_field, (("ProductClass", ""),)
+        )
+
+
 def _option_cost_client(monkeypatch, *, behavior=None):
     monkeypatch.setattr(
         TraderClient,
