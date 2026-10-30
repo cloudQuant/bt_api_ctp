@@ -16,6 +16,10 @@ CTP exchange plugin for bt_api, supporting Chinese futures market trading.
 
 This package provides the **CTP (China Futures)** exchange plugin for the [bt_api](https://github.com/cloudQuant/bt_api_py) framework. It offers a unified interface for interacting with Chinese futures exchanges via the CTP protocol.
 
+### Provider and framework boundary
+
+This package implements the native CTP client, request feed, market/trade stream adapters, and typed provider data. Its `bt_api.plugins` entry point registers only `CTP___FUTURE` feeds, exchange data, balance handling, and stream handlers when `bt_api_base.PluginLoader` loads it; importing the package alone does not register it. `bt_api_py` provides the `BtApi` facade and event queue, while Backtrader supplies the strategy and engine layer. Managed live-order execution uses `ServiceExecutionSession`/service-v2 only when this provider is integrated with ServiceHost; provider APIs or SimNow support do not establish that integration or real-account acceptance. See [Trading System Architecture](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md).
+
 ### Supported Exchanges
 
 | Exchange | Code | Description |
@@ -186,6 +190,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 ### 概述
 
 本包为 [bt_api](https://github.com/cloudQuant/bt_api_py) 框架提供 **CTP（中国期货）** 交易所插件。通过 CTP 协议与中国期货交易所进行交互的统一接口。
+
+### Provider 与框架职责边界
+
+本包实现原生 CTP 客户端、请求 feed、行情/交易流适配及类型化 provider 数据。`bt_api.plugins` 入口由 `bt_api_base.PluginLoader` 加载时，仅注册 `CTP___FUTURE` 的 feed、交易所数据、余额处理器和流处理器；单独导入不会注册。`bt_api_py` 提供 `BtApi` 外观和事件队列，Backtrader 提供策略与引擎层。只有将该 provider 接入 ServiceHost 后，managed 实盘订单执行才由 `ServiceExecutionSession`/service-v2 管理；provider API 或 SimNow 支持本身不代表已完成该集成或通过真实账户验收。参见[交易系统架构](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md)。
 
 ### 支持的交易所
 
