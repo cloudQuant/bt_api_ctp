@@ -43,6 +43,7 @@ from bt_api_ctp.ctp_env_selector import (
     select_reachable_ctp_environment,
     verify_official_simnow_profile,
 )
+from bt_api_ctp.errors import CtpOrderSubmissionOutcomeUnknown
 from bt_api_ctp.exchange_data import CtpExchangeDataFuture
 from bt_api_ctp.feeds.base_stream import BaseDataStream, ConnectionState
 from bt_api_ctp.instrument import (
@@ -74,6 +75,23 @@ class CtpMarketStreamSubscriptionError(RuntimeError):
 
 def _is_exact_ctp_order_ref(value: Any) -> bool:
     return type(value) is str and len(value) == 12 and value.isascii() and value.isdecimal()
+
+
+def _safe_native_return_type_name(value: Any) -> str:
+    """Return a small diagnostic type name without trusting a custom metaclass."""
+    try:
+        name = type(value).__name__
+    except BaseException:
+        return "unavailable"
+    if (
+        type(name) is not str
+        or not name
+        or len(name) > 64
+        or not name.isascii()
+        or not all(character.isalnum() or character == "_" for character in name)
+    ):
+        return "unavailable"
+    return name
 
 
 _CTP_MANAGED_QUOTE_V2_RECEIPT_SEAL = object()
@@ -1260,6 +1278,10 @@ class CtpRequestData(Feed):
         field.LimitPrice = limit_price
         field.OrderRef = client_order_id
         next_req_id = trader._next_request_id()
+        if type(next_req_id) is not int or next_req_id <= 0:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_execution_gate_order_insert_request_id_invalid"
+            )
         field.RequestID = next_req_id
         submit = getattr(trader, "submit_order_insert", None)
         if callable(submit):
@@ -1279,6 +1301,12 @@ class CtpRequestData(Feed):
             # it would bypass the locked final gate in ``TraderClient`` after
             # the feed has validated its initial authorization.
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_native_contract_unavailable")
+        if type(ret) is not int:
+            raise CtpOrderSubmissionOutcomeUnknown(
+                client_order_id=client_order_id,
+                request_id=next_req_id,
+                native_return_type=_safe_native_return_type_name(ret),
+            )
         order_dict = _ctp_field_to_dict(field)
         order_dict["_ret"] = ret
         order_dict["FrontID"] = getattr(trader, "_front_id", 0)
@@ -1286,7 +1314,15 @@ class CtpRequestData(Feed):
         if ret != 0:
             return self._make_request_data([], "make_order", symbol, extra_data, status=False)
         return self._make_request_data(
-            [CtpOrderData(order_dict, symbol, self.asset_type, True)],
+            [
+                CtpOrderData._from_local_submit_return(
+                    order_dict,
+                    symbol,
+                    self.asset_type,
+                    True,
+                    return_code=ret,
+                )
+            ],
             "make_order",
             symbol,
             extra_data,

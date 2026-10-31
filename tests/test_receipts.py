@@ -342,7 +342,7 @@ def test_cancel_target_rejects_each_invariant(changes, message) -> None:
 
 @pytest.mark.unit
 def test_status_tables_are_the_single_owned_values() -> None:
-    assert status.TERMINAL_ORDER_STATUSES == frozenset({"0", "4", "5", "a"})
+    assert status.TERMINAL_ORDER_STATUSES == frozenset({"0", "4", "5"})
     assert status.COMMISSION_REQUEST_FILTER_FIELDS == {
         "instrument_id": "InstrumentID",
         "exchange_id": "ExchangeID",

@@ -36,7 +36,7 @@ def test_order_status_lets_submit_rejection_win():
     assert fields.normalize_order_status("1") == "partial"
     assert fields.normalize_order_status("0", "4") == "rejected"
     assert fields.normalize_order_status("0", "5") == "cancel_rejected"
-    assert fields.normalize_order_status(None, None, "submitted") == "submitted"
+    assert fields.normalize_order_status(None, None, "submitted") == "unknown"
 
 
 def test_safe_field_attr_handles_dicts_structs_and_failures():

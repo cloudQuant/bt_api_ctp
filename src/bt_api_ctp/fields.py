@@ -53,7 +53,7 @@ ORDER_STATUS_MAP = {
     "3": "accepted",
     "4": "canceled",
     "5": "canceled",
-    "a": "submitted",
+    "a": "unknown",
     "b": "submitted",
     "c": "submitted",
 }
@@ -286,10 +286,18 @@ def ctp_position_direction(value: Any, default: str = "long") -> str:
 def normalize_order_status(
     order_status: Any,
     submit_status: Any = None,
-    default: str = "submitted",
+    default: str = "unknown",
 ) -> str:
-    """Normalize CTP order status, letting explicit submit rejections win."""
-    status = ORDER_STATUS_MAP.get(ctp_code(order_status, "a"), default)
+    """Normalize a native CTP status without inferring missing status as submitted.
+
+    ``default`` remains in the signature for callers compiled against the
+    earlier helper contract. Missing, empty, ``OST_Unknown`` and unrecognized
+    native status codes always normalize to ``unknown``; callers cannot turn
+    absent provider evidence into a submitted or active order by overriding
+    the fallback. Explicit submit rejection codes still take precedence.
+    """
+    status_code = ctp_code(order_status, "")
+    status = ORDER_STATUS_MAP.get(status_code, "unknown")
     submit_override = ORDER_SUBMIT_STATUS_MAP.get(ctp_code(submit_status, ""))
     return submit_override or status
 

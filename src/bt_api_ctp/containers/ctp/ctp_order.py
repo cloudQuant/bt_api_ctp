@@ -18,7 +18,7 @@ CTP_ORDER_STATUS_MAP = {
     "3": OrderStatus.ACCEPTED,
     "4": OrderStatus.CANCELED,
     "5": OrderStatus.CANCELED,
-    "a": OrderStatus.SUBMITTED,
+    "a": OrderStatus.UNKNOWN,
     "b": OrderStatus.SUBMITTED,
     "c": OrderStatus.SUBMITTED,
 }
@@ -45,6 +45,7 @@ class CtpOrderData(OrderData):
         super().__init__(order_info, has_been_json_encoded)
         self.symbol_name = symbol_name
         self.asset_type = asset_type
+        self._local_submission_projection = None
         self.exchange_name = "CTP"
         self._initialized = False
         self._data_initialized = False
@@ -58,6 +59,7 @@ class CtpOrderData(OrderData):
         self.volume_traded = None
         self.volume_total = None
         self.order_status = None
+        self.order_status_source = None
         self.insert_time = None
         self.update_time = None
         self.status_msg = None
@@ -71,6 +73,10 @@ class CtpOrderData(OrderData):
         if self._data_initialized:
             return self
         info = self.order_info
+        self.order_status = OrderStatus.UNKNOWN
+        self.order_status_source = "provider_status_missing"
+        if self._local_submission_projection is not None and not isinstance(info, dict):
+            raise TypeError("local submission projection requires a field mapping")
         if isinstance(info, dict):
             self.instrument_id = from_dict_get_string(info, "InstrumentID")
             self.order_ref = from_dict_get_string(info, "OrderRef")
@@ -83,8 +89,21 @@ class CtpOrderData(OrderData):
             self.volume_total_original = ctp_int(info, "VolumeTotalOriginal", 0)
             self.volume_traded = ctp_int(info, "VolumeTraded", 0)
             self.volume_total = ctp_int(info, "VolumeTotal", 0)
-            status_key = ctp_dict_code(info, "OrderStatus", "a") or "a"
-            self.order_status = CTP_ORDER_STATUS_MAP.get(status_key, OrderStatus.SUBMITTED)
+            status_key = ctp_dict_code(info, "OrderStatus", "")
+            if self._local_submission_projection is not None:
+                if status_key:
+                    raise ValueError(
+                        "local submission projection cannot contain provider OrderStatus"
+                    )
+                if self._local_submission_projection == "zero":
+                    self.order_status = OrderStatus.SUBMITTED
+                    self.order_status_source = "local_submit_return_zero"
+                else:
+                    self.order_status = OrderStatus.UNKNOWN
+                    self.order_status_source = "local_submit_return_unrecognized"
+            else:
+                self.order_status = CTP_ORDER_STATUS_MAP.get(status_key, OrderStatus.UNKNOWN)
+                self.order_status_source = "provider" if status_key else "provider_status_missing"
             self.insert_time = from_dict_get_string(info, "InsertTime")
             self.update_time = from_dict_get_string(info, "UpdateTime")
             self.status_msg = from_dict_get_string(info, "StatusMsg")
@@ -98,6 +117,28 @@ class CtpOrderData(OrderData):
         self._data_initialized = True
         self._initialized = True
         return self
+
+    @classmethod
+    def _from_local_submit_return(
+        cls,
+        order_info: Any,
+        symbol_name: str | None = None,
+        asset_type: str = "FUTURE",
+        has_been_json_encoded: bool = False,
+        *,
+        return_code: Any,
+    ) -> CtpOrderData:
+        """Build a local SUBMITTED projection from the exact native zero return.
+
+        This internal projection records only the immediate local call result.
+        It is not a provider order callback, exchange acknowledgement or
+        execution proof, and must not synthesize ``OrderStatus='a'``.
+        """
+        if type(return_code) is not int or return_code != 0:
+            raise ValueError("local SUBMITTED projection requires an exact int zero return")
+        instance = cls(order_info, symbol_name, asset_type, has_been_json_encoded)
+        instance._local_submission_projection = "zero"
+        return instance
 
     def get_exchange_name(self) -> str:
         return self.exchange_name or ""
