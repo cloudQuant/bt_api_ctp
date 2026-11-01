@@ -69,6 +69,11 @@ def _ctp_cancel_metadata(result, request):
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
     quantity_unit = "contracts"
     trade_authority = True
+    event_id_fields = ("event_id", "trade_id", "fill_id", "order_id")
+    event_audit_fields = ("sequence", "sequence_id", "previous_sequence")
+    orderbook_sequence_fields = ("sequence", "sequence_id", "update_id")
+    orderbook_previous_fields = ("previous_sequence", "prev_sequence")
+    orderbook_delta_predecessor_fields = ()
 
     def order_average(self, row, average, *, pick, number):
         # CTP order reports contain limit price, not an execution VWAP.
