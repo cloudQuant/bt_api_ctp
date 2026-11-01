@@ -71,6 +71,17 @@ def _ctp_cancel_metadata(result, request):
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
     quantity_unit = "contracts"
     trade_authority = True
+    order_statuses = MappingProxyType({
+        "open": "accepted", "working": "accepted", "submitted": "submitted",
+        "accepted": "accepted", "pending": "submitted", "partial": "partial",
+        "partially_filled": "partial", "partial_filled": "partial", "filled": "completed",
+        "completed": "completed", "all_traded": "completed", "cancelled": "canceled",
+        "canceled": "canceled", "expired": "expired", "rejected": "rejected",
+        "unknown": "unknown", "local_pending": "submitted",
+    })
+    position_mode_boolean_field = None
+    position_mode_fields = ("position_mode",)
+    position_mode_aliases = MappingProxyType({})
     order_fields = MappingProxyType({
         "order_id": ("order_id", "external_order_id", "order_sys_id", "OrderSysID"),
         "client_id": ("client_order_id", "order_ref", "OrderRef"),
