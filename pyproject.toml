@@ -44,6 +44,9 @@ CTP___FUTURE = "bt_api_base.order_request_projection:legacy_order_request_projec
 [project.entry-points."bt_api.order_quantity_unit_validators"]
 CTP___FUTURE = "bt_api_ctp.order_quantity_units:validate_order_quantity_units"
 
+[project.entry-points."bt_api.legacy_quote_v2_projectors"]
+CTP___FUTURE = "bt_api_ctp.quote_v2_projection:build_quote_v2_projector"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
