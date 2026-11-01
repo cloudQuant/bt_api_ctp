@@ -108,3 +108,6 @@ CTP___FUTURE = "bt_api_base.fee_projection:legacy_fee_projection"
 
 [project.entry-points."bt_api.instrument_rules_projections"]
 CTP___FUTURE = "bt_api_ctp.instrument_rules_projection:project_instrument_rules"
+
+[project.entry-points."bt_api.order_side_projections"]
+CTP___FUTURE = "bt_api_base.order_side_projection:legacy_order_side_candidates"
