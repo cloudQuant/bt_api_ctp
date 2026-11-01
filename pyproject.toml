@@ -105,3 +105,6 @@ markers = [
 
 [project.entry-points."bt_api.fee_projections"]
 CTP___FUTURE = "bt_api_base.fee_projection:legacy_fee_projection"
+
+[project.entry-points."bt_api.instrument_rules_projections"]
+CTP___FUTURE = "bt_api_ctp.instrument_rules_projection:project_instrument_rules"
