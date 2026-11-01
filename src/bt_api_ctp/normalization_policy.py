@@ -71,6 +71,18 @@ def _ctp_cancel_metadata(result, request):
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
     quantity_unit = "contracts"
     trade_authority = True
+    position_fields = MappingProxyType({
+        "quantity": (
+            "quantity", "position_volume", "volume", "size", "Position", "trade_volume",
+        ),
+        "side": ("position_side", "direction", "position_direction", "side"),
+        "position_id": ("position_id",),
+        "price": ("average_price", "avg_price", "price"),
+        "today": ("today", "today_position", "today_volume", "TodayPosition"),
+        "yesterday": ("yesterday", "yesterday_position", "yd_position", "YdPosition"),
+        "multiplier": ("multiplier", "contract_size", "volume_multiple", "VolumeMultiple"),
+        "exchange_id": ("exchange_id", "ExchangeID"),
+    })
     balance_nested_fields = ("balances",)
     balance_fields = MappingProxyType({
         "currency": ("CurrencyID", "currency", "account_type", "symbol_name", "symbol"),
