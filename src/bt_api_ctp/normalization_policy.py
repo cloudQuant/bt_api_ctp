@@ -130,6 +130,14 @@ class CtpNormalizationPolicy(LegacyNormalizationPolicy):
         "margin_used": ("margin_used", "used_margin", "CurrMargin"),
         "account_id": ("account_id", "AccountID"),
     })
+    instrument_spec_fields = MappingProxyType({
+        "symbol": ("symbol", "symbol_name"),
+        "base_currency": ("base_currency",),
+        "quote_currency": ("quote_currency",),
+        "asset_type": ("asset_type",),
+        "contract_type": ("contract_type",),
+    })
+    instrument_spec_linear_type_field = None
     instrument_fields = MappingProxyType({
         "multiplier": ("multiplier", "contract_size", "VolumeMultiple"),
         "step": ("lot_size", "order_size_step", "volume_step"),
