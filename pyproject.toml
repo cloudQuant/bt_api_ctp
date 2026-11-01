@@ -50,6 +50,9 @@ CTP___FUTURE = "bt_api_ctp.quote_v2_projection:build_quote_v2_projector"
 [project.entry-points."bt_api.service_instrument_metadata_parsers"]
 CTP___FUTURE = "bt_api_ctp.service_instrument_metadata:build_service_instrument_metadata_parser"
 
+[project.entry-points."bt_api.service_observation_instrument_resolvers"]
+CTP___FUTURE = "bt_api_ctp.service_observation_instrument:resolve_service_observation_instrument"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
