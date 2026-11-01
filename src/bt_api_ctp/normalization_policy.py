@@ -71,6 +71,29 @@ def _ctp_cancel_metadata(result, request):
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
     quantity_unit = "contracts"
     trade_authority = True
+    order_fields = MappingProxyType({
+        "order_id": ("order_id", "external_order_id", "order_sys_id", "OrderSysID"),
+        "client_id": ("client_order_id", "order_ref", "OrderRef"),
+        "filled": ("filled", "filled_quantity", "executed_qty", "VolumeTraded"),
+        "average": ("avg_price", "average_price", "order_avg_price"),
+        "cum_quote": ("cum_quote",), "size": ("quantity", "size", "order_size", "VolumeTotalOriginal"),
+        "order_ref": ("order_ref", "OrderRef"), "exchange_id": ("exchange_id", "ExchangeID"),
+        "front_id": ("front_id", "FrontID"), "session_id": ("session_id", "SessionID"),
+        "account_id": ("account_id", "AccountID", "InvestorID"),
+        "trading_day": ("trading_day", "TradingDay"), "fee_currency": ("fee_currency",),
+        "commission_currency": ("commission_currency", "fee_currency"),
+    })
+    trade_fields = MappingProxyType({
+        "trade_id": ("trade_id", "fill_id", "deal_id", "id", "TradeID"),
+        "order_id": ("order_id", "external_order_id", "OrderSysID"),
+        "client_id": ("client_order_id", "OrderRef"),
+        "size": ("quantity", "size", "trade_volume", "volume", "Volume"),
+        "price": ("trade_price", "price", "Price"), "exchange_id": ("exchange_id", "ExchangeID"),
+        "account_id": ("account_id", "AccountID", "InvestorID"),
+        "trading_day": ("trading_day", "TradingDay"),
+        "fee_currency": ("fee_currency", "trade_fee_symbol"),
+    })
+    signed_fee_currency_field = None
     position_fields = MappingProxyType({
         "quantity": (
             "quantity", "position_volume", "volume", "size", "Position", "trade_volume",
