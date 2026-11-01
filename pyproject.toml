@@ -111,3 +111,6 @@ CTP___FUTURE = "bt_api_ctp.instrument_rules_projection:project_instrument_rules"
 
 [project.entry-points."bt_api.order_side_projections"]
 CTP___FUTURE = "bt_api_base.order_side_projection:legacy_order_side_candidates"
+
+[project.entry-points."bt_api.normalization_policies"]
+CTP___FUTURE = "bt_api_ctp.normalization_policy:normalization_policy"
