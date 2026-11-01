@@ -1,5 +1,7 @@
 """CTP native order and cancel normalization choices."""
 
+from types import MappingProxyType
+
 from bt_api_base.normalization_policy import LegacyNormalizationPolicy
 
 
@@ -69,6 +71,23 @@ def _ctp_cancel_metadata(result, request):
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
     quantity_unit = "contracts"
     trade_authority = True
+    instrument_fields = MappingProxyType({
+        "multiplier": ("multiplier", "contract_size", "VolumeMultiple"),
+        "step": ("lot_size", "order_size_step", "volume_step"),
+        "min_size": ("min_size", "volume_min", "MinLimitOrderVolume"),
+        "max_size": ("max_size", "volume_max", "MaxLimitOrderVolume"),
+        "tick_size": ("tick_size", "price_tick", "PriceTick"),
+        "settlement_currency": ("settlement_currency", "currency"),
+        "base_currency": ("base_currency",),
+        "margin_rate": ("margin_rate", "LongMarginRatio", "long_margin_rate"),
+        "commission_rate": ("commission_rate", "taker_commission_rate"),
+        "exchange_id": ("exchange_id", "ExchangeID"),
+    })
+    instrument_uses_filters = False
+    instrument_contract_value_field = None
+    instrument_contract_multiplier_field = None
+    instrument_linear_type_field = None
+    instrument_perpetual_type_field = None
     event_id_fields = ("event_id", "trade_id", "fill_id", "order_id")
     event_audit_fields = ("sequence", "sequence_id", "previous_sequence")
     orderbook_sequence_fields = ("sequence", "sequence_id", "update_id")
