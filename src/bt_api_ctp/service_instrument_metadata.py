@@ -297,6 +297,7 @@ def build_service_instrument_metadata_parser(*, error_type):
             raise ServiceAccountError("INVALID_INSTRUMENT_METADATA")
         return parsed
 
+    _parse_instrument_metadata_reply.metadata_type = ServiceAccountInstrumentMetadata
     return _parse_instrument_metadata_reply
 
 
