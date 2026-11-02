@@ -1,5 +1,33 @@
 # CTP (China Futures)
 
+Position-mode acknowledgement codes are provider declarations: the Base default is unspecified. Binance, CTP and non-swap OKX preserve the previous `200`; OKX swap preserves `0`, and ten historical policies retain `200`. These inherited values do not prove venue capability. Third-party Base subclasses no longer receive a default; dynamic policies, packaging and behavior remain unvalidated.
+
+CTP recovery row instrument/side/offset fields, active-order classification, order/intent matching and trade-key projection live in `bt_api_ctp.recovery_row_projection`; the SDK supplies its original value selector, quantity checks and instrument resolver, retaining proof, journal, session and authorization. The provider participates in field decisions; import timing and behavior remain unvalidated.
+
+CTP managed-runtime route and instrument-field validation lives in `bt_api_ctp.managed_runtime_route_validation`; the SDK keeps grant, session and lifecycle checks. This source move is unaccepted. `bt_api_ctp.preflight_settings` owns the automatic settlement-confirm setting check and explicit disablement; the SDK keeps route selection, call timing and error mapping. This source move is unaccepted.
+
+Execution-ledger identity format is declared per provider via `bt_api_base.execution_ledger_identity_policy`, not hard-coded venue names. The 13 built-in providers retain their prior format choices; this does not prove identity. Missing or undiscoverable declarations fail, including historical/custom providers, and successful selections are process-cached. Migration, packaging and behavior remain unaccepted. A separate provider `account_risk_source_policy` declares whether native account binding is still required for neutral risk reads. CTP remains unavailable; the other 12 retain the old branch, not proof of source. Undeclared providers fail and discovery/behavior are unaccepted.
+
+CTP managed Risk order payload construction and cancel-target matching live in `bt_api_ctp.risk_dispatch_binding`; Base declares the optional provider contract, SDK selects evidence and the Risk journal retains claims and fencing. Target orders with a schema now require a matching provider declaration: undeclared schemas fail, a breaking change. Journal compatibility and behavior remain unvalidated. The CTP provider also owns native request field comparison, dispatch/zero-fill projections and zero-fill evidence field matching; SDK retains session, exact type/source checks and journal lifecycle. The provider is trusted for field matching. Risk-order position-dimension source projection is selected by the provider policy, without an SDK venue-name branch. CTP declares the projection at `bt_api_ctp.risk_source_position_projection`; the other 12 built-ins retain the previous generic path. Missing declarations or required projectors fail closed, so third-party policies need updates. SDK retains source/session checks and error mapping; provider discovery and behavior are unvalidated.
+
+Order-status and trade-fee field candidates are selected by provider policy. Binance, OKX, CTP and the historical policy retain the prior aliases and order; a policy without declarations fails explicitly. Third-party policies, field coverage and behavior remain unvalidated. Placement position-mode fencing is also provider-declared: OKX/Binance retain the existing guard, other built-in routes retain the previous unguarded behavior, and undeclared routes reject placement. This breaking change does not prove venue capability.
+
+CTP managed order and cancel identity value types live in `bt_api_ctp.managed_request_identity`. SDK request models resolve them lazily when those fields are used, with lazy legacy SDK exports. Module identity, serialization, annotation resolution, source binding, optional packaging and behavior remain unaccepted; these values grant no execution authority.
+
+The working-tree normalizer explicitly declares CTP tick trading/action day aliases. The working-tree normalizer declares its native order identity aliases, order provenance fields and scoped v5/v6 source schemas; field coverage and behavior remain unvalidated.
+
+The working-tree `simnow_execution_projection` owns native order, cancel and query value types, mappings and native query collection; the SDK supplies its unified request constructor and retains session composition. Cross-package imports and behavior remain unvalidated.
+
+The working-tree client delegates SDK approval, binding comparisons and selected-front scope to the SDK while retaining native session checks and lock ownership. The remaining SDK dependency and retired runtime provenance are unresolved; this source change is not behavior-accepted.
+
+The working-tree managed order-query field and open/terminal row projections are CTP-owned; the SDK still holds the source fence and evidence issuance. The provider is a dependency for target field-consistency validation, which has not been behavior-validated.
+
+The working-tree terminal-order query value contracts are provider-owned; the SDK reader retains source-bound issuance and readback. The optional managed Execution dependency, class origins, and behavior remain unvalidated.
+
+Managed CTP native order identifier encoding now belongs to `bt_api_ctp.managed_order_identifier`; it requires the optional managed Execution dependency and does not establish order authority. Its SDK integration remains unvalidated.
+
+The working-tree Trader connection configuration type resides in the CTP provider. The SDK CTP managed-runtime module imports the same type; the changed module path and distribution behavior remain unvalidated.
+
 CTP exchange plugin for bt_api, supporting Chinese futures market trading.
 
 [![PyPI Version](https://img.shields.io/pypi/v/bt_api_ctp.svg)](https://pypi.org/project/bt_api_ctp/)
@@ -18,7 +46,37 @@ This package provides the **CTP (China Futures)** exchange plugin for the [bt_ap
 
 ### Provider and framework boundary
 
+The working-tree `execution_instrument` module owns CTP execution and native-wire instrument normalization. The SDK retains its proof and authorization checks and loads the provider parser lazily; the client uses the same parser. The shared parser changes a trust dependency and has not passed behavior or distribution acceptance.
+
 This package implements the native CTP client, request feed, market/trade stream adapters, and typed provider data. Its `bt_api.plugins` entry point registers only `CTP___FUTURE` feeds, exchange data, balance handling, and stream handlers when `bt_api_base.PluginLoader` loads it; importing the package alone does not register it. `bt_api_py` provides the `BtApi` facade and event queue, while Backtrader supplies the strategy and engine layer. Managed live-order execution uses `ServiceExecutionSession`/service-v2 only when this provider is integrated with ServiceHost; provider APIs or SimNow support do not establish that integration or real-account acceptance. See [Trading System Architecture](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md).
+
+The working-tree CTP request feed also exposes verified stream configuration through a provider-owned hook. Native quote V2 schema declaration, receipt matching and timestamp projection belong to the provider; the SDK selects the route policy and retains ingress binding and its attestation issuer. The SDK integration is source work in progress and is not runtime or account acceptance.
+
+CTP native query-method selection and public session-field projection reside in `bt_api_ctp.query_result_evidence`; the SDK retains route and transport guards. This source migration has not been behavior-validated.
+
+CTP recovery-row account/day field selection and the existing active-order status projection are provider-owned. The status interpretation and SDK integration have not been behavior-validated.
+
+`trade_stream_readiness` selects the CTP trade stream and compares its Trader/feed native session facts. The SDK keeps subscription state and approval authority; source and runtime behavior remain unvalidated.
+
+`managed_dispatch_contracts` holds CTP managed request/binding and native sender/result contracts. `managed_dispatch_worker_binding` owns request staging, OrderRef and binding checks as well as the SDK owner’s CTP queue receipt, request/target matching and dispatch receipt construction. SDK retains owner thread, session and authorization; provider field comparisons are trust dependencies and remain unvalidated. The durable claim/UNKNOWN/completion worker remains Execution-owned and composes its mixin. This source change has not passed import, distribution or behavior acceptance.
+
+The optional managed integration also owns the CTP callback session, native-source bridge and callback-ledger adapter. Execution still owns durable storage, lease and event types. These source moves have not passed import, distribution or behavior acceptance.
+
+`callback_ingress_projection` owns CTP ingress snapshot schema/digest checks and native field reads; Execution supplies its digest-shape validator and error type and retains owner, transaction and persistent state. The provider participates in source validation; behavior remains unaccepted. `execution_callback_mapping` owns CTP native callback field parsing and maps into Execution-owned typed correlation/events. Its optional `managed_execution` extra selects Execution; the maps and installation have not been behavior-validated.
+
+The CTP provider constructs native submit and cancel fields from already claimed payloads in `native_order_fields`; the SDK owner keeps session binding and dispatch authorization. This source migration is not native or behavior acceptance.
+
+The working-tree CTP risk-dispatch evidence entry point declares the existing persisted fields and schema for the exact `ctp` Risk provider. The SDK journal still checks claim, chain and fence; the entry point and behavior have not been validated.
+
+CTP dispatch binding and terminal proof/ack schemas, claim-field matching, zero-fill/terminal evidence and order/fill observation validation reside in `bt_api_ctp.risk_dispatch_binding`; the SDK retains and supplies the digest validator, journal and risk types, risk claim and writer fence. This source migration is not behavior or distribution acceptance.
+
+CTP recovery action and remaining-allowance field matching reside in `bt_api_ctp.recovery_plan_validation`; the SDK retains session, approval and authorization lifecycles. These comparisons do not grant authorization, and the source migration has not been behavior-validated.
+
+CTP query terminal-packet validation and native account-row projection are provider-owned; the SDK retains the session authorization guards. The source migration has not been behavior-validated.
+
+The working-tree active-front credential binding checks for native CTP clients and authenticated market identity reside in `bt_api_ctp.credential_binding_fronts`; the SDK supplies its own live state and error boundary. This migration is not runtime or account acceptance.
+
+The working-tree isolated SimNow trader probe resides in `bt_api_ctp.simnow_probe` and is available through the lazy `bt_api_py.ctp_probe` entry. Its moved subprocess and installation behavior have not been validated.
 
 ### Supported Exchanges
 

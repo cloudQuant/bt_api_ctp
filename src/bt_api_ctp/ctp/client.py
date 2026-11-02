@@ -6,7 +6,7 @@
 用法 / Usage:
 
     # 行情客户端
-    from bt_api_py.ctp.client import MdClient
+    from bt_api_ctp.ctp.client import MdClient
 
     def on_tick(data):
         print(data.InstrumentID, data.LastPrice)
@@ -17,7 +17,7 @@
     client.start()  # 阻塞
 
     # 交易客户端
-    from bt_api_py.ctp.client import TraderClient
+    from bt_api_ctp.ctp.client import TraderClient
 
     client = TraderClient("tcp://182.254.243.31:30001", "9999", "user", "pass",
                           app_id="simnow_client_test", auth_code="0000000000000000")
@@ -51,9 +51,14 @@ from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 
+from bt_api_ctp.execution_instrument import (
+    canonical_ctp_bundle_wire_instrument as _canonical_ctp_bundle_wire_instrument,
+    canonical_ctp_bundle_instrument,
+    canonical_ctp_instrument,
+)
 from bt_api_ctp.ctp_env_selector import (
     is_official_simnow_td_front,
     official_simnow_profile_for_td_front,
@@ -86,13 +91,6 @@ from bt_api_ctp.query import (
     _query_records_digest,
     _QuerySessionScope,
 )
-
-if TYPE_CHECKING:
-    from bt_api_py._ctp_credential_binding import CtpCredentialBindingVerifier
-    from bt_api_py._ctp_execution_authorization import (
-        CtpExecutionApproval,
-        CtpExecutionApprovalContext,
-    )
 
 from . import _ctp_base
 from ._ctp_base import (
@@ -854,10 +852,6 @@ _CTP_EXECUTION_GATE_HASH_FIELDS = (
     "source_hashes_sha256",
     "dependency_hashes_sha256",
 )
-_CTP_EXCHANGES = {"CFFEX", "CZCE", "DCE", "GFEX", "INE", "SHFE"}
-_CTP_EXCHANGE_ALIASES = {"ZCE": "CZCE"}
-_CTP_INSTRUMENT_RE = re.compile(r"^[A-Z]{1,3}[0-9]{3,4}$")
-_CTP_BUNDLE_INSTRUMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$")
 _CTP_GATE_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _CTP_MANAGED_RUNTIME_ORDER_ID_RE = re.compile(r"^bt-managed-v1:[0-9a-f]{64}$")
 _CTP_MANAGED_INTENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -902,9 +896,9 @@ class CtpRuntimeSimNowCredentialBinding:
     """
 
     owner: object = dataclass_field(repr=False, compare=False)
-    approval_context: CtpExecutionApprovalContext = dataclass_field(repr=False, compare=False)
-    approval: CtpExecutionApproval = dataclass_field(repr=False, compare=False)
-    credential_binding_verifier: CtpCredentialBindingVerifier = dataclass_field(
+    approval_context: object = dataclass_field(repr=False, compare=False)
+    approval: object = dataclass_field(repr=False, compare=False)
+    credential_binding_verifier: object = dataclass_field(
         repr=False, compare=False
     )
     td_front: str = dataclass_field(repr=False)
@@ -1412,102 +1406,6 @@ class _ManagedTraderApiView:
 
             return invoke
         return value
-
-
-def _canonical_ctp_exchange(value: Any) -> str:
-    exchange = str(value or "").strip().upper()
-    exchange = _CTP_EXCHANGE_ALIASES.get(exchange, exchange)
-    return exchange if exchange in _CTP_EXCHANGES else ""
-
-
-def canonical_ctp_instrument(value: Any, exchange_id: Any = None) -> str:
-    """Return the execution-gate contract identity as ``EXCHANGE.INSTRUMENT``."""
-
-    text = str(value or "").strip().upper()
-    supplied_exchange = _canonical_ctp_exchange(exchange_id)
-    if not text or (exchange_id not in (None, "") and not supplied_exchange):
-        return ""
-    parts = text.split(".")
-    if len(parts) == 1:
-        exchange = supplied_exchange
-        instrument = parts[0]
-    elif len(parts) == 2:
-        first_exchange = _canonical_ctp_exchange(parts[0])
-        last_exchange = _canonical_ctp_exchange(parts[1])
-        if bool(first_exchange) == bool(last_exchange):
-            return ""
-        exchange = first_exchange or last_exchange
-        instrument = parts[1] if first_exchange else parts[0]
-        if supplied_exchange and supplied_exchange != exchange:
-            return ""
-    else:
-        return ""
-    if not exchange or not _CTP_INSTRUMENT_RE.fullmatch(instrument):
-        return ""
-    letters = instrument.rstrip("0123456789")
-    digits = instrument[len(letters) :]
-    if exchange == "CZCE" and len(digits) == 4:
-        digits = digits[-3:]
-    return f"{exchange}.{letters}{digits}"
-
-
-def canonical_ctp_bundle_instrument(value: Any, exchange_id: Any = None) -> str:
-    """Return one exact raw native CTP contract identity for a V2 bundle.
-
-    DCE option identifiers can contain hyphens and lowercase product codes.
-    V2 deliberately preserves that native spelling and does not apply V1's
-    legacy CZCE alias normalization before a submit/cancel reaches CTP.
-    """
-    text = str(value or "").strip()
-    supplied_exchange = _canonical_ctp_exchange(exchange_id)
-    if not text or (exchange_id not in (None, "") and not supplied_exchange):
-        return ""
-    parts = text.split(".")
-    if len(parts) == 1:
-        exchange = supplied_exchange
-        instrument = parts[0]
-    elif len(parts) == 2:
-        first_exchange = _canonical_ctp_exchange(parts[0])
-        last_exchange = _canonical_ctp_exchange(parts[1])
-        if bool(first_exchange) == bool(last_exchange):
-            return ""
-        exchange = first_exchange or last_exchange
-        instrument = parts[1] if first_exchange else parts[0]
-        if supplied_exchange and supplied_exchange != exchange:
-            return ""
-    else:
-        return ""
-    if (
-        not exchange
-        or len(instrument) > 80
-        or not _CTP_BUNDLE_INSTRUMENT_RE.fullmatch(instrument)
-        or not any(character.isdigit() for character in instrument)
-    ):
-        return ""
-    return f"{exchange}.{instrument}"
-
-
-def _canonical_ctp_bundle_wire_instrument(value: Any, exchange_id: Any = None) -> str:
-    """Return a V2 identity only when native CTP fields can stay verbatim.
-
-    The V2 proof and recovery readers may canonicalize qualified forms such as
-    ``DCE.m2701-C-3400``.  At the final native submit/cancel boundary the
-    request fields are serialized unchanged, so only an exact bare
-    ``InstrumentID`` paired with the canonical ``ExchangeID`` is safe.
-    """
-    if (
-        not isinstance(value, str)
-        or value != value.strip()
-        or "." in value
-        or not isinstance(exchange_id, str)
-        or exchange_id != exchange_id.strip()
-    ):
-        return ""
-    canonical = canonical_ctp_bundle_instrument(value, exchange_id)
-    if not canonical:
-        return ""
-    exchange, instrument = canonical.split(".", 1)
-    return canonical if instrument == value and exchange == exchange_id else ""
 
 
 def _is_execution_gate_bundle(proof: Any) -> bool:
@@ -7146,14 +7044,9 @@ class TraderClient:
         """Refresh the SDK-sealed approval context and bind it to this client."""
 
         try:
-            from bt_api_py import CtpExecutionApprovalContext
-            from bt_api_py._ctp_credential_binding import _is_verifier, _new_scope
-            from bt_api_py._ctp_execution_authorization import (
-                _CAPABILITY_SEAL,
-                SIMNOW_APPROVAL_SCHEMA_VERSION,
-                SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
-                SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
-                _refresh_runtime_context,
+            from bt_api_py.ctp_gate_approval_validation import (
+                validate_ctp_gate_approval,
+                validate_ctp_gate_selected_front,
             )
 
             if (
@@ -7174,96 +7067,13 @@ class TraderClient:
                     self.ctp_env_profile is not None
                     and binding.environment_profile != self.ctp_env_profile
                 )
-                or _is_verifier(binding.credential_binding_verifier, owner=binding.owner)
-                is not True
-                or type(binding.approval_context) is not CtpExecutionApprovalContext
-                or getattr(binding.approval_context, "_owner", None) is not binding.owner
             ):
                 raise ValueError("binding identity rejected")
-            approval = binding.approval
-            if (
-                type(approval).__module__ != "bt_api_py._ctp_execution_authorization"
-                or type(approval).__name__ != "CtpExecutionApproval"
-                or getattr(approval, "_seal", None) is not _CAPABILITY_SEAL
-                or getattr(approval, "schema_version", None)
-                not in {
-                    SIMNOW_APPROVAL_SCHEMA_VERSION,
-                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
-                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
-                }
-            ):
-                raise ValueError("approval type rejected")
-
-            context_refresh = getattr(binding.approval_context, "_refresh", None)
-            code = getattr(context_refresh, "__code__", None)
-            closure = getattr(context_refresh, "__closure__", None) or ()
-            closure_values = dict(zip(getattr(code, "co_freevars", ()), closure))
-            captured = {
-                name: getattr(cell, "cell_contents", None)
-                for name, cell in closure_values.items()
-            }
-            if (
-                captured.get("credential_binding_verifier")
-                is not binding.credential_binding_verifier
-                or captured.get("self") is not binding.owner
-            ):
-                raise ValueError("approval verifier owner mismatch")
-            refreshed = _refresh_runtime_context(binding.approval_context, binding.owner)
-            current = refreshed.as_dict()
-            payload = approval.payload
-            if not isinstance(payload, Mapping):
-                raise ValueError("approval payload rejected")
-
-            # This verifies the current key/config/front HMAC through the
-            # context's owner-bound refresh closure, then pins its result to
-            # the already signature-verified approval. No HMAC key or
-            # credential value crosses the SDK boundary.
-            binding_fields = (
-                "credential_binding_key_id",
-                "credential_binding_hmac_sha256",
+            current, payload, captured, binding_fields = validate_ctp_gate_approval(
+                binding,
+                now_utc=lambda: datetime.now(timezone.utc),
+                parse_utc_timestamp=_parse_utc_timestamp,
             )
-            if any(
-                not isinstance(current.get(name), str)
-                or not current.get(name)
-                or current.get(name) != payload.get(name)
-                for name in binding_fields
-            ):
-                raise ValueError("credential binding changed")
-
-            context_fields = (
-                "account_fingerprint",
-                "trading_day",
-                "connection_generation",
-                "environment_profile",
-                "strategy_identity_sha256",
-                "execution_cycle_id",
-                "configuration_sha256",
-                "backtrader_sha256",
-                "bt_api_py_sha256",
-                "bt_api_ctp_sha256",
-                "bt_api_base_sha256",
-                "native_sha256",
-                "dependency_hashes_sha256",
-                "preflight_sha256",
-                "evidence_sha256",
-            )
-            if any(current.get(name) != payload.get(name) for name in context_fields):
-                raise ValueError("approval scope changed")
-
-            # The signature/revocation list were checked when the approval
-            # was installed. This client has no fresh deployment trust root,
-            # but it still rejects expired approval and revocation windows.
-            now = datetime.now(timezone.utc)
-            revocation_snapshot = getattr(approval, "revocation_snapshot", None)
-            if (
-                now < _parse_utc_timestamp(payload.get("not_before"))
-                or now >= _parse_utc_timestamp(payload.get("expires_at"))
-                or not isinstance(revocation_snapshot, Mapping)
-                or revocation_snapshot.get("version")
-                != payload.get("revocation_snapshot_version")
-                or now >= _parse_utc_timestamp(revocation_snapshot.get("expires_at"))
-            ):
-                raise ValueError("approval or revocation snapshot expired")
 
             expected_account = f"acct_{self._account_fingerprint}"
             expected_account_sha256 = hashlib.sha256(
@@ -7355,50 +7165,14 @@ class TraderClient:
             ):
                 raise ValueError("runtime-selected front pair mismatch")
 
-            front_binding_scope = _new_scope(
-                {
-                    "account_fingerprint": current["account_fingerprint"],
-                    "account_fingerprint_sha256": expected_account_sha256,
-                    "trading_day": current["trading_day"],
-                    "connection_generation": current["connection_generation"],
-                    "environment_profile": current["environment_profile"],
-                    "td_front": binding.td_front,
-                    "md_front": binding.md_front,
-                    "td_front_sha256": hashlib.sha256(
-                        binding.td_front.encode("utf-8", "strict")
-                    ).hexdigest(),
-                    "md_front_sha256": hashlib.sha256(
-                        binding.md_front.encode("utf-8", "strict")
-                    ).hexdigest(),
-                    "backtrader_sha256": payload["backtrader_sha256"],
-                    "backtrader_runtime_sha256": (
-                        binding.credential_binding_verifier.package_sha256
-                    ),
-                    "bt_api_py_sha256": payload["bt_api_py_sha256"],
-                    "bt_api_ctp_sha256": payload["bt_api_ctp_sha256"],
-                    "bt_api_base_sha256": payload["bt_api_base_sha256"],
-                    "native_sha256": payload["native_sha256"],
-                    "dependency_hashes_sha256": payload["dependency_hashes_sha256"],
-                    "configuration_sha256": payload["configuration_sha256"],
-                    "strategy_identity_sha256": payload["strategy_identity_sha256"],
-                    "preflight_sha256": payload["preflight_sha256"],
-                    "evidence_sha256": payload["evidence_sha256"],
-                    "md_connection_generation": front_scope[
-                        "md_connection_generation"
-                    ],
-                    "md_stream_generation": front_scope["md_stream_generation"],
-                }
+            validate_ctp_gate_selected_front(
+                binding,
+                current=current,
+                payload=payload,
+                expected_account_sha256=expected_account_sha256,
+                front_scope=front_scope,
+                binding_fields=binding_fields,
             )
-            selected_pair_binding = binding.credential_binding_verifier.refresh(
-                front_binding_scope,
-                owner=binding.owner,
-                operation="configure_runtime_simnow_credential_binding",
-            )
-            if any(
-                selected_pair_binding.get(name) != payload.get(name)
-                for name in binding_fields
-            ):
-                raise ValueError("selected front pair credential binding mismatch")
         except CtpExecutionGateError:
             raise
         except Exception as exc:
@@ -7461,56 +7235,17 @@ class TraderClient:
             ):
                 raise ValueError("managed CTP identity invalid")
             self._validate_runtime_simnow_credential_binding_locked(binding)
-            payload = binding.approval.payload
-            if runtime_action_id is None:
-                from bt_api_py._ctp_execution_authorization import (
-                    APPROVAL_PURPOSE,
-                    SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION,
-                )
+            from bt_api_py.ctp_gate_approval_validation import validate_ctp_gate_write_scope
 
-                instrument = {"instrument_id": instrument_id, "exchange_id": exchange_id}
-                authorized = payload.get("authorized_instruments")
-                if (
-                    payload.get("purpose") != APPROVAL_PURPOSE
-                    or payload.get("schema_version")
-                    != SIMNOW_ENTRY_APPROVAL_SCHEMA_VERSION
-                    or instrument not in authorized
-                    or payload.get("primary_instrument") != instrument
-                    or managed_cancel_intent_id is not None
-                ):
-                    raise ValueError("entry approval scope mismatch")
-            else:
-                from bt_api_py._ctp_execution_authorization import (
-                    RECOVERY_APPROVAL_PURPOSE,
-                    SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION,
-                )
-
-                now = datetime.now(timezone.utc)
-                actions = payload.get("recovery_actions")
-                matching = [
-                    action
-                    for action in actions or ()
-                    if isinstance(action, Mapping)
-                    and action.get("action_id") == managed_cancel_intent_id
-                ]
-                if (
-                    payload.get("purpose") != RECOVERY_APPROVAL_PURPOSE
-                    or payload.get("schema_version")
-                    != SIMNOW_RECOVERY_APPROVAL_SCHEMA_VERSION
-                    or len(matching) != 1
-                    or matching[0].get("action_kind") != "cancel"
-                    or matching[0].get("instrument_id") != instrument_id
-                    or matching[0].get("exchange_id") != exchange_id
-                    or matching[0].get("account_fingerprint")
-                    != payload.get("account_fingerprint")
-                    or matching[0].get("trading_day") != payload.get("trading_day")
-                    or matching[0].get("connection_generation")
-                    != payload.get("connection_generation")
-                    or matching[0].get("environment_profile")
-                    != payload.get("environment_profile")
-                    or now >= _parse_utc_timestamp(matching[0].get("expires_at"))
-                ):
-                    raise ValueError("recovery approval scope mismatch")
+            validate_ctp_gate_write_scope(
+                binding,
+                instrument_id=instrument_id,
+                exchange_id=exchange_id,
+                runtime_action_id=runtime_action_id,
+                managed_cancel_intent_id=managed_cancel_intent_id,
+                now_utc=lambda: datetime.now(timezone.utc),
+                parse_utc_timestamp=_parse_utc_timestamp,
+            )
         except CtpExecutionGateError:
             self._revoke_execution_gate_locked("ctp_simnow_credential_binding_rejected")
             raise
@@ -10584,7 +10319,12 @@ class TraderClient:
             accumulator = self._query_history.get(int(request_id))
             return accumulator.result() if accumulator is not None else None
 
-    def query_account_result(self, timeout=5) -> QueryResult[Any]:
+    def query_account_result(
+        self,
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> QueryResult[Any]:
         field = CThostFtdcQryTradingAccountField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
@@ -10614,13 +10354,19 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_account(self, timeout=5):
         """Compatibility view; incomplete queries return ``None``."""
         return self.query_account_result(timeout=timeout).first
 
-    def query_positions_result(self, timeout=5) -> QueryResult[Any]:
+    def query_positions_result(
+        self,
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> QueryResult[Any]:
         field = CThostFtdcQryInvestorPositionField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
@@ -10650,6 +10396,7 @@ class TraderClient:
             timeout,
             request_filter_field=field,
             request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_positions(self, timeout=5):
@@ -10903,7 +10650,13 @@ class TraderClient:
         ).first
 
     def query_instrument_margin_rate_result(
-        self, instrument_id, exchange_id="", hedge_flag=_QUERY_FILTER_UNSET, timeout=5
+        self,
+        instrument_id,
+        exchange_id="",
+        hedge_flag=_QUERY_FILTER_UNSET,
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         hedge_flag_explicit = hedge_flag is not _QUERY_FILTER_UNSET
         if not hedge_flag_explicit:
@@ -10942,6 +10695,7 @@ class TraderClient:
             request_filter_field=field,
             request_intent_filters=intent_filters,
             explicit_request_filters=("HedgeFlag",) if hedge_flag_explicit else (),
+            deadline_monotonic=deadline_monotonic,
         )
 
     def query_instrument_margin_rate(

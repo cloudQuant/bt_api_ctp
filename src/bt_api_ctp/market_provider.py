@@ -17,7 +17,6 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from datetime import datetime, timezone
 from typing import Callable
 
 from bt_api_base.market_protocol import (
@@ -26,7 +25,6 @@ from bt_api_base.market_protocol import (
     MarketSubscriptionKey,
 )
 
-from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
 from bt_api_ctp.ctp.client import CtpNativeStopReceipt
 from bt_api_ctp.feeds.live_ctp_feed import (
     ConnectionState,
@@ -35,6 +33,7 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpQuoteClockSourceScope,
     _get_ctp_managed_quote_v2_receipt,
 )
+from bt_api_ctp.market_tick_projection import project_ctp_market_tick
 
 DEFAULT_CTP_QUOTE_QUEUE_CAPACITY = 1_024
 MAX_CTP_QUOTE_QUEUE_CAPACITY = 65_536
@@ -213,7 +212,7 @@ class CtpQuoteV2MarketProvider:
     disconnected ``CtpMarketStream`` for the exact key and queue without
     starting it or pre-registering topics. Credentials, fronts, and any
     provider-specific diagnostic metadata remain inside that closure. The
-    provider registers the sole ``ctp.quote.v2`` tick topic itself, then
+    provider registers the sole native tick topic itself, then
     waits for the existing native login callback to issue its opaque source
     scope before returning the acquired handle.
 
@@ -1170,7 +1169,7 @@ class CtpQuoteV2MarketProvider:
             key.source_ref != self._source_ref
             or key.entitlement_ref != self._entitlement_ref
             or instrument.provider != "ctp"
-            or key.channel != "ctp.quote.v2"
+            or key.channel != "tick"
             or key.depth is not None
             or key.timeframe is not None
             or instrument.instrument_id != instrument.native_symbol
@@ -1286,63 +1285,9 @@ class CtpQuoteV2MarketProvider:
 
 
 def _project_native_tick(item: object, handle: CtpQuoteV2MarketHandle) -> MarketProviderEvent:
-    if type(item) is not CtpTickerData:
-        raise ValueError("invalid ticker type")
     receipt = _get_ctp_managed_quote_v2_receipt(item, handle.stream)
-    if type(receipt) is not dict:
-        raise ValueError("missing native callback receipt")
-    data = item.get_all_data()
-    key = handle.key
-    instrument = key.instrument
-    if (
-        type(data) is not dict
-        or data.get("schema_version") != "ctp.quote.v2"
-        or data.get("exchange_name") != "CTP"
-        or data.get("exchange_id") != instrument.venue
-        or data.get("asset_type") != instrument.product_type
-        or data.get("instrument_id") != instrument.instrument_id
-        or data.get("symbol") != instrument.native_symbol
-        or receipt.get("symbol") != instrument.native_symbol
-        or receipt.get("source") != "ctp.native.md"
-        or receipt.get("source") != handle.source_scope.source
-        or receipt.get("connection_generation") != handle.source_scope.connection_generation
-        or receipt.get("clock_domain_id") != handle.source_scope.clock_domain_id
-        or receipt.get("clock_source_session_id") != handle.source_scope.clock_source_session_id
-        or receipt.get("clock_source") != handle.source_scope.clock_source
-        or receipt.get("connection_generation") != data.get("connection_generation")
-        or receipt.get("subscription_epoch") != data.get("subscription_epoch")
-        or receipt.get("ingest_seq") != data.get("ingest_seq")
-        or receipt.get("clock_domain_id") != data.get("clock_domain_id")
-        or receipt.get("source_clock_quality") != "unknown"
-        or receipt.get("receive_clock_quality") != "unknown"
-        or receipt.get("source_clock_error_ms") is not None
-        or receipt.get("receive_clock_error_ms") is not None
-        or receipt.get("freshness_verified") is not False
-        or receipt.get("execution_qualified") is not False
-    ):
-        raise ValueError("ticker identity or native receipt mismatch")
-
-    observed_at_utc = _datetime_utc_text(data.get("recv_time_utc"))
-    projected = dict(data)
-    projected["event_time_utc"] = _datetime_utc_text(data.get("event_time_utc"))
-    projected["recv_time_utc"] = observed_at_utc
-    for field in (
-        "source",
-        "rules_hash",
-        "clock_domain_id",
-        "connection_generation",
-        "subscription_epoch",
-        "ingest_seq",
-        "source_clock_quality",
-        "receive_clock_quality",
-        "source_clock_error_ms",
-        "receive_clock_error_ms",
-        "freshness_verified",
-    ):
-        projected[field] = receipt[field]
-    projected["clock_source_session_id"] = receipt["clock_source_session_id"]
-    projected["clock_source"] = receipt["clock_source"]
-    projected["execution_qualified"] = False
+    payload = project_ctp_market_tick(item, handle.key, handle.source_scope, receipt)
+    projected = payload.to_dict()
     encoded = json.dumps(
         projected,
         ensure_ascii=False,
@@ -1354,7 +1299,7 @@ def _project_native_tick(item: object, handle: CtpQuoteV2MarketHandle) -> Market
         raise ValueError("ticker event too large")
     return MarketProviderEvent(
         generation=handle.generation,
-        observed_at_utc=observed_at_utc,
+        observed_at_utc=payload.received_at_utc,
         data=projected,
     )
 
@@ -1367,10 +1312,6 @@ def _quote_topic(key: MarketSubscriptionKey) -> dict[str, str]:
     }
 
 
-def _datetime_utc_text(value: object) -> str:
-    if type(value) is not datetime or value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("invalid CTP timestamp")
-    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _valid_ref(value: object) -> bool:

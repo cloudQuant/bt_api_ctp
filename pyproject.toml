@@ -28,12 +28,52 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+managed_execution = ["bt_api_execution>=0.2.0"]
 # 迭代06 数据清洗：SFTP 拉取后端（Windows 分片机）需要 paramiko。
 # rsync / local 后端不需要额外依赖。
 cleaner = ["paramiko>=3.0"]
 
 [project.entry-points."bt_api.plugins"]
 ctp = "bt_api_ctp.plugin:register_plugin"
+
+[project.entry-points."bt_api.query_providers"]
+CTP___FUTURE = "bt_api_ctp.query_registration:register_ctp_query_provider"
+
+[project.entry-points."bt_api.account_session_providers"]
+CTP___FUTURE = "bt_api_ctp.store_account_session:register_ctp_account_session_provider"
+
+[project.entry-points."bt_api.market_session_providers"]
+CTP___FUTURE = "bt_api_ctp.market_session_registration:register_ctp_market_session_provider"
+
+[project.entry-points."bt_api.market_tick_providers"]
+CTP___FUTURE = "bt_api_ctp.market_tick_registration:register_ctp_market_tick_provider"
+
+[project.entry-points."bt_api.provider_configurations"]
+CTP___FUTURE = "bt_api_ctp.simnow_route_configuration:register_ctp_provider_configuration"
+
+[project.entry-points."bt_api.typed_order_providers"]
+CTP___FUTURE = "bt_api_ctp.order_provider:register_ctp_typed_order_provider"
+
+[project.entry-points."bt_api.order_position_evidence_providers"]
+CTP___FUTURE = "bt_api_ctp.order_position_evidence_provider:register_ctp_order_position_evidence_provider"
+
+[project.entry-points."bt_api.risk_dispatch_evidence"]
+ctp = "bt_api_ctp.risk_dispatch_binding:ctp_risk_dispatch_evidence_profile"
+
+[project.entry-points."bt_api.execution_economics_providers"]
+CTP___FUTURE = "bt_api_ctp.execution_economics_registration:register_ctp_execution_economics_provider"
+
+[project.entry-points."bt_api.execution_rules_snapshot_providers"]
+CTP___FUTURE = "bt_api_ctp.execution_rules_registration:register_ctp_execution_rules_snapshot_provider"
+
+[project.entry-points."bt_api.execution_rules_providers"]
+CTP___FUTURE = "bt_api_ctp.order_rules_provider:register_ctp_order_rules_provider"
+
+[project.entry-points."bt_api.futures_eod_ranking_providers"]
+CTP___FUTURE = "bt_api_ctp.futures_eod_ranking_registration:register_ctp_eod_ranking_provider"
+
+[project.entry-points."bt_api.futures_expected_calendar_providers"]
+CTP___FUTURE = "bt_api_ctp.futures_expected_calendar_provider:register_ctp_futures_expected_calendar_provider"
 
 [project.entry-points."bt_api.order_identity_projections"]
 CTP___FUTURE = "bt_api_ctp.order_identity_projection:project_order_identity"
@@ -110,7 +150,16 @@ CTP___FUTURE = "bt_api_base.fee_projection:legacy_fee_projection"
 CTP___FUTURE = "bt_api_ctp.instrument_rules_projection:project_instrument_rules"
 
 [project.entry-points."bt_api.order_side_projections"]
-CTP___FUTURE = "bt_api_base.order_side_projection:legacy_order_side_candidates"
+CTP___FUTURE = "bt_api_ctp.order_side_projection:order_side_candidates"
 
 [project.entry-points."bt_api.normalization_policies"]
 CTP___FUTURE = "bt_api_ctp.normalization_policy:normalization_policy"
+
+[project.entry-points."bt_api.execution_configuration_policies"]
+CTP___FUTURE = "bt_api_base.execution_configuration_policy:legacy_execution_configuration_policy"
+
+[project.entry-points."bt_api.execution_ledger_identity_policies"]
+CTP = "bt_api_base.execution_ledger_identity_policy:legacy_ledger_policy"
+
+[project.entry-points."bt_api.account_risk_source_policies"]
+CTP = "bt_api_ctp.account_risk_source_policy:account_risk_source_policy"

@@ -20,6 +20,7 @@ from bt_api_base.exceptions import ExchangeConnectionAlias as BtConnectionError
 from bt_api_base.feeds.capability import Capability
 from bt_api_base.feeds.feed import Feed
 from bt_api_base.logging_factory import get_logger
+from bt_api_base.managed_execution_runtime_protocol import OwnerThreadCallPort
 
 from bt_api_ctp.containers.ctp.ctp_account import CtpAccountData
 from bt_api_ctp.containers.ctp.ctp_order import CtpOrderData
@@ -56,6 +57,466 @@ from bt_api_ctp.query import QueryResult
 _CTP_MONOTONIC_NS = time.monotonic_ns
 _CTP_MONOTONIC_CLOCK_SOURCE = time.get_clock_info("monotonic").implementation
 _MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS = 1_024
+_CTP_RUNTIME_FEED_BINDING_SEAL = object()
+
+
+class _CtpRuntimeOwnedRequestFeedBinding:
+    """Internal identity binding for a request feed borrowing one SDK client.
+
+    It grants no write capability and provides no exchange metadata. Its only
+    job is to keep the exact runtime-owned TraderClient attached to the
+    selected feed without starting or stopping that client from feed methods.
+    """
+
+    __slots__ = (
+        "_feed",
+        "_runtime",
+        "_trader",
+        "_execution_owner",
+        "_owner_thread",
+        "_session_generation_id",
+        "_owner_thread_invoker",
+        "_provider_contexts",
+    )
+
+    def __init__(
+        self,
+        seal: object,
+        *,
+        feed: object,
+        runtime: object,
+        trader: object,
+        execution_owner: object,
+        owner_thread: threading.Thread,
+        session_generation_id: str,
+        owner_thread_invoker: OwnerThreadCallPort,
+    ) -> None:
+        if seal is not _CTP_RUNTIME_FEED_BINDING_SEAL:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_feed_binding_unavailable"
+            )
+        if not isinstance(owner_thread_invoker, OwnerThreadCallPort):
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_owner_call_port_unavailable"
+            )
+        self._feed = feed
+        self._runtime = runtime
+        self._trader = trader
+        self._execution_owner = execution_owner
+        self._owner_thread = owner_thread
+        self._session_generation_id = session_generation_id
+        self._owner_thread_invoker = owner_thread_invoker
+        self._provider_contexts: dict[int, tuple[object, str]] = {}
+
+    def register_provider_context(
+        self,
+        context: object,
+        *,
+        exchange_name: str,
+    ) -> None:
+        """Register an exact runtime-assembled context for this feed route.
+
+        This seal records composition provenance only. It does not grant write
+        permission; missing provider authority and authorization resolvers
+        remain independently unavailable.
+        """
+
+        if threading.current_thread() is not self._owner_thread:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_provider_context_owner_required"
+            )
+        if type(exchange_name) is not str or exchange_name != "CTP___FUTURE":
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_provider_context_route_invalid"
+            )
+        if not self._provider_context_shape_matches(context):
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_provider_context_binding_invalid"
+            )
+        if len(self._provider_contexts) >= 64:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_provider_context_capacity_exhausted"
+            )
+        context_id = id(context)
+        if context_id in self._provider_contexts:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_provider_context_already_registered"
+            )
+        self._provider_contexts[context_id] = (context, exchange_name)
+
+    def validate_provider_context(
+        self,
+        context: object,
+        *,
+        exchange_name: str,
+        selected_feed: object,
+        trader_client: object,
+    ) -> bool:
+        """Validate provenance and exact runtime identity, never authorization."""
+
+        if threading.current_thread() is not self._owner_thread:
+            return False
+        try:
+            registered = self._provider_contexts.get(id(context))
+            if (
+                registered is None
+                or registered[0] is not context
+                or registered[1] != exchange_name
+                or exchange_name != "CTP___FUTURE"
+                or type(selected_feed) is not CtpRequestDataFuture
+                or selected_feed is not self._feed
+                or selected_feed._managed_runtime_binding is not self
+                or selected_feed._connected is not True
+                or selected_feed._trader is not self._trader
+                or trader_client is not self._trader
+                or type(trader_client) is not ctp_client.TraderClient
+            ):
+                return False
+
+            runtime = self._runtime
+            owner = self._execution_owner
+            runtime._assert_owner_thread()
+            if (
+                runtime.is_ready() is not True
+                or runtime._phase != "READY"
+                or runtime._closed is not False
+                or runtime._lease_healthy is not True
+                or runtime._borrowed_request_feed is not selected_feed
+                or runtime._trader is not trader_client
+                or runtime._execution_owner is not owner
+                or runtime._session_generation_id != self._session_generation_id
+                or runtime.owner_thread is not self._owner_thread
+                or owner._trader is not trader_client
+                or owner._thread is not self._owner_thread
+                or owner._session_generation_id != self._session_generation_id
+                or runtime._submit_port._thread is not self._owner_thread
+                or runtime._cancel_port._thread is not self._owner_thread
+            ):
+                return False
+
+            from bt_api_ctp.instrument_metadata import CtpInstrumentMetadataReader
+            from bt_api_ctp.order_provider import CtpOrderProviderRuntimeContext
+
+            market_stream = runtime._order_provider_market_stream
+            trader_config = runtime.config.trader
+            if (
+                type(context) is not CtpOrderProviderRuntimeContext
+                or getattr(context, "runtime_binding", None) is not self
+                or context.execution_store is not runtime._store
+                or context.scope is not runtime.config.execution_scope
+                or context.execution_facade is not runtime._reconciliation_facade
+                or context.cancellation_facade
+                is not runtime._order_provider_cancellation_facade
+                or context.submit_port is not runtime._submit_port
+                or context.cancel_port is not runtime._cancel_port
+                or context.owner_thread_invoker is not runtime.owner_thread_invoker
+                or context.registered_sim_authority
+                is not getattr(runtime, "_registered_sim_authority", None)
+                or context.request_account_validator
+                is not getattr(runtime, "_request_account_validator", None)
+                or context.submit_context_resolver
+                is not getattr(runtime, "_submit_context_resolver", None)
+                or context.cancel_authorization_validator
+                is not getattr(runtime, "_cancel_authorization_validator", None)
+                or context.order_provider_authority_source
+                is not getattr(runtime, "_order_provider_authority_source", None)
+                or context.execution_economics_owner
+                is not getattr(runtime, "_execution_economics_owner", None)
+                or context.execution_economics_issuer
+                is not getattr(runtime, "_execution_economics_issuer", None)
+                or (
+                    context.execution_economics_owner is None
+                )
+                != (context.execution_economics_issuer is None)
+                or (
+                    market_stream is not None
+                    and (
+                        type(market_stream) is not CtpMarketStream
+                        or market_stream.ctp_env_profile
+                        != trader_config.ctp_env_profile
+                        or market_stream.md_front != trader_config.md_front
+                        or market_stream.broker_id != trader_config.broker_id
+                        or market_stream.user_id != trader_config.user_id
+                    )
+                )
+            ):
+                return False
+            reader = context.instrument_metadata_reader
+            if reader is not None and (
+                type(reader) is not CtpInstrumentMetadataReader
+                or reader.request_feed is not selected_feed
+                or reader.market_stream is not runtime._order_provider_market_stream
+                or reader._owner_thread_id != runtime.owner_thread_id
+            ):
+                return False
+            return True
+        except Exception:
+            return False
+
+    def revoke_provider_contexts(self) -> None:
+        """Drop context registrations when this runtime detaches the feed."""
+
+        if threading.current_thread() is self._owner_thread:
+            self._provider_contexts.clear()
+
+    def _provider_context_shape_matches(self, context: object) -> bool:
+        try:
+            from bt_api_ctp.instrument_metadata import CtpInstrumentMetadataReader
+            from bt_api_ctp.order_provider import CtpOrderProviderRuntimeContext
+
+            runtime = self._runtime
+            market_stream = runtime._order_provider_market_stream
+            trader_config = runtime.config.trader
+            if type(context) is not CtpOrderProviderRuntimeContext:
+                return False
+            reader = getattr(context, "instrument_metadata_reader", None)
+            runtime._assert_owner_thread()
+            return (
+                getattr(context, "runtime_binding", None) is self
+                and runtime.is_ready() is True
+                and runtime._phase == "READY"
+                and runtime._closed is False
+                and runtime._lease_healthy is True
+                and runtime._borrowed_request_feed is self._feed
+                and self._feed._managed_runtime_binding is self
+                and self._feed._connected is True
+                and self._feed._trader is self._trader
+                and runtime._trader is self._trader
+                and runtime._execution_owner is self._execution_owner
+                and runtime._session_generation_id == self._session_generation_id
+                and runtime.owner_thread is self._owner_thread
+                and self._execution_owner._trader is self._trader
+                and self._execution_owner._thread is self._owner_thread
+                and self._execution_owner._session_generation_id
+                == self._session_generation_id
+                and runtime._submit_port._thread is self._owner_thread
+                and runtime._cancel_port._thread is self._owner_thread
+                and context.execution_store is runtime._store
+                and context.scope is runtime.config.execution_scope
+                and context.execution_facade is runtime._reconciliation_facade
+                and context.cancellation_facade
+                is runtime._order_provider_cancellation_facade
+                and context.submit_port is runtime._submit_port
+                and context.cancel_port is runtime._cancel_port
+                and context.owner_thread_invoker is runtime.owner_thread_invoker
+                and context.registered_sim_authority
+                is getattr(runtime, "_registered_sim_authority", None)
+                and context.request_account_validator
+                is getattr(runtime, "_request_account_validator", None)
+                and context.submit_context_resolver
+                is getattr(runtime, "_submit_context_resolver", None)
+                and context.cancel_authorization_validator
+                is getattr(runtime, "_cancel_authorization_validator", None)
+                and context.order_provider_authority_source
+                is getattr(runtime, "_order_provider_authority_source", None)
+                and context.execution_economics_owner
+                is getattr(runtime, "_execution_economics_owner", None)
+                and context.execution_economics_issuer
+                is getattr(runtime, "_execution_economics_issuer", None)
+                and (
+                    (context.execution_economics_owner is None)
+                    == (context.execution_economics_issuer is None)
+                )
+                and (
+                    market_stream is None
+                    or (
+                        type(market_stream) is CtpMarketStream
+                        and market_stream.ctp_env_profile
+                        == trader_config.ctp_env_profile
+                        and market_stream.md_front == trader_config.md_front
+                        and market_stream.broker_id == trader_config.broker_id
+                        and market_stream.user_id == trader_config.user_id
+                    )
+                )
+                and (
+                    reader is None
+                    or (
+                        type(reader) is CtpInstrumentMetadataReader
+                        and reader.request_feed is self._feed
+                        and reader.market_stream
+                        is runtime._order_provider_market_stream
+                        and reader._owner_thread_id == runtime.owner_thread_id
+                    )
+                )
+            )
+        except Exception:
+            return False
+
+    def resolve_trader(self, feed: object) -> object:
+        if feed is not self._feed:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_feed_binding_mismatch"
+            )
+
+        def validate_on_owner() -> object:
+            runtime = self._runtime
+            trader = self._trader
+            owner = self._execution_owner
+            try:
+                runtime._assert_owner_thread()
+                ready = runtime.is_ready()
+                runtime_trader = runtime._trader
+                runtime_owner = runtime._execution_owner
+                generation = runtime._session_generation_id
+                phase = runtime._phase
+                closed = runtime._closed
+                lease_healthy = runtime._lease_healthy
+                owner_trader = owner._trader
+                owner_generation = owner._session_generation_id
+                owner_thread = runtime.owner_thread
+                owner_port_thread = owner._thread
+                submit_port_thread = runtime._submit_port._thread
+                cancel_port_thread = runtime._cancel_port._thread
+                trader_ready = trader.is_read_only_ready
+                settlement_safe = trader.auto_settlement_confirm
+            except Exception:
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_runtime_feed_binding_unavailable"
+                ) from None
+            if (
+                ready is not True
+                or phase != "READY"
+                or closed is not False
+                or lease_healthy is not True
+                or runtime_trader is not trader
+                or runtime_owner is not owner
+                or generation != self._session_generation_id
+                or type(trader) is not ctp_client.TraderClient
+                or owner_trader is not trader
+                or owner_generation != self._session_generation_id
+                or owner_thread is not self._owner_thread
+                or threading.current_thread() is not self._owner_thread
+                or owner_port_thread is not self._owner_thread
+                or submit_port_thread is not self._owner_thread
+                or cancel_port_thread is not self._owner_thread
+                or trader_ready is not True
+                or settlement_safe is not False
+            ):
+                raise ctp_client.CtpExecutionGateError(
+                    "ctp_runtime_feed_binding_unavailable"
+                )
+            return trader
+
+        if threading.current_thread() is self._owner_thread:
+            trader = validate_on_owner()
+        else:
+            trader = self._owner_thread_invoker.call_on_owner_thread(
+                validate_on_owner,
+                timeout_seconds=5.0,
+            )
+        if trader is not self._trader:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_feed_binding_mismatch"
+            )
+        return trader
+
+
+def _attach_runtime_owned_ctp_request_feed(feed: object, runtime: object) -> None:
+    """Bind one exact selected future feed to an already-ready runtime client.
+
+    The caller is ``CtpExecutionRuntime`` on its captured owner thread. This
+    deliberately does not infer RegisteredSim authority, catalog facts, or an
+    order authorization from the selected account/session.
+    """
+
+    if type(feed) is not CtpRequestDataFuture:
+        raise ctp_client.CtpExecutionGateError(
+            "ctp_runtime_feed_type_unsupported"
+        )
+    try:
+        runtime._assert_owner_thread()
+        config = runtime.config.trader
+        trader = runtime._trader
+        owner = runtime._execution_owner
+        owner_thread = runtime.owner_thread
+        session_generation_id = runtime._session_generation_id
+        invoker = runtime.owner_thread_invoker
+        ready = runtime.is_ready()
+        phase = runtime._phase
+        closed = runtime._closed
+        lease_healthy = runtime._lease_healthy
+        runtime_scope = runtime.config.execution_scope
+        owner_trader = owner._trader
+        owner_generation = owner._session_generation_id
+        owner_thread_field = owner._thread
+        submit_port_thread = runtime._submit_port._thread
+        cancel_port_thread = runtime._cancel_port._thread
+        trader_ready = trader.is_read_only_ready
+        settlement_safe = trader.auto_settlement_confirm
+    except Exception:
+        raise ctp_client.CtpExecutionGateError(
+            "ctp_runtime_feed_binding_unavailable"
+        ) from None
+
+    if (
+        ready is not True
+        or phase != "READY"
+        or closed is not False
+        or lease_healthy is not True
+        or runtime_scope.provider != "ctp"
+        or runtime_scope.environment != "simulation"
+        or type(session_generation_id) is not str
+        or not session_generation_id
+        or not isinstance(owner_thread, threading.Thread)
+        or threading.current_thread() is not owner_thread
+        or trader is None
+        or type(trader) is not ctp_client.TraderClient
+        or owner is None
+        or owner_trader is not trader
+        or owner_generation != session_generation_id
+        or owner_thread_field is not owner_thread
+        or submit_port_thread is not owner_thread
+        or cancel_port_thread is not owner_thread
+        or trader_ready is not True
+        or settlement_safe is not False
+        or not isinstance(invoker, OwnerThreadCallPort)
+    ):
+        raise ctp_client.CtpExecutionGateError(
+            "ctp_runtime_feed_binding_unavailable"
+        )
+
+    # Confirm the feed was configured for this exact selected route. These
+    # fields only bind identity; they do not confer permission to write.
+    if (
+        feed._trader is not None
+        or feed._connected is not False
+        or feed._managed_runtime_binding is not None
+        or feed._execution_gate_capability is not None
+        or feed.auto_settlement_confirm is not False
+        or feed._execution_bound_td_front != config.front
+        or feed._execution_bound_md_front != config.md_front
+        or feed._execution_bound_broker_id != config.broker_id
+        or feed._execution_bound_user_id != config.user_id
+        or feed._execution_bound_profile != config.ctp_env_profile
+        or feed.td_front != feed._execution_bound_td_front
+        or feed.md_front != feed._execution_bound_md_front
+        or feed.broker_id != feed._execution_bound_broker_id
+        or feed.user_id != feed._execution_bound_user_id
+        or feed.ctp_env_profile != feed._execution_bound_profile
+    ):
+        raise ctp_client.CtpExecutionGateError(
+            "ctp_runtime_feed_binding_route_mismatch"
+        )
+
+    with feed._connect_lock:
+        if (
+            feed._trader is not None
+            or feed._connected is not False
+            or feed._managed_runtime_binding is not None
+        ):
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_feed_binding_already_attached"
+            )
+        feed._managed_runtime_binding = _CtpRuntimeOwnedRequestFeedBinding(
+            _CTP_RUNTIME_FEED_BINDING_SEAL,
+            feed=feed,
+            runtime=runtime,
+            trader=trader,
+            execution_owner=owner,
+            owner_thread=owner_thread,
+            session_generation_id=session_generation_id,
+            owner_thread_invoker=invoker,
+        )
 
 
 class CtpMarketStreamSubscriptionError(RuntimeError):
@@ -695,6 +1156,7 @@ class CtpRequestData(Feed):
         self._connected = False
         self._connect_timeout = resolved_kwargs.get("connect_timeout", 15)
         self._execution_gate_capability: object | None = None
+        self._managed_runtime_binding: _CtpRuntimeOwnedRequestFeedBinding | None = None
         self.auto_settlement_confirm = _as_bool(
             resolved_kwargs.get("auto_settlement_confirm"), default=False
         )
@@ -723,9 +1185,16 @@ class CtpRequestData(Feed):
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
 
+    def _reject_borrowed_runtime_gate_control(self) -> None:
+        if self._managed_runtime_binding is not None:
+            raise ctp_client.CtpExecutionGateError(
+                "ctp_runtime_feed_gate_control_unavailable"
+            )
+
     def configure_execution_gate(self, capability: object) -> dict[str, Any]:
         """Install the SDK-owned gate without changing legacy feed behavior."""
 
+        self._reject_borrowed_runtime_gate_control()
         if not ctp_client._is_ctp_core_execution_authority(capability):
             raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_required")
         with self._connect_lock:
@@ -751,6 +1220,7 @@ class CtpRequestData(Feed):
     ) -> dict[str, Any]:
         """Forward an owner-sealed exact pair binding to this feed's TraderClient."""
 
+        self._reject_borrowed_runtime_gate_control()
         if type(binding) is not ctp_client.CtpRuntimeSimNowCredentialBinding:
             raise ctp_client.CtpExecutionGateError(
                 "ctp_simnow_credential_binding_required"
@@ -805,6 +1275,7 @@ class CtpRequestData(Feed):
         client independently verifies its exact type and issuer seal.
         """
 
+        self._reject_borrowed_runtime_gate_control()
         if self._execution_bound_profile != "config_front_pair":
             self._reject_official_simnow_write()
         elif (
@@ -869,6 +1340,7 @@ class CtpRequestData(Feed):
     ) -> object:
         """Private mapping-to-token bridge used only by the owning SDK."""
 
+        self._reject_borrowed_runtime_gate_control()
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
                 raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
@@ -893,6 +1365,7 @@ class CtpRequestData(Feed):
     ) -> object:
         """Private, independent one-shot settlement-confirm issuer."""
 
+        self._reject_borrowed_runtime_gate_control()
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
                 raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
@@ -916,6 +1389,7 @@ class CtpRequestData(Feed):
         boundary, even if they were reconstructed from public session state.
         """
 
+        self._reject_borrowed_runtime_gate_control()
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
                 raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
@@ -946,6 +1420,7 @@ class CtpRequestData(Feed):
     ) -> dict[str, Any]:
         """Idempotently revoke managed writes while retaining read access."""
 
+        self._reject_borrowed_runtime_gate_control()
         with self._connect_lock:
             if capability is not self._execution_gate_capability:
                 raise ctp_client.CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
@@ -985,6 +1460,7 @@ class CtpRequestData(Feed):
         symbol: Any,
         exchange_id: Any = None,
     ) -> None:
+        self._reject_borrowed_runtime_gate_control()
         managed_pair = self._execution_bound_profile == "config_front_pair"
         if not managed_pair:
             self._reject_official_simnow_write()
@@ -1085,6 +1561,20 @@ class CtpRequestData(Feed):
     def connect(self):
         with self._connect_lock:
             self._ensure_read_only_connection_safe()
+            managed_binding = self._managed_runtime_binding
+            if managed_binding is not None:
+                if self._execution_gate_capability is not None:
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_runtime_feed_gate_control_unavailable"
+                    )
+                trader = managed_binding.resolve_trader(self)
+                if type(trader) is not ctp_client.TraderClient:
+                    raise ctp_client.CtpExecutionGateError(
+                        "ctp_runtime_feed_client_unavailable"
+                    )
+                self._trader = trader
+                self._connected = True
+                return
             trader = self._trader
             if trader is None:
                 trader = ctp_client.TraderClient(
@@ -1123,6 +1613,13 @@ class CtpRequestData(Feed):
             trader = self._trader
             self._trader = None
             capability = self._execution_gate_capability
+            managed_binding = self._managed_runtime_binding
+        if managed_binding is not None:
+            # The execution runtime owns this client and its native lifecycle.
+            # A Feed disconnect only detaches this Feed's view; it must not
+            # disarm or stop the shared client.
+            self._connected = False
+            return
         if trader is not None:
             if capability is not None:
                 with suppress(Exception):
@@ -1683,6 +2180,12 @@ class CtpRequestData(Feed):
     @property
     def trader_client(self):
         return self._trader
+
+    def get_verified_stream_configuration(self, parameters: Mapping[str, Any]) -> dict[str, str]:
+        """Return provider-verified settings for the associated stream clients."""
+        from bt_api_ctp.stream_configuration import verified_stream_configuration
+
+        return verified_stream_configuration(self, parameters)
 
     def get_environment_info(self) -> dict[str, Any]:
         profile = str(self.ctp_env_profile or "").strip()
@@ -3181,6 +3684,28 @@ class CtpRequestDataFuture(CtpRequestData):
         super().__init__(data_queue, **kwargs)
         self.asset_type = kwargs.get("asset_type", "FUTURE")
         self._params = CtpExchangeDataFuture()
+
+
+def _detach_runtime_owned_ctp_request_feed(feed: object, runtime: object) -> bool:
+    """Detach a borrowed feed pointer without touching the runtime's client."""
+
+    if type(feed) is not CtpRequestDataFuture:
+        return False
+    try:
+        runtime._assert_owner_thread()
+    except Exception:
+        return False
+    with feed._connect_lock:
+        binding = feed._managed_runtime_binding
+        if (
+            type(binding) is not _CtpRuntimeOwnedRequestFeedBinding
+            or binding._runtime is not runtime
+        ):
+            return False
+        binding.revoke_provider_contexts()
+        feed._trader = None
+        feed._connected = False
+    return True
 
 
 __all__ = [

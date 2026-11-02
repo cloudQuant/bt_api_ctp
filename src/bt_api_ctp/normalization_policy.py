@@ -3,6 +3,15 @@
 from types import MappingProxyType
 
 from bt_api_base.normalization_policy import LegacyNormalizationPolicy
+from bt_api_base.order_identity_fields import NEUTRAL_ORDER_IDENTITY_FIELDS
+from bt_api_base.provider_order_source_aliases import build_provider_order_source_aliases
+from bt_api_base.order_provenance_fields import (
+    NEUTRAL_ORDER_SOURCE_FIELDS,
+    PROVIDER_SCOPED_ORDER_PROVENANCE_SCHEMAS,
+)
+
+from .quote_v2_time import project_quote_v2_timestamps
+from .risk_source_position_projection import ctp_source_position_dimensions_error
 
 
 def _ctp_cancel_metadata(result, request):
@@ -69,7 +78,87 @@ def _ctp_cancel_metadata(result, request):
 
 
 class CtpNormalizationPolicy(LegacyNormalizationPolicy):
+    trade_id_fields = ("trade_id", "fill_id", "deal_id", "TradeID")
+    risk_position_dimensions_require_projection = True
+    risk_position_dimensions_projector = staticmethod(ctp_source_position_dimensions_error)
+    # Preserve the prior acknowledgement contract pending venue review.
+    position_mode_ack_code = "200"
+    position_mode_placement_guard_required = False
+    tick_trading_day_fields = ("trading_day", "TradingDay")
+    tick_action_day_fields = ("action_day", "ActionDay")
+    # Preserve the previous common aliases until venue-specific coverage is reviewed.
+    order_status_fields = ("status", "order_status", "state")
+    trade_fee_fields = ("fee_amount", "fee", "trade_fee", "commission")
+    identity_fields = NEUTRAL_ORDER_IDENTITY_FIELDS
+    order_provenance_schemas = PROVIDER_SCOPED_ORDER_PROVENANCE_SCHEMAS
+    order_provenance_source_fields = NEUTRAL_ORDER_SOURCE_FIELDS | frozenset({
+        'AccountID',
+        'InstrumentID',
+        'InvestorID',
+        'OrderRef',
+        'OrderSysID',
+        'Price',
+        'TradeID',
+        'Volume',
+        'VolumeTotalOriginal',
+        'VolumeTraded',
+        'ctp_direction_code',
+        'ctp_offset_code',
+    })
+    (
+        risk_order_source_aliases,
+        group_order_source_aliases,
+        group_fill_source_aliases,
+    ) = build_provider_order_source_aliases(
+        order_provenance_source_fields,
+        risk_order_native_aliases={
+            "provider_order_id": ("OrderSysID",),
+            "client_order_id": ("OrderRef",),
+            "status": (),
+            "filled_quantity": ("VolumeTraded",),
+            "quantity": ("VolumeTotalOriginal",),
+            "account_id": ("AccountID", "InvestorID"),
+            "instrument": ("InstrumentID",),
+            "side": (),
+            "price": (),
+            "position_side": (),
+            "offset": (),
+        },
+        group_order_native_aliases={
+            "order_id": ("OrderSysID",),
+            "client_order_id": ("OrderRef",),
+            "status": (),
+            "filled": ("VolumeTraded",),
+            "quantity": ("VolumeTotalOriginal",),
+            "account_id": ("AccountID", "InvestorID"),
+            "instrument": ("InstrumentID",),
+            "side": (),
+            "price": (),
+        },
+        group_fill_native_aliases={
+            "trade_id": ("TradeID",),
+            "order_id": ("OrderSysID",),
+            "client_order_id": ("OrderRef",),
+            "account_id": ("AccountID", "InvestorID"),
+            "instrument": ("InstrumentID",),
+            "side": (),
+            "quantity": ("Volume",),
+            "price": ("Price",),
+        },
+    )
+    quote_v2_schema = "ctp.quote.v2"
+    quote_v2_timestamps = staticmethod(project_quote_v2_timestamps)
+    # Preserve the former shared response alias pending venue-specific review.
+    response_error_item_fields = ("sCode",)
+    # CTP/OKX source uses the neutral data collection.
+    result_collection_fields = ("data",)
+    base_symbol_fields = (
+        "symbol", "symbol_name", "instrument", "instrument_id", "data_name", "InstrumentID",
+        "trade_symbol",
+    )
     quantity_unit = "contracts"
+    permission_fields = ("trading_permissions",)
+    can_trade_fields = ("can_trade",)
     trade_authority = True
     order_statuses = MappingProxyType({
         "open": "accepted", "working": "accepted", "submitted": "submitted",
@@ -95,7 +184,6 @@ class CtpNormalizationPolicy(LegacyNormalizationPolicy):
         "commission_currency": ("commission_currency", "fee_currency"),
     })
     trade_fields = MappingProxyType({
-        "trade_id": ("trade_id", "fill_id", "deal_id", "id", "TradeID"),
         "order_id": ("order_id", "external_order_id", "OrderSysID"),
         "client_id": ("client_order_id", "OrderRef"),
         "size": ("quantity", "size", "trade_volume", "volume", "Volume"),
@@ -150,13 +238,17 @@ class CtpNormalizationPolicy(LegacyNormalizationPolicy):
         "commission_rate": ("commission_rate", "taker_commission_rate"),
         "exchange_id": ("exchange_id", "ExchangeID"),
     })
-    instrument_uses_filters = False
     instrument_contract_value_field = None
     instrument_contract_multiplier_field = None
     instrument_linear_type_field = None
     instrument_perpetual_type_field = None
     event_id_fields = ("event_id", "trade_id", "fill_id", "order_id")
     event_audit_fields = ("sequence", "sequence_id", "previous_sequence")
+    tick_bid_fields = ("bid_price", "bid", "BidPrice1")
+    tick_ask_fields = ("ask_price", "ask", "AskPrice1")
+    tick_price_fields = ("price", "last_price", "last", "LastPrice")
+    tick_volume_fields = ("volume", "last_volume", "Volume")
+    tick_cumulative_fields = ("cum_volume", "cumulative_volume", "Volume")
     orderbook_sequence_fields = ("sequence", "sequence_id", "update_id")
     orderbook_previous_fields = ("previous_sequence", "prev_sequence")
     orderbook_delta_predecessor_fields = ()

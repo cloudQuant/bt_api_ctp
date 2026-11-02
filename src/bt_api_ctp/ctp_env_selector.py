@@ -22,10 +22,9 @@ _SET1_DEFAULTS = {
 }
 _SET2_DEFAULT = ("tcp://180.168.146.187:10130", "tcp://180.168.146.187:10131")
 
-# These alternate pairs are deliberately frozen and named.  They mirror the
-# root package's ``configs/ctp_fronts.yaml`` entries; selection is based only
-# on TCP reachability of a complete TD/MD pair, never on VPN geography or the
-# process's public IP address.
+# These alternate pairs are deliberately frozen and named. Selection is based
+# only on TCP reachability of a complete TD/MD pair, never on VPN geography or
+# the process's public IP address.
 _SET1_GROUP1_VPN = ("tcp://182.254.243.31:30001", "tcp://182.254.243.31:30011")
 _SET2_7X24_4000X = ("tcp://182.254.243.31:40001", "tcp://182.254.243.31:40011")
 # Additional frozen VPN-family pairs for the same official SimNow set1

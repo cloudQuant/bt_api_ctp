@@ -88,6 +88,7 @@ class CtpAccountSessionProviderError(RuntimeError):
             "QUERY_SOURCE_UNTRUSTED",
             "QUERY_SCOPE_CHANGED",
             "QUERY_ROW_INVALID",
+            "ORDER_OBSERVATION_IDENTITY_UNAVAILABLE",
             "QUERY_BUDGET_EXCEEDED",
             "OWNER_THREAD_REQUIRED",
             "NATIVE_CUSTODY_UNCERTAIN",
@@ -763,6 +764,15 @@ def _project_open_orders(rows: tuple[Any, ...], observed_at: str) -> tuple[Accou
             continue
         if status_code not in _ACTIVE_ORDER_STATUS:
             raise ValueError
+        # This legacy process provider has no SDK-issued order-observation
+        # route/issuer binding.  The public AccountOpenOrder DTO must not carry
+        # CTP OrderSysID, FrontID, SessionID, or OrderRef as its identifiers.
+        # Until the trusted SDK context is propagated into this process, an
+        # active order makes this observation unavailable instead of leaking
+        # native identity or claiming that the order set is empty.
+        raise CtpAccountSessionProviderError(
+            "ORDER_OBSERVATION_IDENTITY_UNAVAILABLE"
+        )
         direction = _text(_field(row, "Direction"))
         if direction not in {"0", "1"}:
             raise ValueError
