@@ -93,6 +93,26 @@ class CtpBarData(BarData):
         self._ensure_init()
         return self.close_time or ""
 
+    # Contract v1: CTP bars carry no venue timestamps, trade counts or
+    # taker split; those facts are unknown (None), not errors.
+    def get_local_update_time(self):
+        return None
+
+    def get_base_asset_volume(self):
+        return self.volume_val
+
+    def get_quote_asset_volume(self):
+        return self.amount_val
+
+    def get_num_trades(self):
+        return None
+
+    def get_taker_buy_base_asset_volume(self):
+        return None
+
+    def get_taker_buy_quote_asset_volume(self):
+        return None
+
     def get_bar_status(self):
         return True
 

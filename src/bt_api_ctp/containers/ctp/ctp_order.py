@@ -202,6 +202,73 @@ class CtpOrderData(OrderData):
         self._ensure_init()
         return self.account_id or ""
 
+    # Contract v1: standard getters CTP cannot answer return None (unknown).
+    def get_position_side(self) -> str | None:
+        """Position side closed by this order, from the strict CTP projection.
+
+        Returns the projection's native spelling (``LONG``/``SHORT``), the
+        same value ``get_all_data()`` already reports; compare across
+        providers with ``bt_api_base.containers.semantics.normalize_position_side``.
+        Opening orders, forced-close variants and inconsistent direction/offset
+        pairs do not identify a position side and return None.
+        """
+        self._ensure_init()
+        projection = ctp_position_dimension_projection(
+            self.order_info,
+            direction_key="Direction",
+            offset_key="CombOffsetFlag",
+            normalized_side=self.direction,
+            normalized_offset=self.offset,
+            order_offset=True,
+        )
+        side = projection.get("position_side")
+        return side if side in ("LONG", "SHORT") else None
+
+    def get_trade_id(self) -> str | None:
+        return None
+
+    def get_cum_quote(self) -> float | None:
+        return None
+
+    def get_reduce_only(self) -> bool | None:
+        return None
+
+    def get_close_position(self) -> bool | None:
+        return None
+
+    def get_origin_order_type(self) -> str | None:
+        return None
+
+    def get_stop_loss_price(self) -> float | None:
+        return None
+
+    def get_stop_loss_trigger_price(self) -> float | None:
+        return None
+
+    def get_stop_loss_trigger_price_type(self) -> str | None:
+        return None
+
+    def get_take_profit_price(self) -> float | None:
+        return None
+
+    def get_take_profit_trigger_price(self) -> float | None:
+        return None
+
+    def get_take_profit_trigger_price_type(self) -> str | None:
+        return None
+
+    def get_trailing_stop_price(self) -> float | None:
+        return None
+
+    def get_trailing_stop_trigger_price(self) -> float | None:
+        return None
+
+    def get_trailing_stop_trigger_price_type(self) -> str | None:
+        return None
+
+    def get_trailing_stop_callback_rate(self) -> float | None:
+        return None
+
     def get_all_data(self) -> dict[str, Any]:
         self._ensure_init()
         data = super().get_all_data()

@@ -124,6 +124,21 @@ class CtpTradeData(TradeData):
     def get_trade_fee_symbol(self) -> str:
         return self.trade_fee_symbol or ""
 
+    # Contract v1: facts CTP trade reports do not carry are unknown (None).
+    def get_local_update_time(self) -> float | None:
+        return None
+
+    def get_trade_symbol_name(self) -> str | None:
+        return self.instrument_id or self.symbol_name
+
+    def get_trade_accumulate_volume(self) -> float | None:
+        # A CTP trade report is one fill; it carries no order-cumulative size.
+        return None
+
+    def get_trade_type(self) -> str | None:
+        # CTP does not report maker/taker liquidity.
+        return None
+
     def get_all_data(self) -> dict[str, Any]:
         self._ensure_init()
         if self._all_data is None:
@@ -153,7 +168,9 @@ class CtpTradeData(TradeData):
                     order_offset=False,
                 ),
             }
-        return self._all_data
+        # Return a copy: the cache is shared by every reader of a published
+        # container and must not be mutated through the result (contract v1).
+        return dict(self._all_data)
 
     def get_trading_day(self) -> str:
         self._ensure_init()

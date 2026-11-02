@@ -3380,6 +3380,9 @@ class CtpMarketStream(BaseDataStream):
                 row.apply_volume_delta(0, complete=False, quality="INVALID_QUOTE")
             if native_managed_callback:
                 self._attach_managed_quote_v2_receipt(row)
+            # Publication point (iteration 60, D60-12): every producer-side
+            # mutation is done; consumers must treat the row as read-only.
+            row.freeze()
             self.push_data(row)
 
     def _on_error(self, rsp_info, *, client: Any = None, client_token: int | None = None):

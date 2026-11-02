@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any
 
+from bt_api_base.containers.semantics import VOLUME_SEMANTICS, VOLUME_UNKNOWN
 from bt_api_base.containers.tickers.ticker import TickerData
 from bt_api_base.functions.utils import (
     from_dict_get_float,
@@ -271,6 +272,35 @@ class CtpTickerData(TickerData):
 
     def get_lower_limit_price(self):
         return self.lower_limit_price
+
+    # Contract v1 semantic getters (iteration 60, D60-11).
+    def get_volume_semantics(self):
+        self._ensure_init()
+        semantics = self.volume_semantics
+        return semantics if semantics in VOLUME_SEMANTICS else VOLUME_UNKNOWN
+
+    def get_volume_complete(self):
+        self._ensure_init()
+        return self.volume_complete
+
+    def get_continuity_status(self):
+        self._ensure_init()
+        return self.continuity_status
+
+    def get_execution_eligible(self):
+        # Direct native containers never self-promote execution eligibility;
+        # this is the explicit False set at construction or by
+        # apply_volume_delta(), not an unknown.
+        self._ensure_init()
+        return self.execution_eligible
+
+    def get_quality_flags(self):
+        self._ensure_init()
+        return tuple(self.quality_flags)
+
+    def get_event_time_source(self):
+        self._ensure_init()
+        return self.event_time_source
 
     def get_all_data(self):
         self._ensure_init()

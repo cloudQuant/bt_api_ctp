@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from bt_api_base.containers.positions.position import PositionData
+from bt_api_base.containers.semantics import normalize_position_side
 from bt_api_base.functions.utils import (
     from_dict_get_float,
     from_dict_get_string,
@@ -161,6 +162,56 @@ class CtpPositionData(PositionData):
 
     def get_yesterday_position(self):
         return self.yd_position or 0
+
+    # Contract v1: standard getters (iteration 60, step 60.05).
+    def get_position_side(self):
+        """Normalized side of this CTP position row: long/short/net."""
+        return normalize_position_side(self.position_direction)
+
+    def get_position_symbol_name(self):
+        return self.instrument_id or self.symbol_name
+
+    def get_account_id(self):
+        info = self.position_info
+        if isinstance(info, Mapping):
+            return from_dict_get_string(info, "InvestorID") or None
+        return None
+
+    def get_position_fee(self):
+        return self.commission
+
+    def get_position_realized_pnl(self):
+        return self.close_profit
+
+    def get_server_time(self):
+        return None
+
+    def get_local_update_time(self):
+        return None
+
+    def get_position_id(self):
+        return None
+
+    def get_trade_num(self):
+        return None
+
+    def get_is_isolated(self):
+        return None
+
+    def get_margin_type(self):
+        return None
+
+    def get_is_auto_add_margin(self):
+        return None
+
+    def get_leverage(self):
+        return None
+
+    def get_max_notional_value(self):
+        return None
+
+    def get_position_initial_margin(self):
+        return None
 
     def get_all_data(self):
         return {
