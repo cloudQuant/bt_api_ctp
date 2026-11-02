@@ -65,8 +65,8 @@ class CtpTradeData(TradeData):
                 "3": "close_today",
                 "4": "close_yesterday",
             }.get(ctp_dict_code(info, "OffsetFlag", "0") or "0", "open")
-            self.price = from_dict_get_float(info, "Price", 0.0)
-            self.volume = ctp_int(info, "Volume", 0)
+            self.price = from_dict_get_float(info, "Price")
+            self.volume = ctp_int(info, "Volume")
             self.trade_date = from_dict_get_string(info, "TradeDate")
             self.trade_time = from_dict_get_string(info, "TradeTime")
             self.trade_time_text = from_dict_get_string(info, "TradeTime")

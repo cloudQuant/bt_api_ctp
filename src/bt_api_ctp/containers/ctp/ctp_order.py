@@ -85,10 +85,10 @@ class CtpOrderData(OrderData):
             self.direction = CTP_DIRECTION_MAP.get(direction_key, "buy")
             offset_char = from_dict_get_string(info, "CombOffsetFlag", "0") or "0"
             self.offset = CTP_OFFSET_MAP.get(offset_char[0] if offset_char else "0", "open")
-            self.limit_price = from_dict_get_float(info, "LimitPrice", 0.0)
-            self.volume_total_original = ctp_int(info, "VolumeTotalOriginal", 0)
-            self.volume_traded = ctp_int(info, "VolumeTraded", 0)
-            self.volume_total = ctp_int(info, "VolumeTotal", 0)
+            self.limit_price = from_dict_get_float(info, "LimitPrice")
+            self.volume_total_original = ctp_int(info, "VolumeTotalOriginal")
+            self.volume_traded = ctp_int(info, "VolumeTraded")
+            self.volume_total = ctp_int(info, "VolumeTotal")
             status_key = ctp_dict_code(info, "OrderStatus", "")
             if self._local_submission_projection is not None:
                 if status_key:

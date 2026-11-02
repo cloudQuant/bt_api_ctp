@@ -218,3 +218,25 @@ def test_trade_and_bar_unknown_facts():
     assert bar.get_base_asset_volume() == 30
     assert bar.get_quote_asset_volume() == 45000.0
     assert bar.get_num_trades() is None
+
+
+@pytest.mark.parametrize(
+    "factory, getters",
+    [
+        (lambda: CtpTickerData({"InstrumentID": "SA609"}), ("get_bid_volume", "get_ask_volume")),
+        (
+            lambda: CtpBarData({"open_time": "t"}),
+            ("get_open_price", "get_close_price", "get_volume", "get_amount"),
+        ),
+        (lambda: CtpTradeData({"TradeID": "T1"}, "SA609"), ("get_trade_price", "get_trade_volume")),
+        (
+            lambda: CtpPositionData({"InstrumentID": "SA609"}),
+            ("get_position_volume", "get_position_fee", "get_today_position", "get_avg_price"),
+        ),
+    ],
+)
+def test_missing_native_numbers_are_unknown_not_zero(factory, getters):
+    # Contract v1 / INV-04: an absent native field is unknown (None), never 0.
+    container = factory()
+    for name in getters:
+        assert getattr(container, name)() is None, name

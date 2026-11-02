@@ -144,12 +144,19 @@ class TestCtpPositionData:
         assert position.get_avg_price(contract_multiplier=300) == 4000.0
 
     def test_get_avg_price_zero_volume(self):
-        """Test get_avg_price with zero volume."""
+        """A flat row has no average price (unknown, not zero)."""
         data = {"Position": 0, "PositionCost": 35000.0}
         position = CtpPositionData(data)
         position.init_data()
 
-        assert position.get_avg_price() == 0.0
+        assert position.get_avg_price() is None
+
+    def test_get_avg_price_missing_cost_is_unknown(self):
+        """A missing cost basis never yields a fabricated zero average."""
+        position = CtpPositionData({"Position": 3})
+        position.init_data()
+
+        assert position.get_avg_price() is None
 
     def test_get_mark_price(self):
         """Test get_mark_price."""
@@ -197,9 +204,9 @@ class TestCtpPositionData:
         assert position.get_position_commission() == 12.5
 
     def test_get_position_funding_value(self):
-        """Test get_position_funding_value returns 0 for CTP."""
+        """Futures have no funding payments: not applicable (None), not zero."""
         position = CtpPositionData({})
-        assert position.get_position_funding_value() == 0.0
+        assert position.get_position_funding_value() is None
 
     def test_get_position_direction(self):
         """Test get_position_direction."""

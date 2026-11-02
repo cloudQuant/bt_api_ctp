@@ -42,13 +42,13 @@ class CtpBarData(BarData):
         if isinstance(info, dict):
             self.open_time = from_dict_get_string(info, "open_time")
             self.close_time = from_dict_get_string(info, "close_time")
-            self.open_price = from_dict_get_float(info, "open", 0.0)
-            self.high_price = from_dict_get_float(info, "high", 0.0)
-            self.low_price = from_dict_get_float(info, "low", 0.0)
-            self.close_price = from_dict_get_float(info, "close", 0.0)
-            self.volume_val = from_dict_get_int(info, "volume", 0)
-            self.amount_val = from_dict_get_float(info, "amount", 0.0)
-            self.open_interest = from_dict_get_float(info, "open_interest", 0.0)
+            self.open_price = from_dict_get_float(info, "open")
+            self.high_price = from_dict_get_float(info, "high")
+            self.low_price = from_dict_get_float(info, "low")
+            self.close_price = from_dict_get_float(info, "close")
+            self.volume_val = from_dict_get_int(info, "volume")
+            self.amount_val = from_dict_get_float(info, "amount")
+            self.open_interest = from_dict_get_float(info, "open_interest")
             self.settlement_price_val = from_dict_get_float(info, "settlement_price")
         self._data_initialized = True
         self._initialized = True
@@ -72,22 +72,22 @@ class CtpBarData(BarData):
         return self.open_time or ""
 
     def get_open_price(self):
-        return float(self.open_price or 0.0)
+        return None if self.open_price is None else float(self.open_price)
 
     def get_high_price(self):
-        return float(self.high_price or 0.0)
+        return None if self.high_price is None else float(self.high_price)
 
     def get_low_price(self):
-        return float(self.low_price or 0.0)
+        return None if self.low_price is None else float(self.low_price)
 
     def get_close_price(self):
-        return float(self.close_price or 0.0)
+        return None if self.close_price is None else float(self.close_price)
 
     def get_volume(self):
-        return int(self.volume_val or 0)
+        return None if self.volume_val is None else int(self.volume_val)
 
     def get_amount(self):
-        return float(self.amount_val or 0.0)
+        return None if self.amount_val is None else float(self.amount_val)
 
     def get_close_time(self):
         self._ensure_init()
@@ -117,10 +117,10 @@ class CtpBarData(BarData):
         return True
 
     def get_open_interest(self):
-        return float(self.open_interest or 0.0)
+        return None if self.open_interest is None else float(self.open_interest)
 
     def get_settlement_price(self):
-        return float(self.settlement_price_val or 0.0)
+        return None if self.settlement_price_val is None else float(self.settlement_price_val)
 
     def get_all_data(self):
         if not self._initialized:

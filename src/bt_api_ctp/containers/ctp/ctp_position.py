@@ -97,16 +97,16 @@ class CtpPositionData(PositionData):
             self.instrument_id = from_dict_get_string(info, "InstrumentID")
             pos_direction = ctp_dict_code(info, "PosiDirection", "1") or "1"
             self.position_direction = CTP_POS_DIRECTION_MAP.get(pos_direction, "net")
-            self.position_volume = ctp_int(info, "Position", 0)
-            self.today_position = ctp_int(info, "TodayPosition", 0)
-            self.yd_position = ctp_int(info, "YdPosition", 0)
-            self.position_cost = from_dict_get_float(info, "PositionCost", 0.0)
-            self.open_cost = from_dict_get_float(info, "OpenCost", 0.0)
-            self.close_profit = from_dict_get_float(info, "CloseProfit", 0.0)
-            self.use_margin = from_dict_get_float(info, "UseMargin", 0.0)
-            self.commission = from_dict_get_float(info, "Commission", 0.0)
-            self.position_profit = from_dict_get_float(info, "PositionProfit", 0.0)
-            self.settlement_price = from_dict_get_float(info, "SettlementPrice", 0.0)
+            self.position_volume = ctp_int(info, "Position")
+            self.today_position = ctp_int(info, "TodayPosition")
+            self.yd_position = ctp_int(info, "YdPosition")
+            self.position_cost = from_dict_get_float(info, "PositionCost")
+            self.open_cost = from_dict_get_float(info, "OpenCost")
+            self.close_profit = from_dict_get_float(info, "CloseProfit")
+            self.use_margin = from_dict_get_float(info, "UseMargin")
+            self.commission = from_dict_get_float(info, "Commission")
+            self.position_profit = from_dict_get_float(info, "PositionProfit")
+            self.settlement_price = from_dict_get_float(info, "SettlementPrice")
             self.exchange_id = from_dict_get_string(info, "ExchangeID")
         self._data_initialized = True
         self._initialized = True
@@ -122,16 +122,15 @@ class CtpPositionData(PositionData):
         return self.instrument_id or self.symbol_name or ""
 
     def get_position_volume(self):
-        return self.position_volume or 0
+        return self.position_volume
 
     def get_avg_price(self, contract_multiplier=None):
-        if self.position_volume and self.position_volume > 0:
-            multiplier = float(contract_multiplier or 0.0)
-            denominator = (
-                self.position_volume * multiplier if multiplier > 0 else self.position_volume
-            )
-            return float(self.position_cost or 0.0) / denominator
-        return 0.0
+        """Average cost per unit; None when cost or size is unknown or the row is flat."""
+        if self.position_cost is None or not self.position_volume or self.position_volume <= 0:
+            return None
+        multiplier = float(contract_multiplier or 0.0)
+        denominator = self.position_volume * multiplier if multiplier > 0 else self.position_volume
+        return float(self.position_cost) / denominator
 
     def get_mark_price(self):
         return self.settlement_price
@@ -146,22 +145,23 @@ class CtpPositionData(PositionData):
         return self.use_margin
 
     def get_position_unrealized_pnl(self):
-        return self.position_profit or 0.0
+        return self.position_profit
 
     def get_position_commission(self):
-        return self.commission or 0.0
+        return self.commission
 
     def get_position_funding_value(self):
-        return 0.0
+        # Futures positions have no funding payments: not applicable, not zero.
+        return None
 
     def get_position_direction(self):
         return self.position_direction
 
     def get_today_position(self):
-        return self.today_position or 0
+        return self.today_position
 
     def get_yesterday_position(self):
-        return self.yd_position or 0
+        return self.yd_position
 
     # Contract v1: standard getters (iteration 60, step 60.05).
     def get_position_side(self):
