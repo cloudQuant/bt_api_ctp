@@ -23,6 +23,7 @@ class _AdvanceGenerationAfterUnlock:
     def __init__(self, lock, client: MdClient) -> None:
         self._lock = lock
         self._client = client
+        self._exits = 0
 
     def __enter__(self):
         self._lock.acquire()
@@ -30,8 +31,12 @@ class _AdvanceGenerationAfterUnlock:
 
     def __exit__(self, _exc_type, _exc, _traceback):
         self._lock.release()
-        with self._lock:
-            self._client._connection_generation += 1
+        self._exits += 1
+        # The callback fence first acquires the lock to pin native lifetime;
+        # advance only after the callback itself has admitted and read state.
+        if self._exits == 2:
+            with self._lock:
+                self._client._connection_generation += 1
 
 
 class TestDisconnectCallback:

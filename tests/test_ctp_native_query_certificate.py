@@ -483,12 +483,12 @@ def test_instrument_query_certifies_exchange_rows_without_claiming_filter_was_ap
 @pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
 def test_rate_response_with_blank_exchange_is_recorded_as_unverified(request_type):
     client = offline_client()
+    certificate_builder = builder(client)
     queries = issue_all(client)
     row = dict(query_records(request_type)[0])
     row["ExchangeID"] = ""
     queries[request_type] = issue_query(client, request_type, records=(row,))
 
-    certificate_builder = builder(client)
     add_all(certificate_builder, queries)
     public = certificate_builder.finish().as_public_dict()
     rate = next(query for query in public["queries"] if query["request_type"] == request_type)
@@ -501,8 +501,8 @@ def test_rate_response_with_blank_exchange_is_recorded_as_unverified(request_typ
 @pytest.mark.parametrize("request_type", ("margin_rate", "commission_rate"))
 def test_rate_response_with_exact_exchange_is_recorded_as_exact(request_type):
     client = offline_client()
-    queries = issue_all(client)
     certificate_builder = builder(client)
+    queries = issue_all(client)
     add_all(certificate_builder, queries)
     public = certificate_builder.finish().as_public_dict()
     rate = next(query for query in public["queries"] if query["request_type"] == request_type)

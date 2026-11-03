@@ -89,8 +89,8 @@ class _LeaseTraderApiFactory:
 def _cancel_payload():
     return {
         "BrokerID": "3070",
-        "InvestorID": "offline-account",
-        "UserID": "offline-account",
+        "InvestorID": "offlineacct",
+        "UserID": "offlineacct",
         "InstrumentID": "SA2701",
         "OrderRef": _ORDER_REF,
         "ExchangeID": "CZCE",
@@ -106,8 +106,8 @@ def _cancel_payload():
 def _submit_payload():
     return {
         "BrokerID": "3070",
-        "InvestorID": "offline-account",
-        "UserID": "offline-account",
+        "InvestorID": "offlineacct",
+        "UserID": "offlineacct",
         "InstrumentID": "SA2701",
         "OrderRef": _ORDER_REF,
         "Direction": "0",
@@ -140,7 +140,7 @@ def _active_simnow_client(monkeypatch, *, write_intent_verifier=True):
     client = TraderClient(
         credential_binding.td_front,
         "3070",
-        "offline-account",
+        "offlineacct",
         "synthetic-test-secret",
         md_front=credential_binding.md_front,
         ctp_env_profile="config_front_pair",

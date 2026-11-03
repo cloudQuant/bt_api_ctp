@@ -111,7 +111,7 @@ def test_regular_success_error_id_cannot_authenticate_wrong_identity(change, cap
     assert "secret" not in caplog.text
 
 
-def test_regular_provider_error_is_sanitized_and_stale_spi_is_counted():
+def test_regular_provider_error_is_sanitized_and_stale_spi_is_fenced():
     client, spi, api = wire()
     errors = []
     client.on_error = errors.append
@@ -124,8 +124,8 @@ def test_regular_provider_error_is_sanitized_and_stale_spi_is_counted():
     replacement = _MdSpi(client, native_api=api)
     client._spi = replacement
     spi.OnRspUserLogin(response(client), SimpleNamespace(ErrorID=0), 1, True)
-    assert client.login_callback_diagnostic.callback_count == 2
-    assert client.login_callback_diagnostic.disposition is MdLoginCallbackDisposition.STALE_SPI
+    assert client.login_callback_diagnostic.callback_count == 1
+    assert client.login_callback_diagnostic.disposition is MdLoginCallbackDisposition.PROVIDER_REJECTED
 
 
 @pytest.mark.parametrize("last", [False, 1, "true"])

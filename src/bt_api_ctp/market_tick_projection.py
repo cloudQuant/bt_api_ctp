@@ -14,6 +14,7 @@ from bt_api_base.market_tick_protocol import (
     MarketTickPayload,
 )
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
+from bt_api_base.containers.auto_init_mixin import container_class
 
 _CTP_TZ = timezone(timedelta(hours=8))
 _UTC = timezone.utc
@@ -42,6 +43,10 @@ def _utc_text(value: Any) -> Optional[str]:
 
 def _iso_date(value: Any) -> Optional[str]:
     if type(value) is not str or not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y%m%d").date().isoformat()
+    except ValueError:
         return None
 
 
@@ -78,10 +83,6 @@ def _quality_flags(values: Any) -> tuple[str, ...]:
         else:
             result.append(normalized.get(value, "PROVIDER_QUALITY_FAILURE"))
     return tuple(sorted(set(result)))
-    try:
-        return datetime.strptime(value, "%Y%m%d").date().isoformat()
-    except ValueError:
-        return None
 
 
 def _provider_event_time(data: Mapping[str, Any]) -> Optional[str]:
@@ -130,7 +131,7 @@ def project_ctp_market_tick(
     after it receives the corresponding market frame.
     """
 
-    if type(item) is not CtpTickerData or type(key) is not MarketSubscriptionKey:
+    if container_class(item) is not CtpTickerData or type(key) is not MarketSubscriptionKey:
         raise ValueError("invalid CTP tick input")
     if not isinstance(receipt, Mapping) or source_scope is None:
         raise ValueError("missing CTP callback receipt")
@@ -166,7 +167,7 @@ def project_ctp_market_tick(
         or receipt.get("clock_domain_id") != data.get("clock_domain_id")
         or receipt.get("source") != data.get("source")
         or type(receipt.get("rules_hash")) is not str
-        or not receipt.get("rules_hash")
+        or receipt.get("rules_hash") != data.get("rules_hash")
         or receipt.get("source_clock_quality") != data.get("source_clock_quality")
         or receipt.get("receive_clock_quality") != data.get("receive_clock_quality")
         or receipt.get("source_clock_error_ms") != data.get("source_clock_error_ms")
@@ -243,7 +244,9 @@ def project_ctp_market_tick(
         received_at_utc=received_at,
         received_monotonic_ns=received_monotonic,
         provider_source=source,
-        quality_contract_ref=receipt["rules_hash"],
+        # An empty native receipt means no rule identity was attested.  It is
+        # not evidence of a rule set and must remain explicitly unavailable.
+        quality_contract_ref=receipt["rules_hash"] or None,
         provider_connection_generation=connection_generation,
         provider_sequence=sequence,
         provider_subscription_epoch=subscription_epoch,

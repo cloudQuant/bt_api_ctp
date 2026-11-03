@@ -80,7 +80,7 @@ def _configured_simnow_client(
     client = TraderClient(
         td_front,
         "3070",
-        "offline-account",
+        "offlineacct",
         "unused",
         **constructor_scope,
     )
@@ -97,7 +97,7 @@ def _configured_simnow_client(
     _TraderSpi(client).OnRspUserLogin(
         SimpleNamespace(
             BrokerID="3070",
-            UserID="offline-account",
+            UserID="offlineacct",
             FrontID=1,
             SessionID=2,
             TradingDay="20260923",
@@ -131,7 +131,7 @@ def _configured_simnow_client(
     scope_values = {
         "account_fingerprint": f"acct_{client._account_fingerprint}",
         "account_fingerprint_sha256": hashlib.sha256(
-            b"3070:offline-account"
+            b"3070:offlineacct"
         ).hexdigest(),
         "trading_day": client._trading_day,
         "connection_generation": client._connection_generation,
@@ -275,8 +275,8 @@ def _configured_simnow_client(
 def _insert_field(**changes):
     values = {
         "BrokerID": "3070",
-        "InvestorID": "offline-account",
-        "UserID": "offline-account",
+        "InvestorID": "offlineacct",
+        "UserID": "offlineacct",
         "InstrumentID": "SA2701",
         "ExchangeID": "CZCE",
         "OrderRef": "000000000101",
@@ -297,8 +297,8 @@ def _insert_field(**changes):
 def _cancel_field(**changes):
     values = {
         "BrokerID": "3070",
-        "InvestorID": "offline-account",
-        "UserID": "offline-account",
+        "InvestorID": "offlineacct",
+        "UserID": "offlineacct",
         "InstrumentID": "SA2701",
         "ExchangeID": "CZCE",
         "OrderRef": "000000000101",
@@ -594,7 +594,7 @@ def test_entry_scope_mismatch_rejects_before_native_insert(field_changes, call_c
 def test_missing_binding_or_capability_stays_closed_before_native_insert():
     td_front, _md_front = official_simnow_fronts("set1_group1")
     native = _CountingNativeApi()
-    client = TraderClient(td_front, "3070", "offline-account", "unused")
+    client = TraderClient(td_front, "3070", "offlineacct", "unused")
     client._api = native
     client._session_native_api = native
     client._session_native_front = td_front
@@ -628,7 +628,7 @@ def test_missing_binding_or_capability_stays_closed_before_native_insert():
 
 def test_binding_rejects_7x24_profile_and_never_dispatches_native_write():
     td_front, md_front = official_simnow_fronts("set2_7x24")
-    client = TraderClient(td_front, "3070", "offline-account", "unused")
+    client = TraderClient(td_front, "3070", "offlineacct", "unused")
     native = _CountingNativeApi()
     client._api = native
     capability = _issue_ctp_execution_authority_for_core()

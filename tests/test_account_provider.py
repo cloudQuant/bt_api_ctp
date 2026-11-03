@@ -190,6 +190,9 @@ def _provider(feed: _Feed) -> CtpReadOnlyAccountSessionProvider:
 
 def test_ctp_account_provider_projects_complete_generation_bound_readonly_snapshot() -> None:
     feed = _Feed()
+    # This legacy provider cannot project native active-order identifiers
+    # without an SDK-issued observation binding.
+    feed.rows["orders"] = ()
     provider = _provider(feed)
     assert provider.native_owner_created is False
     assert provider.native_connection_generation is None
@@ -223,15 +226,7 @@ def test_ctp_account_provider_projects_complete_generation_bound_readonly_snapsh
         "long",
         "3",
     )
-    assert len(observation.open_orders or ()) == 1
-    order = observation.open_orders[0]
-    assert (order.order_id, order.side, order.position_side, order.status) == (
-        "CFFEX:sys-order-1",
-        "sell",
-        "long",
-        "partially_filled",
-    )
-    assert (order.quantity, order.filled_quantity, order.limit_price) == ("3", "1", "4001")
+    assert observation.open_orders == ()
     original_trader = feed._trader
     complete_receipt = original_trader.stop_receipts[-1]
     assert provider.close() is False
@@ -253,6 +248,13 @@ def test_ctp_account_provider_projects_complete_generation_bound_readonly_snapsh
     assert provider.last_native_stop_receipt is None
     assert provider.close() is False
     assert provider.close() is True
+
+
+def test_ctp_account_provider_rejects_active_order_without_observation_binding() -> None:
+    provider = _provider(_Feed())
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="ORDER_OBSERVATION_IDENTITY_UNAVAILABLE"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
 
 
 def test_ctp_account_provider_keeps_interrupted_startup_uncertain_until_receipt() -> None:

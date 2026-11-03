@@ -31,6 +31,7 @@ from bt_api_ctp.containers.ctp.ctp_position_evidence import (
     build_ctp_position_evidence,
 )
 from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
+from bt_api_base.containers.auto_init_mixin import container_class
 from bt_api_ctp.containers.ctp.ctp_trade import CtpTradeData
 from bt_api_ctp.ctp import client as ctp_client
 from bt_api_ctp.ctp.ctp_structs_order import (
@@ -683,7 +684,7 @@ def _get_ctp_managed_quote_v2_receipt(
     ``exchange_kwargs`` or subscription topics to manufacture qualification.
     """
 
-    if type(ticker) is not CtpTickerData or type(stream) is not CtpMarketStream:
+    if container_class(ticker) is not CtpTickerData or type(stream) is not CtpMarketStream:
         return None
     receipt = getattr(ticker, "_managed_quote_v2_receipt", None)
     if (

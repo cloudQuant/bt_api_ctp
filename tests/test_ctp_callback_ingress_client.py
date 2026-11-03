@@ -885,9 +885,17 @@ def test_managed_cancel_rejects_non_int32_store_action_ref_before_native_call(
         client.stop()
 
 
-@pytest.mark.parametrize("source_action_ref", [0, 444, "91", True])
+@pytest.mark.parametrize(
+    ("source_action_ref", "error"),
+    [
+        (0, "ctp_managed_native_field_binding_mismatch"),
+        (444, "ctp_managed_native_field_binding_mismatch"),
+        ("91", "ctp_managed_native_field_integer_invalid"),
+        (True, "ctp_managed_native_field_integer_invalid"),
+    ],
+)
 def test_managed_cancel_requires_caller_field_to_match_store_action_ref(
-    monkeypatch, source_action_ref
+    monkeypatch, source_action_ref, error
 ):
     client, api, _sink, owner = _new_active_client(monkeypatch)
     try:
@@ -914,14 +922,19 @@ def test_managed_cancel_requires_caller_field_to_match_store_action_ref(
             request_id=53,
         )
         lease = client.acquire_managed_native_call_lease(owner, binding)
-        field = _field(
-            CThostFtdcInputOrderActionField,
-            payload,
-            RequestID=53,
-            OrderActionRef=source_action_ref,
-        )
+        if type(source_action_ref) is not int:
+            # SWIG enforces the native integer type before the SDK sees a
+            # field, so use an object double to exercise its type guard.
+            field = SimpleNamespace(**payload, RequestID=53, OrderActionRef=source_action_ref)
+        else:
+            field = _field(
+                CThostFtdcInputOrderActionField,
+                payload,
+                RequestID=53,
+                OrderActionRef=source_action_ref,
+            )
 
-        with pytest.raises(CtpExecutionGateError):
+        with pytest.raises(CtpExecutionGateError, match=error):
             client.submit_order_action_with_lease(lease, field, 53)
         assert not [call for call in api.calls if call[0] == "ReqOrderAction"]
     finally:

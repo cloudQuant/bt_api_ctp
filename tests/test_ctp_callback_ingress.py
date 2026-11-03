@@ -83,7 +83,7 @@ def _login_args(*, broker: str = "broker-1", user: str = "user-1"):
 def test_generated_spi_inventory_and_every_signature_are_frozen_by_ast():
     raw = TRADER_API_PATH.read_bytes()
     assert hashlib.sha256(raw).hexdigest().upper() == (
-        "26A1CAB3D387C5AFB79FC7C041A7F0E333CAFCA708283B05CE65C2B2EFB08610"
+        "81F69922A0D96F00D45B5644EDAF31EBA4CBB1DC8E590BD8677690DA3F12ED65"
     )
     tree = ast.parse(raw.decode("utf-8"))
     spi = next(
@@ -140,6 +140,7 @@ def test_safe_field_types_and_getter_presence_match_generated_swig_sources():
         "pTrade": "CThostFtdcTradeField",
         "pInvestorPosition": "CThostFtdcInvestorPositionField",
         "pInstrument": "CThostFtdcInstrumentField",
+        "pProduct": "CThostFtdcProductField",
         "pDepthMarketData": "CThostFtdcDepthMarketDataField",
         "pInstrumentStatus": "CThostFtdcInstrumentStatusField",
     }

@@ -64,6 +64,7 @@ def _is_native_ctp_quote_v2_ticker(item: Any) -> bool:
     """Accept only the CTP plugin's native ticker at the direct ingress edge."""
 
     try:
+        from bt_api_base.containers.auto_init_mixin import container_class
         from bt_api_ctp.containers.ctp.ctp_ticker import CtpTickerData
     except Exception:
         # CTP is an optional plugin.  If its canonical native container cannot
@@ -72,7 +73,8 @@ def _is_native_ctp_quote_v2_ticker(item: Any) -> bool:
     # Module and qualname strings are attacker-controlled Python attributes.
     # The native stream emits this exact plugin-owned class; rejecting subclasses
     # also prevents a caller from manufacturing a partially initialized ticker.
-    return type(item) is CtpTickerData
+    # ``container_class`` keeps that exactness for a published (frozen) row.
+    return container_class(item) is CtpTickerData
 
 
 def _ctp_managed_quote_v2_receipt(item: Any, stream: Any) -> Mapping[str, Any] | None:

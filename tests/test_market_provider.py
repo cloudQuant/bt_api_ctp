@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 from bt_api_base.market_protocol import MarketInstrumentKey, MarketSubscriptionKey
+from bt_api_base.market_tick_protocol import MARKET_TICK_SCHEMA, MARKET_TICK_SCHEMA_VERSION
 
 from bt_api_ctp.ctp.client import CtpNativeStopReceipt
 from bt_api_ctp.feeds import live_ctp_feed
 from bt_api_ctp.feeds.live_ctp_feed import ConnectionState, CtpMarketStream
+from bt_api_ctp import market_provider as market_provider_module
 from bt_api_ctp.market_provider import (
     BoundedCtpQuoteV2Queue,
     CtpQuoteV2MarketProvider,
@@ -34,7 +36,9 @@ def _key(**updates: object) -> MarketSubscriptionKey:
             instrument_id="IF2612",
             native_symbol="IF2612",
         ),
-        "channel": "ctp.quote.v2",
+        # MarketSubscriptionKey uses the neutral channel; ctp.quote.v2 is
+        # the payload schema version, not a subscription channel.
+        "channel": "tick",
     }
     values.update(updates)
     return MarketSubscriptionKey(**values)  # type: ignore[arg-type]
@@ -388,12 +392,10 @@ def test_ctp_market_provider_projects_the_native_callback_and_opaque_clock_ident
     (event,) = provider.poll(handle, limit=8)
     assert event.generation == "hub-generation-r1"
     assert event.observed_at_utc.endswith("Z")
-    assert event.data["schema_version"] == "ctp.quote.v2"
-    assert event.data["exchange_id"] == "CFFEX"
-    assert event.data["instrument_id"] == "IF2612"
-    assert event.data["symbol"] == "IF2612"
-    assert event.data["asset_type"] == "future"
-    assert event.data["source"] == "ctp.native.md"
+    assert event.data["schema"] == MARKET_TICK_SCHEMA
+    assert event.data["schema_version"] == MARKET_TICK_SCHEMA_VERSION
+    assert event.data["instrument"] == key.instrument.to_dict()
+    assert event.data["provider_source"] == "ctp.native.md"
     assert event.data["clock_domain_id"] == scope.clock_domain_id
     assert event.data["clock_source_session_id"] == scope.clock_source_session_id
     assert event.data["clock_source"] == scope.clock_source
@@ -401,18 +403,58 @@ def test_ctp_market_provider_projects_the_native_callback_and_opaque_clock_ident
     assert event.data["receive_clock_quality"] == "unknown"
     assert event.data["source_clock_error_ms"] is None
     assert event.data["receive_clock_error_ms"] is None
-    assert event.data["freshness_verified"] is False
+    assert event.data["quality_contract_ref"] is None
+    assert event.data["freshness_status"] == "unavailable"
     assert event.data["execution_eligible"] is False
-    assert event.data["execution_qualified"] is False
     assert event.data["last_price"] == 4_001.0
     assert event.data["bid_price"] == 4_000.0
     assert event.data["ask_price"] == 4_002.0
-    assert event.data["recv_time_utc"] == event.observed_at_utc
-    assert event.data["event_time_utc"].endswith("Z")
+    assert event.data["received_at_utc"] == event.observed_at_utc
+    assert event.data["provider_event_time_utc"].endswith("Z")
+    assert event.data["trading_date"] == "2026-10-17"
+    assert event.data["event_session_date"] == "2026-10-17"
 
     assert provider.unsubscribe(handle) is True
     assert client.stop_calls == 1
     assert provider.diagnostics["active_handles"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("rules_hash", None), ("rules_hash", "unattested"), ("source", "other")],
+)
+def test_ctp_market_provider_rejects_unbound_receipt_facts(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    project = market_provider_module.project_ctp_market_tick
+
+    def project_with_tampered_receipt(
+        item: object, key: object, scope: object, receipt: dict
+    ):
+        tampered = dict(receipt)
+        tampered[field] = value
+        return project(item, key, scope, tampered)
+
+    monkeypatch.setattr(
+        market_provider_module, "project_ctp_market_tick", project_with_tampered_receipt
+    )
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    try:
+        (client,) = _SyntheticMdClient.instances
+        _emit_synthetic_tick(client, "IF2612", 2)
+        with pytest.raises(CtpQuoteV2MarketProviderError) as error:
+            provider.poll(handle, limit=1)
+        assert error.value.code == "CTP_MARKET_EVENT_INVALID"
+    finally:
+        assert provider.unsubscribe(handle) is True
 
 
 def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_unsubscribes(
@@ -509,8 +551,8 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
         )
     (first_event,) = provider.poll(first, limit=8)
     (second_event,) = provider.poll(second, limit=8)
-    assert first_event.data["symbol"] == "IF2612"
-    assert second_event.data["symbol"] == "IH2612"
+    assert first_event.data["instrument"]["native_symbol"] == "IF2612"
+    assert second_event.data["instrument"]["native_symbol"] == "IH2612"
     assert first_event.data["clock_domain_id"] == second_event.data["clock_domain_id"]
     assert (
         first_event.data["clock_source_session_id"] == second_event.data["clock_source_session_id"]
@@ -605,11 +647,15 @@ def test_incremental_keys_keep_one_md_epoch_and_preserve_queued_ticks(
     first_events = provider.poll(first, limit=8)
     second_events = provider.poll(second, limit=8)
     third_events = provider.poll(third, limit=8)
-    assert [event.data["symbol"] for event in first_events] == ["IF2612", "IF2612"]
-    assert [event.data["symbol"] for event in second_events] == ["IH2612", "IH2612"]
-    assert [event.data["symbol"] for event in third_events] == ["IC2612"]
+    assert [event.data["instrument"]["native_symbol"] for event in first_events] == [
+        "IF2612", "IF2612"
+    ]
+    assert [event.data["instrument"]["native_symbol"] for event in second_events] == [
+        "IH2612", "IH2612"
+    ]
+    assert [event.data["instrument"]["native_symbol"] for event in third_events] == ["IC2612"]
     assert {
-        event.data["subscription_epoch"]
+        event.data["provider_subscription_epoch"]
         for events in (first_events, second_events, third_events)
         for event in events
     } == {1}
@@ -651,7 +697,9 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
         stream_factory=factory,
         source_ref=_SOURCE_REF,
         entitlement_ref=_ENTITLEMENT_REF,
-        stop_timeout_seconds=1.0,
+        # The stream loop can sleep for one second before observing stop;
+        # allow scheduling time without weakening incomplete-receipt checks.
+        stop_timeout_seconds=3.0,
     )
     first = provider.subscribe(keys[0], generation="hub-generation-a")
     second = provider.subscribe(keys[1], generation="hub-generation-b")
@@ -695,7 +743,7 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
         UpdateMillisec=250,
     )
     (active_event,) = provider.poll(second, limit=8)
-    assert active_event.data["symbol"] == "IH2612"
+    assert active_event.data["instrument"]["native_symbol"] == "IH2612"
 
     old_client.stop_receipts.extend(
         (
@@ -979,7 +1027,9 @@ def test_ctp_market_provider_retains_unconfirmed_native_stop_for_retry(
         stream_factory=_stream_factory,
         source_ref=_SOURCE_REF,
         entitlement_ref=_ENTITLEMENT_REF,
-        stop_timeout_seconds=1.0,
+        # Allow the one-second stream-loop sleep and thread scheduling to
+        # finish; the incomplete native receipt still forces the first failure.
+        stop_timeout_seconds=3.0,
     )
     handle = provider.subscribe(_key(), generation="hub-generation-r1")
     (client,) = _SyntheticMdClient.instances
@@ -1168,7 +1218,7 @@ def test_ctp_market_provider_reconnect_requires_stop_ack_tick_and_hub_epoch(
         UpdateMillisec=0,
     )
     (event,) = provider.poll(handle, limit=1)
-    assert event.data["connection_generation"] == new_scope.connection_generation
+    assert event.data["provider_connection_generation"] == new_scope.connection_generation
     assert event.data["last_price"] == 4_004.0
     descriptor = provider.describe_source(
         handle,

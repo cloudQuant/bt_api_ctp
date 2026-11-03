@@ -12,7 +12,9 @@ from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
 @pytest.fixture
 def feed():
-    result = CtpRequestDataFuture(queue.Queue(), broker_id="fixture", user_id="fixture")
+    result = CtpRequestDataFuture(
+        queue.Queue(), broker_id="fixture", user_id="fixture", td_front="tcp://offline.invalid:1"
+    )
     calls = []
     # The managed feed no longer accepts a caller-created ``object()`` as a
     # write capability.  This isolated fixture uses the deliberately private
@@ -76,7 +78,7 @@ def test_native_time_in_force_preserves_dated_close(feed, tif, offset, flag):
         "sell-limit",
         offset=offset,
         exchange_id="SHFE",
-        client_order_id="123",
+        client_order_id="000000000123",
         time_in_force=tif,
         _execution_capability=client._test_execution_capability,
     )
@@ -99,6 +101,7 @@ def test_iteration22_rejects_non_gfd_time_in_force(feed, tif):
             "sell-limit",
             offset="close_today",
             exchange_id="SHFE",
+            client_order_id="000000000123",
             time_in_force=tif,
             _execution_capability=client._test_execution_capability,
         )
@@ -116,6 +119,7 @@ def test_iteration22_rejects_invalid_price_before_native_order_request(feed, pri
             "sell-limit",
             offset="close_today",
             exchange_id="SHFE",
+            client_order_id="000000000123",
             time_in_force="GFD",
             _execution_capability=client._test_execution_capability,
         )
