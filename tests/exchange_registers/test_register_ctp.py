@@ -1,18 +1,16 @@
-"""Tests for exchange_registers/register_ctp.py."""
+"""Offline tests for the declared CTP plugin registration entry point."""
 
-from __future__ import annotations
+from bt_api_base.testing import create_isolated_exchange_registry
 
-import pytest
+from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+from bt_api_ctp.plugin import register_plugin
 
 
-class TestRegisterCtp:
-    """Tests for CTP registration module."""
+def test_ctp_plugin_registers_future_feed():
+    registry = create_isolated_exchange_registry()
 
-    def test_module_imports(self):
-        """Test module can be imported."""
-        try:
-            from bt_api_ctp.registry_registration import register_ctp
+    info = register_plugin(registry)
 
-            assert register_ctp is not None
-        except ImportError:
-            pytest.skip("CTP module not available")
+    assert info.name == "bt_api_ctp"
+    assert info.supported_exchanges == ("CTP___FUTURE",)
+    assert registry.get_feed_class("CTP___FUTURE") is CtpRequestDataFuture
