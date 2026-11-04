@@ -639,7 +639,7 @@ class CtpReadOnlyAccountSessionProvider:
     def _validate_scope(self, scope: object, trader: object, account_key: AccountKey) -> None:
         if (
             type(scope) is not _QuerySessionScope
-            or scope.issuer is not trader
+            or not _issued_by(trader, scope.issuer)
             or scope.read_only_ready is not True
             or type(scope.connection_generation) is not int
             or scope.connection_generation <= 0
@@ -685,7 +685,7 @@ class CtpReadOnlyAccountSessionProvider:
         source = result.query_source
         if (
             source._seal is not _QUERY_SOURCE_SEAL
-            or source.issuer is not trader
+            or not _issued_by(trader, source.issuer)
             or source.request_type != query_name
             or type(result.request_id) is not int
             or result.request_id <= 0
@@ -1204,6 +1204,26 @@ def _stage_execution_poll(
     state.facts.update(staged_facts)
     state.order_progress.update(staged_progress)
     state.pending.extend(queued)
+
+
+def _issued_by(trader: object, issuer: object) -> bool:
+    """Exact issuer identity: the trader itself, or its private evidence issuer.
+
+    A real ``TraderClient`` seals its scopes and query sources with a private
+    issuer object (``issued_query_evidence``); requiring ``issuer is trader``
+    refused every real client (``SESSION_SCOPE_UNTRUSTED``). Both forms are
+    object-identity checks against objects the trader owns.
+    """
+
+    if issuer is trader:
+        return True
+    check = getattr(type(trader), "issued_query_evidence", None)
+    if not callable(check):
+        return False
+    try:
+        return check(trader, issuer) is True
+    except Exception:
+        return False
 
 
 def _native_stop_confirmed(

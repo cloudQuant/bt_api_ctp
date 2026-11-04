@@ -9136,6 +9136,15 @@ class TraderClient:
                 "execution_gate_revocation_reason": execution_gate["revocation_reason"],
             }
 
+    def issued_query_evidence(self, issuer: object) -> bool:
+        """Whether ``issuer`` is this client's private query-evidence issuer.
+
+        Identity only: lets a consumer check that a session scope or query
+        source came from this exact client without exposing the issuer.
+        """
+
+        return issuer is self._query_evidence_issuer
+
     def get_query_session_scope(self) -> _QuerySessionScope:
         """Return an opaque typed scope for strict read-only query consumers.
 
