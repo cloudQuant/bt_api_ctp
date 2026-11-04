@@ -275,6 +275,48 @@ def capture_query_session(
     )
 
 
+def _bind_validated_query_scope(
+    scope: Any,
+    *,
+    environment: str,
+) -> CtpQuerySessionBinding:
+    """Seal one query scope that its provider owner has already validated.
+
+    Provider-internal (iteration 60): ``bt_api_ctp.account_provider`` calls
+    it only after its own exact issuer, account and read-only checks of
+    ``scope``, to give ``CtpExecutionQueryProjector`` the trading day and
+    account realm of that scope. It reads no client and does not prove that
+    the session is still current; the caller keeps re-validating the scope
+    around every query.
+    """
+
+    if (
+        type(scope) is not _QuerySessionScope
+        or scope._seal is not _QUERY_SCOPE_SEAL
+        or scope.read_only_ready is not True
+        or type(environment) is not str
+        or _ENVIRONMENT_RE.fullmatch(environment) is None
+        or type(scope.captured_monotonic) is not float
+    ):
+        raise CtpQuerySessionBindingError("ctp_query_session_scope_unsealed")
+    source_ref, generation = _scope_digests(environment, None, scope)
+    return CtpQuerySessionBinding(
+        source_ref=source_ref,
+        generation=generation,
+        environment=environment,
+        environment_profile=None,
+        account_fingerprint=scope.account_fingerprint,
+        connection_generation=scope.connection_generation,
+        trading_day=scope.trading_day,
+        broker_id=scope.broker_id,
+        investor_id=scope.investor_id,
+        _issuer=scope.issuer,
+        _source_tags=scope.source_tags,
+        _captured_monotonic=scope.captured_monotonic,
+        _seal=_BINDING_SEAL,
+    )
+
+
 def validate_query_session(
     client: Any,
     binding: CtpQuerySessionBinding,

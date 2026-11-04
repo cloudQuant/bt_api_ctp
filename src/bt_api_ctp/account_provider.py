@@ -4,6 +4,17 @@ The provider owns one ``CtpRequestDataFuture`` instance on its caller thread.
 It accepts only complete, source-bound account/positions/orders query results
 from the current TraderClient generation.  It does not expose order,
 cancellation, settlement, or execution methods.
+
+Optional Gateway execution observations (iteration 60): when constructed with
+an observation issuer and the authorized instruments, the provider also offers
+``read_execution_observations`` / ``confirm_execution_observations`` for
+``GatewayAccountSessionWorker``. Per-fill observations come only from the
+source-sealed trade query and order observations only from the source-sealed
+order query, both projected by ``CtpExecutionQueryProjector`` (opaque issuer
+ids, never native identities). CTP trade rows carry no fee, so a fill is
+published without one (unknown, never zero); no fill is derived from an
+order's cumulative quantity. A client order id is ``verified`` only through a
+trusted resolver whose correlation the issuer validates and binds.
 """
 
 from __future__ import annotations
@@ -14,9 +25,11 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from math import isfinite
+from types import MappingProxyType
 from typing import Any
 
 from bt_api_base.account_protocol import (
@@ -27,6 +40,15 @@ from bt_api_base.account_protocol import (
     AccountPosition,
     AccountResourceKey,
     AccountValuation,
+    account_venue_contains_instrument_venue,
+)
+from bt_api_base.execution_correlation_protocol import ManagedOrderObservationIssuer
+from bt_api_base.execution_query_protocol import ExecutionOrderRecord, ExecutionTradeRecord
+from bt_api_base.execution_row_observation_protocol import (
+    AccountExecutionOrderObservation,
+    AccountExecutionTradeObservation,
+    execution_observation_fact_digest,
+    execution_observation_fact_id,
 )
 from bt_api_base.market_protocol import MarketInstrumentKey
 
@@ -55,6 +77,47 @@ _ACTIVE_ORDER_STATUS = frozenset({"1", "3", "b", "c"})
 _TERMINAL_ORDER_STATUS = frozenset({"0", "2", "4", "5"})
 _UTC = timezone.utc
 _CHINA = timezone(timedelta(hours=8))
+# Gateway execution observations (iteration 60). Trades are queried before
+# orders: an order row exists before any of its trades, so every trade of the
+# trade result has its order in the later order result.
+_EXECUTION_QUERY_METHODS = (("trades", "query_trades_result"), ("orders", "query_orders_result"))
+_MAX_EXECUTION_INSTRUMENTS = 256
+_MAX_EXECUTION_QUERY_ROWS = 8192
+# Per provider generation: distinct projected rows and published facts.
+_MAX_EXECUTION_TRACKED = 32768
+_MAX_EXECUTION_PAGE = 10_000
+_EXECUTION_PRODUCT_TYPES = frozenset({"future", "option"})
+_TERMINAL_EXECUTION_STATUSES = frozenset(
+    {
+        "filled",
+        "canceled",
+        "rejected",
+        "partially_filled_terminal",
+        "partially_filled_canceled",
+        "terminal_unfilled",
+    }
+)
+#: Finite refusal codes of execution query rows, counted once per distinct
+#: row and provider generation (``execution_observation_counters``).
+EXECUTION_ROW_REFUSAL_CODES = frozenset(
+    {
+        "FOREIGN_ACCOUNT_ROW",
+        "FOREIGN_INSTRUMENT_ROW",
+        "TRADING_DAY_MISMATCH",
+        "ROW_UNPROJECTABLE",
+        "CONFLICTING_DUPLICATE_ROW",
+        "FACT_CONFLICT",
+        "ORDER_STATE_REGRESSED",
+        "ORDER_STATE_UNCONFIRMED",
+    }
+)
+#: Non-refusal execution counters (also once per distinct row and generation):
+#: merged duplicate rows of one fact, orders whose client attribution was
+#: refused (published as ``unresolved``), and trades held back until an
+#: observation of their order is published.
+EXECUTION_NOTE_CODES = frozenset(
+    {"DUPLICATE_ROW_MERGED", "ORDER_ATTRIBUTION_REFUSED", "TRADE_ORDER_UNOBSERVED"}
+)
 
 
 def _is_exact_prestart_ctp_request_feed(feed: object) -> bool:
@@ -92,6 +155,12 @@ class CtpAccountSessionProviderError(RuntimeError):
             "QUERY_BUDGET_EXCEEDED",
             "OWNER_THREAD_REQUIRED",
             "NATIVE_CUSTODY_UNCERTAIN",
+            "EXECUTION_OBSERVATIONS_UNAVAILABLE",
+            "EXECUTION_GENERATION_STALE",
+            "EXECUTION_LIMIT_INVALID",
+            "EXECUTION_CONFIRM_INVALID",
+            "EXECUTION_QUERY_TOO_LARGE",
+            "EXECUTION_CAPACITY_EXCEEDED",
         }
     )
 
@@ -111,6 +180,14 @@ class CtpReadOnlyAccountSessionProvider:
     borrowing another request feed or an already-created trader are rejected
     before ``connect``. Credentials remain in that closure and are never
     accepted from a request or serialized observation.
+
+    Execution observations are off unless ``execution_observation_issuer``
+    (a durable ``ManagedOrderObservationIssuer``: its opaque ids must be the
+    same after a reconnect or process restart for idempotent redelivery) and
+    ``execution_instruments`` (the authorized ``MarketInstrumentKey`` set) are
+    both supplied. ``execution_order_resolver`` (trusted application code,
+    with ``execution_scope_ref``) maps a native order reference to an issued
+    ``OrderCorrelation``; without it every order stays ``unresolved``.
     """
 
     def __init__(
@@ -120,9 +197,23 @@ class CtpReadOnlyAccountSessionProvider:
         stop_timeout_seconds: float = 3.0,
         monotonic_clock: Callable[[], float] | None = None,
         utc_clock: Callable[[], datetime] | None = None,
+        execution_observation_issuer: object | None = None,
+        execution_instruments: tuple[MarketInstrumentKey, ...] | None = None,
+        execution_order_resolver: Callable[[str, MarketInstrumentKey], object] | None = None,
+        execution_scope_ref: str | None = None,
+        execution_query_interval_seconds: float = 1.0,
     ) -> None:
         if not callable(request_feed_factory):
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
+        self._execution_settings = _execution_settings(
+            execution_observation_issuer,
+            execution_instruments,
+            execution_order_resolver,
+            execution_scope_ref,
+            execution_query_interval_seconds,
+        )
+        self._execution: _ExecutionGeneration | None = None
+        self._execution_counters: dict[str, int] = {}
         if (
             isinstance(stop_timeout_seconds, bool)
             or not isinstance(stop_timeout_seconds, (int, float))
@@ -220,6 +311,33 @@ class CtpReadOnlyAccountSessionProvider:
             raise CtpAccountSessionProviderError("NATIVE_CUSTODY_UNCERTAIN")
         return receipt
 
+    @property
+    def read_execution_observations(self) -> Callable[..., tuple[object, ...]] | None:
+        """Optional Gateway capability; ``None`` unless execution is configured.
+
+        ``GatewayAccountSessionWorker`` refuses an execution publisher for a
+        provider without this callable, so an unconfigured provider fails at
+        composition rather than on every drain.
+        """
+
+        if self._execution_settings is None:
+            return None
+        return self._read_execution_observations
+
+    @property
+    def confirm_execution_observations(self) -> Callable[..., None] | None:
+        """Optional Gateway capability paired with ``read_execution_observations``."""
+
+        if self._execution_settings is None:
+            return None
+        return self._confirm_execution_observations
+
+    @property
+    def execution_observation_counters(self) -> Mapping[str, int]:
+        """Value-free refusal/note counts (finite codes) of execution rows."""
+
+        return MappingProxyType(dict(self._execution_counters))
+
     def connect(self, *, account_key: Any, generation: str, timeout: float) -> None:
         if type(account_key) is not AccountKey:
             raise CtpAccountSessionProviderError("INVALID_ACCOUNT_KEY")
@@ -237,6 +355,18 @@ class CtpReadOnlyAccountSessionProvider:
             raise CtpAccountSessionProviderError("INVALID_ACCOUNT_KEY")
         if self._request_feed is not None:
             raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
+        settings = self._execution_settings
+        if settings is not None and any(
+            key.environment != account_key.environment
+            or not account_venue_contains_instrument_venue(account_key, key.venue)
+            for key in settings.instruments
+        ):
+            # An authorized instrument outside this account realm can never
+            # produce a valid observation; refuse before any native work.
+            raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
+        # Every generation starts with a fresh execution queue; unconfirmed
+        # observations of an earlier generation are re-derived from queries.
+        self._execution = None
         # GatewayAccountSessionWorker reuses the provider after an explicit
         # close-and-reconnect recovery. Reopening is safe only after close has
         # detached the exact old feed/trader above.
@@ -286,6 +416,8 @@ class CtpReadOnlyAccountSessionProvider:
             self._session_scope = scope
             self._native_owner_created = True
             self._native_connection_generation = scope.connection_generation
+            if settings is not None:
+                self._execution = _ExecutionGeneration(generation)
         except CtpAccountSessionProviderError:
             self._capture_native_startup_attempt(feed)
             self._native_owner_created = self._startup_owner_state_after_failure(feed)
@@ -425,6 +557,7 @@ class CtpReadOnlyAccountSessionProvider:
             self._trader = None
             self._session_scope = None
             self._service_generation = None
+            self._execution = None
             self._account_key = None
             return True
         attempt = self._startup_attempt
@@ -476,6 +609,7 @@ class CtpReadOnlyAccountSessionProvider:
             self._request_feed = None
             self._session_scope = None
             self._service_generation = None
+            self._execution = None
             self._account_key = None
             return True
         scope_generation = (
@@ -498,6 +632,7 @@ class CtpReadOnlyAccountSessionProvider:
         self._request_feed = None
         self._session_scope = None
         self._service_generation = None
+        self._execution = None
         self._account_key = None
         return True
 
@@ -595,6 +730,480 @@ class CtpReadOnlyAccountSessionProvider:
             return
         if owner is None or threading.get_ident() != owner:
             raise CtpAccountSessionProviderError("OWNER_THREAD_REQUIRED")
+
+    # -- Gateway execution observations (iteration 60) -------------------------
+
+    def _execution_for(self, generation: object) -> _ExecutionGeneration:
+        self._check_owner()
+        if self._execution_settings is None:
+            raise CtpAccountSessionProviderError("EXECUTION_OBSERVATIONS_UNAVAILABLE")
+        state = self._execution
+        if (
+            self._request_feed is None
+            or self._trader is None
+            or self._account_key is None
+            or self._service_generation is None
+            or state is None
+        ):
+            raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
+        if (
+            type(generation) is not str
+            or generation != self._service_generation
+            or generation != state.generation
+        ):
+            raise CtpAccountSessionProviderError("EXECUTION_GENERATION_STALE")
+        return state
+
+    def _read_execution_observations(
+        self, *, generation: str, timeout: float, limit: int
+    ) -> tuple[AccountExecutionOrderObservation | AccountExecutionTradeObservation, ...]:
+        """Return up to ``limit`` pending observations of ``generation``.
+
+        Nothing is removed: the same objects are returned again until
+        ``confirm_execution_observations`` removes them. New facts are read
+        only when nothing is pending and the query interval has elapsed, so
+        Gateway maintenance does not exceed the CTP query rate.
+        """
+
+        state = self._execution_for(generation)
+        if type(limit) is not int or not 1 <= limit <= _MAX_EXECUTION_PAGE:
+            raise CtpAccountSessionProviderError("EXECUTION_LIMIT_INVALID")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+            or not isfinite(timeout)
+        ):
+            raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+        if not state.pending:
+            now = self._monotonic()
+            if not isfinite(now):
+                raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+            settings = self._execution_settings
+            if settings is None:
+                raise CtpAccountSessionProviderError("EXECUTION_OBSERVATIONS_UNAVAILABLE")
+            if state.next_query is None or now >= state.next_query:
+                state.next_query = now + settings.query_interval
+                self._poll_execution(state, float(timeout))
+        page = tuple(state.pending[:limit])
+        state.offered = len(page)
+        return page
+
+    def _confirm_execution_observations(self, *, generation: str, count: int) -> None:
+        """Remove the first ``count`` observations returned by the last read."""
+
+        state = self._execution_for(generation)
+        if type(count) is not int or not 0 <= count <= state.offered:
+            raise CtpAccountSessionProviderError("EXECUTION_CONFIRM_INVALID")
+        del state.pending[:count]
+        state.offered -= count
+        return None
+
+    def _poll_execution(self, state: _ExecutionGeneration, timeout: float) -> None:
+        """Query trades then orders once and queue only new, consistent facts.
+
+        The whole poll is staged first: any query, source, scope or capacity
+        failure raises a finite error and leaves the queue unchanged.
+        """
+
+        started = self._monotonic()
+        deadline = started + timeout
+        if not isfinite(started) or not isfinite(deadline):
+            raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+        feed = self._request_feed
+        trader = self._trader
+        account_key = self._account_key
+        service_generation = self._service_generation
+        baseline_scope = self._session_scope
+        settings = self._execution_settings
+        if account_key is None or settings is None:
+            raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
+        results: dict[str, QueryResult[Any]] = {}
+        for query_name, method_name in _EXECUTION_QUERY_METHODS:
+            now = self._monotonic()
+            if not isfinite(now) or deadline - now <= 0:
+                raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+            method = getattr(feed, method_name, None)
+            if not callable(method):
+                raise CtpAccountSessionProviderError("QUERY_METHOD_UNAVAILABLE")
+            try:
+                result = method(timeout=deadline - now)
+            except Exception:
+                raise CtpAccountSessionProviderError("QUERY_FAILED") from None
+            query_finished = self._monotonic()
+            if not isfinite(query_finished) or query_finished > deadline:
+                raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+            self._validate_query_result(
+                result,
+                query_name=query_name,
+                trader=trader,
+                scope=baseline_scope,
+                now_monotonic=query_finished,
+            )
+            results[query_name] = result
+        scope_reader = getattr(feed, "get_query_session_scope", None)
+        if not callable(scope_reader):
+            raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED")
+        try:
+            final_scope = scope_reader()
+        except Exception:
+            raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED") from None
+        self._validate_scope(final_scope, trader, account_key)
+        if not _same_session_scope(baseline_scope, final_scope):
+            raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
+        if service_generation != self._service_generation or state is not self._execution:
+            raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
+        trade_rows = tuple(results["trades"].records)
+        order_rows = tuple(results["orders"].records)
+        if len(trade_rows) > _MAX_EXECUTION_QUERY_ROWS or len(order_rows) > _MAX_EXECUTION_QUERY_ROWS:
+            raise CtpAccountSessionProviderError("EXECUTION_QUERY_TOO_LARGE")
+        observed_at = _execution_observed_at(results, self._utc_clock())
+        if state.projector is None:
+            state.projector = self._execution_projector(baseline_scope, account_key)
+        _stage_execution_poll(
+            state,
+            account_key,
+            settings,
+            self._execution_counters,
+            order_rows=order_rows,
+            trade_rows=trade_rows,
+            observed_at=observed_at,
+        )
+
+    def _execution_projector(self, scope: object, account_key: AccountKey) -> Any:
+        from bt_api_ctp.execution_query_projection import CtpExecutionQueryProjector
+        from bt_api_ctp.registered_sim_session import (
+            CtpQuerySessionBindingError,
+            _bind_validated_query_scope,
+        )
+
+        settings = self._execution_settings
+        if settings is None:
+            raise CtpAccountSessionProviderError("EXECUTION_OBSERVATIONS_UNAVAILABLE")
+        try:
+            session = _bind_validated_query_scope(scope, environment=account_key.environment)
+        except CtpQuerySessionBindingError:
+            raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED") from None
+        try:
+            return CtpExecutionQueryProjector(
+                session,
+                observation_issuer=settings.issuer,
+                ledger_environment=account_key.environment,
+                account_ref=account_key.account_key_id,
+                scope_ref=settings.scope_ref,
+                managed_order_resolver=settings.order_resolver,
+            )
+        except (TypeError, ValueError):
+            raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION") from None
+
+
+@dataclass(frozen=True)
+class _ExecutionSettings:
+    issuer: object
+    instruments: tuple[MarketInstrumentKey, ...]
+    catalog: Mapping[tuple[str, str], str]
+    order_resolver: Callable[[str, MarketInstrumentKey], object] | None
+    scope_ref: str | None
+    query_interval: float
+
+
+def _execution_settings(
+    issuer: object,
+    instruments: object,
+    order_resolver: object,
+    scope_ref: object,
+    query_interval: object,
+) -> _ExecutionSettings | None:
+    if (
+        isinstance(query_interval, bool)
+        or not isinstance(query_interval, (int, float))
+        or not isfinite(query_interval)
+        or not 0.0 <= float(query_interval) <= 60.0
+    ):
+        raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
+    if issuer is None and instruments is None and order_resolver is None and scope_ref is None:
+        return None
+    if (
+        issuer is None
+        or instruments is None
+        or not isinstance(issuer, ManagedOrderObservationIssuer)
+        or type(instruments) is not tuple
+        or not 1 <= len(instruments) <= _MAX_EXECUTION_INSTRUMENTS
+        or (order_resolver is None) != (scope_ref is None)
+        or (order_resolver is not None and not callable(order_resolver))
+        or (
+            scope_ref is not None
+            and (
+                type(scope_ref) is not str
+                or not scope_ref
+                or scope_ref != scope_ref.strip()
+                or len(scope_ref) > 256
+            )
+        )
+    ):
+        raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
+    catalog: dict[tuple[str, str], str] = {}
+    for key in instruments:
+        if (
+            type(key) is not MarketInstrumentKey
+            or key.provider != "ctp"
+            or key.product_type not in _EXECUTION_PRODUCT_TYPES
+            or key.native_symbol != key.instrument_id
+            or (key.venue, key.instrument_id) in catalog
+        ):
+            raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
+        catalog[(key.venue, key.instrument_id)] = key.product_type
+    return _ExecutionSettings(
+        issuer=issuer,
+        instruments=instruments,
+        catalog=MappingProxyType(catalog),
+        order_resolver=order_resolver,  # type: ignore[arg-type]
+        scope_ref=scope_ref,  # type: ignore[arg-type]
+        query_interval=float(query_interval),
+    )
+
+
+class _ExecutionGeneration:
+    """Bounded execution state of one provider generation (never persisted)."""
+
+    __slots__ = (
+        "generation",
+        "projector",
+        "pending",
+        "offered",
+        "next_query",
+        "facts",
+        "order_progress",
+        "rows",
+        "conflicted",
+        "noted",
+    )
+
+    def __init__(self, generation: str) -> None:
+        self.generation = generation
+        self.projector: Any = None
+        # Queued, not yet confirmed observations, oldest first.
+        self.pending: list[AccountExecutionOrderObservation | AccountExecutionTradeObservation] = []
+        self.offered = 0
+        self.next_query: float | None = None
+        # Published fact id -> fact digest, and order id -> (terminal, filled).
+        self.facts: dict[str, str] = {}
+        self.order_progress: dict[str, tuple[bool, Decimal]] = {}
+        # (kind, native row digest) -> projection or refusal code.
+        self.rows: dict[tuple[str, str], _ProjectedExecutionRow | str] = {}
+        self.conflicted: set[tuple[str, str]] = set()
+        self.noted: set[tuple[str, tuple[str, str]]] = set()
+
+
+@dataclass(frozen=True)
+class _ProjectedExecutionRow:
+    observation: AccountExecutionOrderObservation | AccountExecutionTradeObservation
+    identity: str
+    fact_id: str
+    fact_digest: str
+    attribution_refused: bool
+
+
+def _execution_observed_at(results: Mapping[str, QueryResult[Any]], utc_now: object) -> str:
+    if type(utc_now) is not datetime or utc_now.utcoffset() != timedelta(0):
+        raise CtpAccountSessionProviderError("QUERY_ROW_INVALID")
+    completed = [result.completed_at_utc for result in results.values()]
+    if any(
+        not isinstance(value, datetime) or value.utcoffset() != timedelta(0) for value in completed
+    ) or max(completed) > utc_now:
+        raise CtpAccountSessionProviderError("QUERY_ROW_INVALID")
+    return _utc_text(max(completed))
+
+
+def _project_execution_row(
+    kind: str,
+    row: Any,
+    projector: Any,
+    account_key: AccountKey,
+    settings: _ExecutionSettings,
+    observed_at: str,
+) -> _ProjectedExecutionRow | str:
+    """One native query row -> one observation, or a finite refusal code."""
+
+    try:
+        investor_id = _text(_field(row, "InvestorID"))
+        broker_id = _text(_field(row, "BrokerID"))
+    except Exception:
+        return "FOREIGN_ACCOUNT_ROW"
+    if investor_id != account_key.account_id or broker_id != account_key.subaccount_id:
+        return "FOREIGN_ACCOUNT_ROW"
+    try:
+        venue = _text(_field(row, "ExchangeID"))
+        instrument_id = _text(_field(row, "InstrumentID"))
+    except Exception:
+        return "ROW_UNPROJECTABLE"
+    if (venue, instrument_id) not in settings.catalog:
+        return "FOREIGN_INSTRUMENT_ROW"
+    project = projector.project_orders if kind == "order" else projector.project_trades
+    try:
+        records, blockers = project(
+            (row,), observed_at=observed_at, catalog_types=settings.catalog, filters={}
+        )
+    except Exception:
+        return "ROW_UNPROJECTABLE"
+    if len(records) != 1:
+        if any(str(code).endswith("trading_day_mismatch") for code in blockers):
+            return "TRADING_DAY_MISMATCH"
+        return "ROW_UNPROJECTABLE"
+    try:
+        observation: AccountExecutionOrderObservation | AccountExecutionTradeObservation
+        if kind == "order":
+            observation = AccountExecutionOrderObservation(
+                account_key, ExecutionOrderRecord.from_dict(records[0])
+            )
+            if observation.order.status == "unknown":
+                # Not yet acknowledged by the venue: no order fact to publish.
+                return "ORDER_STATE_UNCONFIRMED"
+            identity = observation.order.order_id
+        else:
+            # CTP trade rows carry no fee: the observation has none (unknown).
+            observation = AccountExecutionTradeObservation(
+                account_key, ExecutionTradeRecord.from_dict(records[0])
+            )
+            identity = observation.trade.trade_id
+        fact_id = execution_observation_fact_id(observation)
+        fact_digest = execution_observation_fact_digest(observation)
+    except Exception:
+        return "ROW_UNPROJECTABLE"
+    return _ProjectedExecutionRow(
+        observation, identity, fact_id, fact_digest, attribution_refused=bool(blockers)
+    )
+
+
+def _stage_execution_poll(
+    state: _ExecutionGeneration,
+    account_key: AccountKey,
+    settings: _ExecutionSettings,
+    counters: dict[str, int],
+    *,
+    order_rows: tuple[Any, ...],
+    trade_rows: tuple[Any, ...],
+    observed_at: str,
+) -> None:
+    """Stage one poll and commit it only when it fits the generation bounds.
+
+    Facts are keyed by Base fact id, so duplicated or reordered rows give the
+    same facts. A row whose identity has conflicting rows, whose fact id was
+    published with another digest, or whose order state regresses is refused
+    (fail closed) instead of queued. A trade waits until an observation of
+    its order has been queued, so it always follows its order's route.
+    """
+
+    new_rows: dict[tuple[str, str], _ProjectedExecutionRow | str] = {}
+    new_conflicts: dict[tuple[str, str], str] = {}
+    new_notes: set[tuple[str, tuple[str, str]]] = set()
+
+    def note(code: str, key: tuple[str, str]) -> None:
+        if (code, key) not in state.noted:
+            new_notes.add((code, key))
+
+    def refuse(code: str, key: tuple[str, str]) -> None:
+        if key not in state.conflicted:
+            new_conflicts.setdefault(key, code)
+
+    def collect(kind: str, rows: tuple[Any, ...]) -> list[tuple[tuple[str, str], _ProjectedExecutionRow]]:
+        groups: dict[str, list[tuple[tuple[str, str], _ProjectedExecutionRow]]] = {}
+        for row in rows:
+            try:
+                key = (kind, _query_records_digest((row,)))
+            except Exception:
+                raise CtpAccountSessionProviderError("QUERY_ROW_INVALID") from None
+            projected = state.rows.get(key)
+            if projected is None:
+                projected = new_rows.get(key)
+            if projected is None:
+                projected = _project_execution_row(
+                    kind, row, state.projector, account_key, settings, observed_at
+                )
+                new_rows[key] = projected
+                if type(projected) is _ProjectedExecutionRow and projected.attribution_refused:
+                    note("ORDER_ATTRIBUTION_REFUSED", key)
+            if type(projected) is not _ProjectedExecutionRow:
+                continue
+            if key in state.conflicted or key in new_conflicts:
+                continue
+            groups.setdefault(projected.identity, []).append((key, projected))
+        accepted: list[tuple[tuple[str, str], _ProjectedExecutionRow]] = []
+        for members in groups.values():
+            first_key, first = members[0]
+            if any(
+                item.fact_id != first.fact_id or item.fact_digest != first.fact_digest
+                for _key, item in members[1:]
+            ):
+                for key, _item in members:
+                    refuse("CONFLICTING_DUPLICATE_ROW", key)
+                continue
+            for key, _item in members[1:]:
+                note("DUPLICATE_ROW_MERGED", key)
+            accepted.append((first_key, first))
+        return accepted
+
+    orders = collect("order", order_rows)
+    trades = collect("trade", trade_rows)
+    staged_facts: dict[str, str] = {}
+    staged_progress: dict[str, tuple[bool, Decimal]] = {}
+    queued: list[AccountExecutionOrderObservation | AccountExecutionTradeObservation] = []
+
+    def known_digest(fact_id: str) -> str | None:
+        digest = state.facts.get(fact_id)
+        return staged_facts.get(fact_id) if digest is None else digest
+
+    for key, item in orders:
+        known = known_digest(item.fact_id)
+        if known is not None:
+            if known != item.fact_digest:
+                refuse("FACT_CONFLICT", key)
+            continue
+        order = item.observation.order  # type: ignore[union-attr]
+        filled = Decimal(order.filled_quantity)
+        previous = state.order_progress.get(order.order_id)
+        if previous is not None and (previous[0] or filled < previous[1]):
+            # A new state after a terminal one, or a lower cumulative fill.
+            refuse("ORDER_STATE_REGRESSED", key)
+            continue
+        staged_facts[item.fact_id] = item.fact_digest
+        staged_progress[order.order_id] = (order.status in _TERMINAL_EXECUTION_STATUSES, filled)
+        queued.append(item.observation)
+    for key, item in trades:
+        known = known_digest(item.fact_id)
+        if known is not None:
+            if known != item.fact_digest:
+                refuse("FACT_CONFLICT", key)
+            continue
+        order_id = item.observation.trade.order_id  # type: ignore[union-attr]
+        if (
+            order_id is not None
+            and order_id not in state.order_progress
+            and order_id not in staged_progress
+        ):
+            note("TRADE_ORDER_UNOBSERVED", key)
+            continue
+        staged_facts[item.fact_id] = item.fact_digest
+        queued.append(item.observation)
+    if (
+        len(state.rows) + len(new_rows) > _MAX_EXECUTION_TRACKED
+        or len(state.facts) + len(staged_facts) > _MAX_EXECUTION_TRACKED
+    ):
+        raise CtpAccountSessionProviderError("EXECUTION_CAPACITY_EXCEEDED")
+    # Commit: nothing above mutated the generation state.
+    for key, projected in new_rows.items():
+        state.rows[key] = projected
+        if type(projected) is str:
+            counters[projected] = counters.get(projected, 0) + 1
+    for key, code in new_conflicts.items():
+        state.conflicted.add(key)
+        counters[code] = counters.get(code, 0) + 1
+    for code, key in new_notes:
+        state.noted.add((code, key))
+        counters[code] = counters.get(code, 0) + 1
+    state.facts.update(staged_facts)
+    state.order_progress.update(staged_progress)
+    state.pending.extend(queued)
 
 
 def _native_stop_confirmed(
