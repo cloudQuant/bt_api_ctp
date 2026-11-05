@@ -2378,9 +2378,24 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         return self._trader.query_account_result(timeout=timeout)
 
-    def query_positions_result(self, timeout: float = 5.0) -> QueryResult[Any]:
+    def query_positions_result(
+        self,
+        timeout: float = 5.0,
+        *,
+        instrument_id: str = "",
+        exchange_id: str = "",
+    ) -> QueryResult[Any]:
+        """Whole-account positions, or one instrument when filters are given.
+
+        Filters are forwarded to the native request only when supplied, so the
+        unfiltered whole-account call is unchanged (D62-11a).
+        """
         self._ensure_connected()
-        return self._trader.query_positions_result(timeout=timeout)
+        if not instrument_id and not exchange_id:
+            return self._trader.query_positions_result(timeout=timeout)
+        return self._trader.query_positions_result(
+            timeout=timeout, instrument_id=instrument_id, exchange_id=exchange_id
+        )
 
     def query_positions_evidence(
         self, timeout: float = 5.0, ttl_seconds: float = 5.0

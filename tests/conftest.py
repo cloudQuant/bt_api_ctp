@@ -19,3 +19,15 @@ source_text = str(SRC_ROOT)
 if source_text in sys.path:
     sys.path.remove(source_text)
 sys.path.insert(0, source_text)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_instrument_catalog_cache_dir(tmp_path_factory, monkeypatch):
+    """Keep the CTP instrument catalog cache (D62-11b/11c) out of the user cache dir."""
+
+    monkeypatch.setenv(
+        "BT_API_CTP_CATALOG_CACHE_DIR", str(tmp_path_factory.mktemp("ctp-catalog-cache"))
+    )

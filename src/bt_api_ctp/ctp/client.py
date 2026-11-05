@@ -10682,13 +10682,35 @@ class TraderClient:
         self,
         timeout=5,
         *,
+        instrument_id: str = "",
+        exchange_id: str = "",
         deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
+        """Read investor positions; no filter arguments means the whole account.
+
+        ``instrument_id``/``exchange_id`` (D62-11a) are written into the native
+        ``CThostFtdcQryInvestorPositionField`` and read back as request
+        evidence.  A filtered result only covers the requested instrument and
+        the venue may still return other rows; callers must drop them and must
+        never treat a filtered (or empty filtered) result as whole-account
+        evidence.  Without filter arguments the request is unchanged.
+        """
+        if type(instrument_id) is not str or type(exchange_id) is not str:
+            return self._local_query_failure(
+                "positions",
+                "native_position_filter_invalid",
+                unsupported=True,
+                include_query_source=False,
+            )
         field = CThostFtdcQryInvestorPositionField()
         intent_filters = {
             "BrokerID": self._bound_broker_id,
             "InvestorID": self._bound_user_id,
         }
+        if instrument_id:
+            intent_filters["InstrumentID"] = instrument_id
+        if exchange_id:
+            intent_filters["ExchangeID"] = exchange_id
         try:
             for name, value in intent_filters.items():
                 setattr(field, name, value)

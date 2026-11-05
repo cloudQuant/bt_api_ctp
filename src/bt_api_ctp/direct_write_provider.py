@@ -44,6 +44,8 @@ from bt_api_base.direct_write_protocol import (
     WriteOperation,
 )
 
+from bt_api_ctp.instrument_position_facts import InstrumentPositionFacts
+
 __all__ = (
     "CTP_DIRECT_WRITE_EXCHANGE",
     "CtpDirectWriteProvider",
@@ -144,6 +146,120 @@ def _float_or_none(value: Any) -> Optional[float]:
     if number != number or number in (float("inf"), float("-inf")):
         return None
     return number
+
+
+_POSI_DIRECTION = {"1": "net", "2": "long", "3": "short"}
+
+
+def _project_position_rows(
+    rows: Any,
+) -> tuple[tuple[DirectPositionFact, ...], tuple[str, ...]]:
+    """Aggregate native position rows into neutral facts per symbol/venue/side.
+
+    Zero rows are skipped.  The second value names rows that could not be
+    projected although they may hold a position (unknown ``PosiDirection`` or
+    unreadable ``Position``); both readers block on them, so such a row can
+    never make an account or instrument look flat.
+    """
+    totals: dict[tuple[str, str, str], list[float]] = {}
+    anomalies: list[str] = []
+    for row in rows:
+        symbol = _text(_row_value(row, "InstrumentID"))
+        venue = _text(_row_value(row, "ExchangeID"))
+        side = _POSI_DIRECTION.get(_text(_row_value(row, "PosiDirection")))
+        raw_quantity = _float_or_none(_row_value(row, "Position"))
+        quantity = raw_quantity or 0.0
+        if not symbol or side is None or quantity <= 0:
+            if symbol and raw_quantity is None:
+                anomalies.append("position_row_quantity_unreadable")
+            elif symbol and side is None and quantity > 0:
+                anomalies.append("position_row_direction_unknown")
+            continue
+        today = _float_or_none(_row_value(row, "TodayPosition"))
+        bucket = totals.setdefault((symbol, venue, side), [0.0, 0.0, 0.0])
+        bucket[0] += quantity
+        if today is None:
+            bucket[2] = 1.0  # split unknown for this key
+        else:
+            bucket[1] += min(max(today, 0.0), quantity)
+    facts = tuple(
+        DirectPositionFact(
+            symbol=symbol,
+            venue=venue or None,
+            side=side,
+            total=values[0],
+            today=None if values[2] else values[1],
+            yesterday=None if values[2] else values[0] - values[1],
+        )
+        for (symbol, venue, side), values in sorted(totals.items())
+    )
+    return facts, tuple(sorted(set(anomalies)))
+
+
+_MAX_DROPPED_INSTRUMENTS_REPORTED = 32
+
+
+def _valid_instrument_filter(value: Any) -> bool:
+    # CTP InstrumentID is char[81]; combination ids contain spaces and '&'.
+    return (
+        type(value) is str
+        and 0 < len(value) <= 80
+        and value == value.strip()
+        and value.isascii()
+        and value.isprintable()
+    )
+
+
+def _valid_exchange_filter(value: Any) -> bool:
+    # CTP ExchangeID is char[9]: SHFE, DCE, CZCE, CFFEX, INE, GFEX, ...
+    return type(value) is str and 0 < len(value) <= 8 and value.isascii() and value.isalnum()
+
+
+def _query_blocker(result: Any, name: str, generation: Any) -> Optional[str]:
+    """``None`` when ``result`` is a complete query of the current session."""
+    ok = (
+        getattr(result, "complete", False) is True
+        and getattr(result, "timed_out", False) is not True
+        and getattr(result, "error_code", None) in (None, 0)
+        and getattr(result, "connection_generation", generation) == generation
+    )
+    if ok:
+        return None
+    detail = "{}:{}:{}:{}".format(
+        getattr(result, "error_code", None),
+        "timeout" if getattr(result, "timed_out", False) else "",
+        "complete" if getattr(result, "complete", False) else "partial",
+        str(getattr(result, "error_message", "") or "")[:60],
+    )
+    return f"{name}_query_incomplete[{detail}]"
+
+
+def _native_filter_evidence(
+    result: Any, symbol: str, venue: Optional[str]
+) -> tuple[Optional[bool], Optional[str]]:
+    """Read the request-filter readback of a filtered query, if any.
+
+    Returns ``(verified, blocker)``: evidence naming a *different* instrument or
+    venue is a blocker; evidence without the filter is ``False``; no evidence
+    at all is ``None``.  Local row filtering applies in every case.
+    """
+    source = getattr(result, "query_source", None)
+    if source is None:
+        return None, None
+    try:
+        filters = dict(getattr(source, "request_filters", ()) or ())
+    except (TypeError, ValueError):
+        return None, "positions_filter_evidence_unreadable"
+    expected = {"InstrumentID": symbol}
+    if venue is not None:
+        expected["ExchangeID"] = venue
+    verified = True
+    for name, value in expected.items():
+        if name not in filters:
+            verified = False
+        elif filters[name] != value:
+            return None, "positions_filter_mismatch"
+    return verified, None
 
 def project_ctp_execution_event(
     kind: str, snapshot: dict[str, Any], *, sequence: int
@@ -269,7 +385,7 @@ def project_ctp_execution_event(
 class CtpDirectWriteProvider:
     """Direct write port for one CTP route (one ``CtpRequestDataFuture``)."""
 
-    def __init__(self, feed: Any) -> None:
+    def __init__(self, feed: Any, *, catalog_cache: Any = None) -> None:
         from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
         if type(feed) is not CtpRequestDataFuture:
@@ -279,9 +395,11 @@ class CtpDirectWriteProvider:
         self._events: deque[DirectExecutionEvent] = deque()
         self._events_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
-        self._catalog_day: Optional[str] = None
-        self._catalog_venues: dict[str, Optional[str]] = {}
+        # Two-level trading-day catalog (D62-11b/11c); the process-wide
+        # default cache unless one is injected.
+        self._catalog_cache: Any = catalog_cache
         self.catalog_queries = 0
+        self.last_catalog_error: Optional[str] = None
         self._sequence = 0
         self._dropped_events = 0
         self._listening_trader: Any = None
@@ -658,40 +776,73 @@ class CtpDirectWriteProvider:
                 out.append(self._events.popleft())
         return tuple(out)
 
+    def _instrument_catalog(self) -> Any:
+        cache = self._catalog_cache
+        if cache is None:
+            from bt_api_ctp.instrument_catalog_cache import default_instrument_catalog_cache
+
+            cache = self._catalog_cache = default_instrument_catalog_cache()
+        return cache
+
+    def instrument_catalog_counters(self) -> dict[str, int]:
+        """Catalog cache counters (process-wide cache) plus this provider's queries."""
+
+        counters = dict(self._instrument_catalog().counters())
+        with self._catalog_lock:
+            counters["provider_native_queries"] = self.catalog_queries
+        return counters
+
     def resolve_exchange_id(self, symbol: str) -> Optional[str]:
         """Venue (``ExchangeID``) of ``symbol`` from the instrument catalog.
 
-        Cached per trading day in this process; one catalog query fills the
-        cache for every returned instrument (D62-11 first level).  Returns
-        ``None`` when the catalog does not prove a unique venue.
+        Uses the two-level trading-day catalog cache (memory, local shared
+        file, one full native query per scope and CTP trading day, missing
+        instruments on demand; D62-11b/11c).  When the catalog is not ready
+        the previous single-instrument query is used.  Returns ``None`` when
+        the catalog does not prove a unique venue.  Catalog entries are
+        reference data only, not quote, position or permission evidence.
         """
         if not symbol:
             return None
         trader = self._trader()
-        day = self._session_fields(trader).get("trading_day")
+        self._session_fields(trader)  # a complete session is still required
+        from bt_api_ctp.instrument_catalog_cache import (
+            CtpFeedCatalogSource,
+            InstrumentCatalogNotReady,
+        )
+
+        try:
+            lookup = self._instrument_catalog().lookup(CtpFeedCatalogSource(self._feed), symbol)
+        except InstrumentCatalogNotReady as exc:
+            code = exc.code
+        except Exception:
+            code = "ctp_catalog_unavailable"
+        else:
+            with self._catalog_lock:
+                self.catalog_queries += lookup.native_queries
+                self.last_catalog_error = None
+            return lookup.venue
         with self._catalog_lock:
-            if self._catalog_day != day:
-                self._catalog_day = day
-                self._catalog_venues = {}
-            if symbol in self._catalog_venues:
-                return self._catalog_venues[symbol]
+            self.last_catalog_error = code
+        return self._resolve_exchange_id_uncached(symbol)
+
+    def _resolve_exchange_id_uncached(self, symbol: str) -> Optional[str]:
+        """Single-instrument native query used when the catalog is not ready."""
         try:
             result = self._feed.query_instruments_result(instrument_id=symbol, timeout=10)
         except Exception:
             return None
+        with self._catalog_lock:
+            self.catalog_queries += 1
         if getattr(result, "complete", False) is not True:
             return None
-        venues: dict[str, set[str]] = {}
-        for row in result.records:
-            instrument = _text(_row_value(row, "InstrumentID"))
-            venue = _text(_row_value(row, "ExchangeID"))
-            if instrument and venue:
-                venues.setdefault(instrument, set()).add(venue)
-        with self._catalog_lock:
-            for instrument, found in venues.items():
-                self._catalog_venues[instrument] = next(iter(found)) if len(found) == 1 else None
-            self.catalog_queries += 1
-            return self._catalog_venues.get(symbol)
+        venues = {
+            _text(_row_value(row, "ExchangeID"))
+            for row in result.records
+            if _text(_row_value(row, "InstrumentID")) == symbol
+        }
+        venues.discard("")
+        return next(iter(venues)) if len(venues) == 1 else None
 
     # ------------------------------------------------------------------
     # read-only account facts for host reconciliation (D62-05/13/16/22)
@@ -719,55 +870,24 @@ class CtpDirectWriteProvider:
         observed = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         def _complete(result: Any, name: str) -> bool:
-            ok = (
-                getattr(result, "complete", False) is True
-                and getattr(result, "timed_out", False) is not True
-                and getattr(result, "error_code", None) in (None, 0)
-                and getattr(result, "connection_generation", session["connection_generation"])
-                == session["connection_generation"]
-            )
-            if not ok:
-                detail = "{}:{}:{}:{}".format(
-                    getattr(result, "error_code", None),
-                    "timeout" if getattr(result, "timed_out", False) else "",
-                    "complete" if getattr(result, "complete", False) else "partial",
-                    str(getattr(result, "error_message", "") or "")[:60],
-                )
-                blockers.append(f"{name}_query_incomplete[{detail}]")
-            return ok
+            blocker = _query_blocker(result, name, session["connection_generation"])
+            if blocker is not None:
+                blockers.append(blocker)
+            return blocker is None
 
         position_facts: Optional[tuple[DirectPositionFact, ...]] = None
         if positions:
+            # Unfiltered whole-account read: the only position result that may
+            # prove the whole account flat (D62-11a).
             result = self._feed.query_positions_result(timeout=timeout)
             if _complete(result, "positions"):
-                totals: dict[tuple[str, str, str], list[float]] = {}
-                for row in result.records:
-                    symbol = _text(_row_value(row, "InstrumentID"))
-                    venue = _text(_row_value(row, "ExchangeID"))
-                    side = {"1": "net", "2": "long", "3": "short"}.get(
-                        _text(_row_value(row, "PosiDirection"))
-                    )
-                    quantity = _float_or_none(_row_value(row, "Position")) or 0.0
-                    if not symbol or side is None or quantity <= 0:
-                        continue
-                    today = _float_or_none(_row_value(row, "TodayPosition"))
-                    bucket = totals.setdefault((symbol, venue, side), [0.0, 0.0, 0.0])
-                    bucket[0] += quantity
-                    if today is None:
-                        bucket[2] = 1.0  # split unknown for this key
-                    else:
-                        bucket[1] += min(max(today, 0.0), quantity)
-                position_facts = tuple(
-                    DirectPositionFact(
-                        symbol=symbol,
-                        venue=venue or None,
-                        side=side,
-                        total=values[0],
-                        today=None if values[2] else values[1],
-                        yesterday=None if values[2] else values[0] - values[1],
-                    )
-                    for (symbol, venue, side), values in sorted(totals.items())
-                )
+                position_facts, anomalies = _project_position_rows(result.records)
+                if anomalies:
+                    # A row that may hold a position but cannot be projected
+                    # leaves the whole-account read unable to prove anything
+                    # (in particular not a flat account for a first init).
+                    blockers.extend(f"positions_{name}" for name in anomalies)
+                    position_facts = None
         order_facts: Optional[tuple[DirectExecutionEvent, ...]] = None
         every_order: Optional[tuple[DirectExecutionEvent, ...]] = None
         if active_orders or all_orders:
@@ -832,6 +952,101 @@ class CtpDirectWriteProvider:
             complete=not blockers,
             blockers=tuple(blockers),
             orders=every_order,
+        )
+
+    def instrument_positions(
+        self,
+        symbol: str,
+        exchange_id: Optional[str] = None,
+        *,
+        timeout: float = 5.0,
+    ) -> InstrumentPositionFacts:
+        """Positions of one instrument through the natively filtered query.
+
+        The ``InstrumentID`` (and ``ExchangeID`` when given) filter is passed to
+        ``ReqQryInvestorPosition``.  Rows of other instruments or venues that a
+        venue returns anyway are dropped and reported, never used.  The result
+        has instrument scope only: an empty complete result does not prove the
+        account (or any other instrument) flat; use :meth:`account_facts` for
+        whole-account evidence (D62-11a).
+        """
+        if not _valid_instrument_filter(symbol):
+            raise DirectWriteError("ctp_instrument_positions_symbol_invalid")
+        venue: Optional[str] = None
+        if exchange_id not in (None, ""):
+            if not _valid_exchange_filter(exchange_id):
+                raise DirectWriteError("ctp_instrument_positions_exchange_invalid")
+            venue = exchange_id
+        trader = self._trader()
+        session = self._session_fields(trader)
+        observed = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        blockers: list[str] = []
+        verified: Optional[bool] = None
+        dropped = 0
+        dropped_names: set[str] = set()
+        facts: Optional[tuple[DirectPositionFact, ...]] = None
+        try:
+            result = self._feed.query_positions_result(
+                timeout=timeout, instrument_id=symbol, exchange_id=venue or ""
+            )
+        except Exception as exc:
+            result = None
+            blockers.append(f"positions_query_failed[{type(exc).__name__}]")
+        if result is not None:
+            blocker = _query_blocker(result, "positions", session["connection_generation"])
+            if blocker is not None:
+                blockers.append(blocker)
+            else:
+                verified, evidence_blocker = _native_filter_evidence(result, symbol, venue)
+                if evidence_blocker is not None:
+                    blockers.append(evidence_blocker)
+                kept = []
+                for row in result.records:
+                    row_symbol = _text(_row_value(row, "InstrumentID"))
+                    row_venue = _text(_row_value(row, "ExchangeID"))
+                    if row_symbol != symbol:
+                        dropped += 1
+                        dropped_names.add(row_symbol or "<missing>")
+                        continue
+                    if venue is not None and row_venue != venue:
+                        if not row_venue:
+                            # Cannot tell whether this row is the requested
+                            # instrument: never drop (or count) it silently.
+                            blockers.append("positions_row_venue_missing")
+                            continue
+                        dropped += 1
+                        dropped_names.add(f"{row_venue}.{row_symbol}")
+                        continue
+                    kept.append(row)
+                projected, anomalies = _project_position_rows(kept)
+                blockers.extend(anomalies)
+                if not blockers:
+                    facts = projected
+        try:
+            after = self._session_fields(trader)
+        except DirectWriteError:
+            after = None
+        if after is None or (
+            after["connection_generation"] != session["connection_generation"]
+            or after["trading_day"] != session["trading_day"]
+        ):
+            blockers.append("positions_session_changed")
+            facts = None
+        unique_blockers = tuple(dict.fromkeys(blockers))
+        return InstrumentPositionFacts(
+            exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+            symbol=symbol,
+            venue=venue,
+            trading_day=session.get("trading_day"),
+            session_generation=session.get("connection_generation"),
+            observed_at_utc=observed,
+            positions=facts if not unique_blockers else None,
+            complete=not unique_blockers,
+            blockers=unique_blockers,
+            filter_ignored=dropped > 0,
+            dropped_rows=dropped,
+            dropped_instruments=tuple(sorted(dropped_names))[:_MAX_DROPPED_INSTRUMENTS_REPORTED],
+            native_filter_verified=verified,
         )
 
     def account_reference(self) -> Optional[str]:
