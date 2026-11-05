@@ -11782,6 +11782,16 @@ class TraderClient:
         return self.is_read_only_ready
 
     @property
+    def connection_generation(self):
+        """Current login generation (same contract as ``MdClient``).
+
+        Query-session binding and stream readers compare this public value
+        with the sealed query scope; without it every TD binding failed.
+        """
+        with self._query_state_lock:
+            return self._connection_generation
+
+    @property
     def is_read_only_ready(self):
         with self._query_state_lock:
             return self._current_login_identity_locked() is not None

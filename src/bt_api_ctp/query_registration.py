@@ -28,6 +28,10 @@ def _create_ctp_query_port(route: SelectedQueryRoute) -> ProviderQueryPort:
     feed = route.client
     if type(feed) is not CtpRequestDataFuture:
         raise RuntimeError("ctp_query_feed_not_canonical")
+    if feed.trader_client is None:
+        # Direct route: nobody else logs the TD session in before the first
+        # read, so this CTP-owned adapter does it (read-only login only).
+        feed.ensure_read_only_connected()
     client = feed.trader_client
     from bt_api_ctp.ctp.client import TraderClient
 

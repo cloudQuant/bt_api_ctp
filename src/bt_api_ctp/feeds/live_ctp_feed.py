@@ -1544,6 +1544,18 @@ class CtpRequestData(Feed):
         # installed capability into a substitute at the feed layer.
         return settlement_authorization, environment
 
+    def ensure_read_only_connected(self) -> None:
+        """Log the TD session in read-only (no settlement or order write).
+
+        Used by this package's own query/account adapters before they unwrap
+        the TraderClient on the direct route.  A runtime-borrowed feed is
+        connected by its owner and is left untouched.
+        """
+
+        if self._managed_runtime_binding is not None:
+            return
+        self._ensure_connected()
+
     def _ensure_connected(self):
         self._ensure_read_only_connection_safe()
         if self._trader is None or not self._trader.is_read_only_ready:

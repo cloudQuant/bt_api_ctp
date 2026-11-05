@@ -808,6 +808,9 @@ def _ctp_trader_client(route: object) -> tuple[TraderClient, str | None]:
     ):
         raise CtpStoreAccountSessionError("account_session_client_not_canonical")
     try:
+        if route.client.trader_client is None:
+            # Direct route: log the TD session in read-only before first use.
+            route.client.ensure_read_only_connected()
         client = route.client.trader_client
     except Exception:
         raise CtpStoreAccountSessionError("account_session_client_not_canonical") from None

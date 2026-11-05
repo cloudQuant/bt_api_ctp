@@ -57,6 +57,40 @@ def _canonical_query_value(value: Any) -> Any:
     ``repr`` implementations are intentionally unsupported.
     """
 
+    # Fast path for the exact native types that make up almost every CTP row.
+    # Each branch returns exactly what the general checks below would return
+    # for that exact type, so digests are byte-identical; subclasses and other
+    # types still go through the original ordered checks.  ``isinstance`` on
+    # the ``Mapping`` ABC dominated large catalog digests (tens of seconds).
+    value_type = type(value)
+    if value_type is str or value_type is int or value_type is bool or value is None:
+        return value
+    if value_type is float:
+        if not isfinite(value):
+            return {"__nonfinite_float__": value.hex()}
+        return value
+    if value_type is dict:
+        exact_items: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise TypeError("query snapshot keys must be exact strings")
+            item_type = type(item)
+            # Inline the exact-scalar case: catalog rows are flat, so this
+            # avoids one recursive call per field.
+            if (
+                item_type is str
+                or item_type is int
+                or item_type is bool
+                or item is None
+                or (item_type is float and isfinite(item))
+            ):
+                exact_items[key] = item
+            else:
+                exact_items[key] = _canonical_query_value(item)
+        return {key: exact_items[key] for key in sorted(exact_items)}
+    if value_type is tuple or value_type is list:
+        return [_canonical_query_value(item) for item in value]
+
     if isinstance(value, Mapping):
         items: dict[str, Any] = {}
         for key, item in value.items():
@@ -86,11 +120,41 @@ def _canonical_query_value(value: Any) -> Any:
     return {"__unsupported_type__": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
+def _flat_row_or_canonical(row: Any) -> Any:
+    """Canonicalize one record, fast for flat rows of exact JSON scalars.
+
+    A ``Mapping`` row (for example ``_QueryRecordSnapshot``) whose keys are
+    exact ``str`` and whose values are exact finite JSON scalars canonicalizes
+    to a dict with the same items; serialized with ``sort_keys=True`` it is
+    byte-identical, so the per-field recursion and sorted copy are skipped.
+    Any other row takes the general path unchanged (including its errors).
+    """
+
+    if isinstance(row, Mapping):
+        flat: dict[str, Any] = {}
+        for key, item in row.items():
+            item_type = type(item)
+            if type(key) is not str or not (
+                item_type is str
+                or item_type is int
+                or item_type is bool
+                or item is None
+                or (item_type is float and isfinite(item))
+            ):
+                return _canonical_query_value(row)
+            flat[key] = item
+        return flat
+    return _canonical_query_value(row)
+
+
 def _query_records_digest(records: Iterable[Any]) -> str:
     """Hash one mutable-compatible record sequence at a point in time."""
 
+    canonical: list[Any] = []
+    for row in tuple(records):
+        canonical.append(_flat_row_or_canonical(row))
     serialized = json.dumps(
-        _canonical_query_value(tuple(records)),
+        canonical,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
