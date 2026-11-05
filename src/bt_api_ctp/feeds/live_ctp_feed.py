@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -41,9 +42,12 @@ from bt_api_ctp.ctp.ctp_structs_order import (
 from bt_api_ctp.ctp_env_selector import (
     is_official_simnow_td_front,
     official_simnow_fronts,
+    official_simnow_profile_for_td_front,
+    registered_broker_sim_profile_for_td_front,
     select_ctp_environment,
     select_reachable_ctp_environment,
     verify_official_simnow_profile,
+    verify_registered_broker_sim_profile,
 )
 from bt_api_ctp.errors import CtpOrderSubmissionOutcomeUnknown
 from bt_api_ctp.exchange_data import CtpExchangeDataFuture
@@ -1161,6 +1165,89 @@ class CtpRequestData(Feed):
         self.auto_settlement_confirm = _as_bool(
             resolved_kwargs.get("auto_settlement_confirm"), default=False
         )
+        # Explicit operator opt-in for direct native writes on a frozen
+        # simulation front (official SimNow or a registered broker
+        # simulation).  It never admits a production front: admission is
+        # re-derived from the frozen endpoint registries on every use, and the
+        # native client still arms one instrument at a time through
+        # ``TraderClient.arm_execution_for_registered_sim``.
+        self._simnow_direct_writes = _as_bool(
+            resolved_kwargs.get("simnow_direct_writes"), default=False
+        )
+        self._simnow_direct_strategy_identity_sha256 = hashlib.sha256(
+            str(resolved_kwargs.get("simnow_direct_strategy_id") or "simnow-direct").encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        self._simnow_direct_cycle_id = f"simnow-direct-{uuid4().hex}"
+        self._simnow_direct_write_lock = threading.RLock()
+
+    def simnow_direct_writes_admitted(self) -> bool:
+        """Return whether the explicit opt-in applies to this bound simulation front.
+
+        True only when ``simnow_direct_writes`` was enabled and the feed's
+        bound TD/MD pair matches a frozen official SimNow or registered broker
+        simulation entry exactly.  A production front can never match.
+        """
+
+        if self._simnow_direct_writes is not True or self._managed_runtime_binding is not None:
+            return False
+        if self._execution_bound_profile == "config_front_pair":
+            return False
+        td_front = self._execution_bound_td_front
+        md_front = self._execution_bound_md_front
+        if (
+            not td_front
+            or not md_front
+            or str(self.td_front or "").strip() != td_front
+            or str(self.md_front or "").strip() != md_front
+            or str(self.broker_id or "").strip() != self._execution_bound_broker_id
+            or str(self.user_id or "").strip() != self._execution_bound_user_id
+        ):
+            return False
+        profile = registered_broker_sim_profile_for_td_front(td_front)
+        if profile:
+            return verify_registered_broker_sim_profile(td_front, md_front, profile)
+        profile = official_simnow_profile_for_td_front(td_front)
+        return bool(profile) and verify_official_simnow_profile(td_front, md_front, profile)
+
+    def _ensure_simnow_direct_arm(self, capability: object, symbol: Any, exchange_id: Any) -> None:
+        """Arm the native gate for exactly this instrument (opt-in mode only).
+
+        The native gate authorizes one instrument per arm, so switching to a
+        different instrument disarms first.  Settlement confirmation, bound
+        identity, frozen-front and per-write revalidation remain owned by
+        ``TraderClient.arm_execution_for_registered_sim``.
+        """
+
+        if capability is None:
+            return
+        self._ensure_connected()
+        trader = self._trader
+        if trader is None:
+            return
+        instrument = ctp_client.canonical_ctp_instrument(symbol, exchange_id or "")
+        if not instrument:
+            raise ctp_client.CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+        state = trader.get_execution_gate_state()
+        if isinstance(state, dict) and state.get("armed") is True:
+            armed = state.get("authorized_instruments") or [state.get("instrument")]
+            if instrument in armed:
+                return
+            trader.disarm_execution_gate(capability, "simnow_direct_instrument_switch")
+        preflight_sha256 = hashlib.sha256(
+            "|".join(
+                ("simnow-direct-preflight", self._simnow_direct_cycle_id, instrument, str(time.time_ns()))
+            ).encode("utf-8")
+        ).hexdigest()
+        trader.arm_execution_for_registered_sim(
+            instrument_id=str(symbol),
+            exchange_id=str(exchange_id or ""),
+            md_front=str(self.md_front or "").strip(),
+            strategy_identity_sha256=self._simnow_direct_strategy_identity_sha256,
+            execution_cycle_id=self._simnow_direct_cycle_id,
+            preflight_sha256=preflight_sha256,
+        )
 
     def translate_error(self, raw_response):
         if isinstance(raw_response, dict) and raw_response.get("ErrorID", 0) != 0:
@@ -1291,6 +1378,8 @@ class CtpRequestData(Feed):
         return ctp_client._issue_ctp_execution_authority_for_core()
 
     def _reject_official_simnow_write(self) -> None:
+        if self.simnow_direct_writes_admitted():
+            return
         if (
             is_official_simnow_td_front(self._execution_bound_td_front)
             or self._execution_bound_profile == "config_front_pair"
@@ -1725,6 +1814,32 @@ class CtpRequestData(Feed):
         extra_data=None,
         **kwargs,
     ):
+        if kwargs.get("_execution_capability") is None and self.simnow_direct_writes_admitted():
+            with self._simnow_direct_write_lock:
+                capability = self._execution_gate_capability
+                self._ensure_simnow_direct_arm(capability, symbol, kwargs.get("exchange_id", ""))
+                kwargs["_execution_capability"] = capability
+                return self._make_order_native(
+                    symbol, volume, price, order_type, offset, post_only,
+                    client_order_id, extra_data, **kwargs,
+                )
+        return self._make_order_native(
+            symbol, volume, price, order_type, offset, post_only,
+            client_order_id, extra_data, **kwargs,
+        )
+
+    def _make_order_native(
+        self,
+        symbol,
+        volume,
+        price=None,
+        order_type="buy-limit",
+        offset="open",
+        post_only=False,
+        client_order_id=None,
+        extra_data=None,
+        **kwargs,
+    ):
         execution_capability = kwargs.pop("_execution_capability", None)
         exchange_id = kwargs.get("exchange_id", "")
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
@@ -1839,6 +1954,15 @@ class CtpRequestData(Feed):
         )
 
     def cancel_order(self, symbol, order_id=None, extra_data=None, **kwargs):
+        if kwargs.get("_execution_capability") is None and self.simnow_direct_writes_admitted():
+            with self._simnow_direct_write_lock:
+                capability = self._execution_gate_capability
+                self._ensure_simnow_direct_arm(capability, symbol, kwargs.get("exchange_id", ""))
+                kwargs["_execution_capability"] = capability
+                return self._cancel_order_native(symbol, order_id, extra_data, **kwargs)
+        return self._cancel_order_native(symbol, order_id, extra_data, **kwargs)
+
+    def _cancel_order_native(self, symbol, order_id=None, extra_data=None, **kwargs):
         execution_capability = kwargs.pop("_execution_capability", None)
         exchange_id = kwargs.get("exchange_id", "")
         runtime_order_id = kwargs.get("runtime_order_id")

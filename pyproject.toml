@@ -79,7 +79,7 @@ CTP___FUTURE = "bt_api_ctp.futures_expected_calendar_provider:register_ctp_futur
 CTP___FUTURE = "bt_api_ctp.order_identity_projection:project_order_identity"
 
 [project.entry-points."bt_api.order_request_projections"]
-CTP___FUTURE = "bt_api_base.order_request_projection:legacy_order_request_projection"
+CTP___FUTURE = "bt_api_ctp.order_request_mapping:map_order_request"
 
 [project.entry-points."bt_api.order_quantity_unit_validators"]
 CTP___FUTURE = "bt_api_ctp.order_quantity_units:validate_order_quantity_units"
