@@ -89,7 +89,10 @@ _FUTURES_FAMILIES = frozenset(
         "futures_depth",
     }
 )
-_MAX_QUERY_SECONDS = 30.0
+# Per native query cap; the caller's batch deadline still applies. During
+# trading hours a full SimNow instrument catalog (~11k rows) can take more
+# than 30s to stream, and positions depend on it.
+_MAX_QUERY_SECONDS = 90.0
 _MAX_RETAINED_SNAPSHOTS = 512
 _MAX_RETAINED_RECEIPTS = 128
 _MAX_RETAINED_LEASES = 512

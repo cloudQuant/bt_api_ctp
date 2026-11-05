@@ -148,7 +148,11 @@ def project_ctp_market_tick(
         or key.timeframe is not None
         or data.get("schema_version") != "ctp.quote.v2"
         or data.get("exchange_name") != "CTP"
-        or data.get("exchange_id") != instrument.venue
+        # CTP >= 6.5 MD rows (and SimNow) leave ExchangeID empty. An empty
+        # native value carries no contrary evidence: the subscription is keyed
+        # by the exchange-unique native symbol and the payload takes its venue
+        # from the subscription key. A non-empty native value must still match.
+        or data.get("exchange_id") not in ("", instrument.venue)
         or data.get("asset_type") != instrument.product_type
         or data.get("instrument_id") != instrument.instrument_id
         or data.get("symbol") != instrument.native_symbol
