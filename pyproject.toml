@@ -48,6 +48,12 @@ CTP___FUTURE = "bt_api_ctp.market_session_registration:register_ctp_market_sessi
 [project.entry-points."bt_api.market_stream_providers"]
 CTP___FUTURE = "bt_api_ctp.market_stream_provider:register_ctp_market_stream_provider"
 
+[project.entry-points."bt_api.direct_write_providers"]
+CTP___FUTURE = "bt_api_ctp.direct_write_provider:create_ctp_direct_write_provider"
+
+[project.entry-points."bt_api.trading_session_providers"]
+CTP___FUTURE = "bt_api_ctp.trading_session_schedule:create_ctp_trading_session_schedule"
+
 [project.entry-points."bt_api.market_tick_providers"]
 CTP___FUTURE = "bt_api_ctp.market_tick_registration:register_ctp_market_tick_provider"
 

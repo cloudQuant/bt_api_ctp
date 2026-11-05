@@ -1345,6 +1345,8 @@ def _build_observation(
 
 def _project_positions(rows: tuple[Any, ...], observed_at: str) -> tuple[AccountPosition, ...]:
     totals: dict[tuple[str, str, str], int] = defaultdict(int)
+    today_totals: dict[tuple[str, str, str], int] = defaultdict(int)
+    unknown_split: set[tuple[str, str, str]] = set()
     for row in rows:
         instrument_id = _text(_field(row, "InstrumentID"))
         exchange_id = _text(_field(row, "ExchangeID"))
@@ -1357,10 +1359,27 @@ def _project_positions(rows: tuple[Any, ...], observed_at: str) -> tuple[Account
             raise ValueError
         if quantity:
             totals[(exchange_id, instrument_id, side)] += quantity
+            # D62-22: CTP reports today's part per row (SHFE/INE split today
+            # and history rows; other venues report both on one row).  A row
+            # without the field leaves the split unknown, never zero.
+            try:
+                raw_today = _field(row, "TodayPosition")
+            except (ValueError, AttributeError):
+                raw_today = None
+            key = (exchange_id, instrument_id, side)
+            if raw_today is None:
+                unknown_split.add(key)
+            else:
+                today = _integer(raw_today)
+                if today < 0 or today > quantity:
+                    raise ValueError
+                today_totals[key] += today
     if len(totals) > 2048:
         raise ValueError
     projected: list[AccountPosition] = []
     for (exchange_id, instrument_id, side), quantity in sorted(totals.items()):
+        split_known = (exchange_id, instrument_id, side) not in unknown_split
+        today_quantity = today_totals.get((exchange_id, instrument_id, side), 0)
         instrument = MarketInstrumentKey(
             provider="ctp",
             venue=exchange_id,
@@ -1379,6 +1398,8 @@ def _project_positions(rows: tuple[Any, ...], observed_at: str) -> tuple[Account
                 average_price=None,
                 price_currency=None,
                 observed_at_utc=observed_at,
+                today_quantity=str(today_quantity) if split_known else None,
+                yesterday_quantity=str(quantity - today_quantity) if split_known else None,
             )
         )
     return tuple(projected)

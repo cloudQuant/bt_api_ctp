@@ -190,6 +190,10 @@ CTP_REQUEST_COUNT_KEYS = (
 
 _QUERY_FILTER_UNSET = object()
 _TRADER_LOGIN_IDENTITY_SEAL = object()
+
+# Environment-neutral admission profile recorded when bt_api_py write
+# admission (iteration 62, D62-01) authorized writes for the bound session.
+SDK_ADMITTED_PROFILE = "sdk-admitted"
 _MAX_QUERY_RECORDS = 100_000
 
 
@@ -4724,6 +4728,16 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 self._c._front_id = getattr(pRspUserLogin, "FrontID", 0)
                 self._c._session_id = getattr(pRspUserLogin, "SessionID", 0)
                 self._c._trading_day = trading_day
+                # Tests may substitute ``time``; never let clock capture
+                # break the login path.
+                wall_ns = getattr(time, "time_ns", None)
+                mono_ns = getattr(time, "monotonic_ns", None)
+                self._c._login_local_received_ns = wall_ns() if callable(wall_ns) else None
+                self._c._login_local_monotonic_ns = mono_ns() if callable(mono_ns) else None
+                self._c._login_exchange_times = {
+                    venue: _native_text_field(pRspUserLogin, f"{venue}Time").strip()
+                    for venue in ("SHFE", "DCE", "CZCE", "FFEX", "INE", "GFEX")
+                }
                 self._c._login_identity_observation = _TraderLoginIdentityObservation(
                     _seal=_TRADER_LOGIN_IDENTITY_SEAL,
                     broker_id=broker_id,
@@ -5192,6 +5206,24 @@ class TraderClient:
         # bound TD front on every use, so a mutated or rebound client cannot
         # ride a stale admission.
         self._direct_sim_admission_profile: str | None = None
+        # Iteration 62 (D62-01/02): the SDK decides write admission.  When it
+        # admits writes for this session it records the bound TD front here;
+        # ``_direct_sim_admission_is_current_locked`` accepts the
+        # ``SDK_ADMITTED_PROFILE`` sentinel only while that front is still bound.
+        self._sdk_admitted_front: str | None = None
+        # Exchange clocks reported by the login response, with the local
+        # receive instants, for SDK clock cross-checks (D62-21).
+        self._login_exchange_times: dict[str, str] = {}
+        self._login_local_received_ns: int | None = None
+        self._login_local_monotonic_ns: int | None = None
+        # Private/public flow resume type (THOST_TERT_*): 0 RESTART, 1 RESUME,
+        # 2 QUICK.  Defaults keep the historical QUICK; direct hosts may ask
+        # for RESTART (I62-01) before connecting.
+        self.private_topic_resume_type = 2
+        self.public_topic_resume_type = 2
+        # Additional observers of native order/trade/error returns.  Each is
+        # called on the SPI thread with ``(kind, snapshot)`` and must not block.
+        self._execution_listeners: list[Any] = []
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -6729,6 +6761,11 @@ class TraderClient:
         profile = self._direct_sim_admission_profile
         if not profile:
             return False
+        if profile == SDK_ADMITTED_PROFILE:
+            # D62-01: SDK admission is environment-neutral; it stays current
+            # only while the TD front it was granted for is still bound.
+            front = self._sdk_admitted_front
+            return bool(front) and front == self._bound_front
         expected = registered_broker_sim_profile_for_td_front(
             self._bound_front
         ) or official_simnow_profile_for_td_front(self._bound_front)
@@ -8035,6 +8072,180 @@ class TraderClient:
             )
             return capability, dict(state)
 
+    # ------------------------------------------------------------------
+    # Iteration 62: SDK write admission (environment-neutral, D62-01/02)
+    # ------------------------------------------------------------------
+
+    def record_sdk_write_admission(self) -> None:
+        """Record that bt_api_py write admission admitted writes for this session.
+
+        The SDK made the admission decision; this provider only records the
+        bound TD front it applies to.  No front registry is consulted: the
+        same code path serves simulation and production accounts (D62-01).
+        The record is revalidated on every write against the bound front.
+        """
+
+        with self._query_state_lock:
+            self._require_bound_identity_locked(require_active_front=True)
+            if self.auto_settlement_confirm is not False:
+                raise CtpExecutionGateError("ctp_execution_gate_auto_settlement_confirm_enabled")
+            self._sdk_admitted_front = self._bound_front
+            self._direct_sim_admission_profile = SDK_ADMITTED_PROFILE
+
+    def clear_sdk_write_admission(self) -> None:
+        with self._query_state_lock:
+            if self._direct_sim_admission_profile == SDK_ADMITTED_PROFILE:
+                self._direct_sim_admission_profile = None
+            self._sdk_admitted_front = None
+
+    def login_clock_observation(self) -> dict[str, Any]:
+        """Exchange clocks from the last login response plus local receive instants."""
+
+        with self._query_state_lock:
+            return {
+                "exchange_times": dict(self._login_exchange_times),
+                "local_received_ns": self._login_local_received_ns,
+                "local_monotonic_ns": self._login_local_monotonic_ns,
+                "trading_day": self._trading_day,
+                "connection_generation": self._connection_generation,
+            }
+
+    def confirm_settlement_for_sdk_admission(
+        self, capability: object, *, timeout: float = 15.0
+    ) -> bool:
+        """Confirm today's settlement after SDK admission (D62-20).
+
+        Requires :meth:`record_sdk_write_admission` and a disarmed gate holding
+        ``capability``.  Returns True only after the server readback shows the
+        confirmation for this account and trading day.
+        """
+
+        with self._query_state_lock:
+            if not self._direct_sim_admission_is_current_locked():
+                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            settlement_authorization = self._issue_settlement_authorization_for_core(
+                capability,
+                environment_profile=SDK_ADMITTED_PROFILE,
+                environment_verified=True,
+            )
+        confirmed = self.confirm_settlement(
+            max(float(timeout), 0.0),
+            _execution_capability=capability,
+            _settlement_authorization=settlement_authorization,
+            _settlement_environment_profile=SDK_ADMITTED_PROFILE,
+            _settlement_environment_verified=True,
+        )
+        if confirmed:
+            self.verify_settlement_confirmation(timeout=max(float(timeout), 0.0))
+        return bool(self.is_trading_ready)
+
+    def arm_execution_for_sdk_admission(
+        self,
+        *,
+        capability: object,
+        instrument_id: str,
+        exchange_id: str,
+        strategy_identity_sha256: str,
+        execution_cycle_id: str,
+        preflight_sha256: str,
+    ) -> dict[str, Any]:
+        """Arm native writes for one instrument after SDK admission.
+
+        Same native invariants as :meth:`arm_execution_for_registered_sim`
+        (bound identity, trading-ready session, one-shot authorization,
+        per-write revalidation) without any front registry decision: the SDK
+        already decided admission.  Settlement must be confirmed beforehand
+        (:meth:`confirm_settlement_for_sdk_admission`).
+        """
+
+        def _require_hash(value: Any, code: str) -> str:
+            text = str(value or "").strip().lower()
+            if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+                raise CtpExecutionGateError(code)
+            return text
+
+        with self._query_state_lock:
+            self._require_bound_identity_locked(require_active_front=True)
+            if not self._direct_sim_admission_is_current_locked():
+                raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if self.auto_settlement_confirm is not False:
+                raise CtpExecutionGateError("ctp_execution_gate_auto_settlement_confirm_enabled")
+            instrument = canonical_ctp_instrument(instrument_id, exchange_id)
+            if not instrument:
+                raise CtpExecutionGateError("ctp_execution_gate_invalid_proof")
+            if self._execution_gate_capability is not capability:
+                raise CtpExecutionGateError("ctp_execution_gate_capability_mismatch")
+            if (
+                self._execution_gate_proof is not None
+                and self._execution_gate_revocation_reason is None
+                and self._execution_gate_environment_profile == SDK_ADMITTED_PROFILE
+                and instrument in _execution_gate_instruments(self._execution_gate_proof)
+            ):
+                return dict(self._execution_gate_state_locked())
+            if not self.is_trading_ready:
+                raise CtpExecutionGateError("ctp_execution_gate_session_not_trading_ready")
+            preflight = _require_hash(preflight_sha256, "ctp_execution_gate_invalid_proof")
+            strategy_identity = _require_hash(
+                strategy_identity_sha256,
+                "ctp_execution_gate_authorization_identity_invalid",
+            )
+            cycle_id = str(execution_cycle_id or "").strip()
+            if not cycle_id or cycle_id != execution_cycle_id or len(cycle_id) > 128:
+                raise CtpExecutionGateError("ctp_execution_gate_authorization_identity_invalid")
+            native_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp._ctp", "ctp_execution_gate_sim_measurement_unavailable"
+            )
+            package_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp.client", "ctp_execution_gate_sim_measurement_unavailable"
+            )
+            source_digest = self._registered_sim_file_digest(
+                "bt_api_ctp.ctp_env_selector",
+                "ctp_execution_gate_sim_measurement_unavailable",
+            )
+            receipt = hashlib.sha256(
+                "|".join(
+                    (
+                        SDK_ADMITTED_PROFILE,
+                        strategy_identity,
+                        cycle_id,
+                        instrument,
+                        str(self._trading_day),
+                        str(self._connection_generation),
+                    )
+                ).encode("utf-8")
+            ).hexdigest()
+            dependency_digest = hashlib.sha256(
+                (native_digest + package_digest + source_digest).encode("ascii")
+            ).hexdigest()
+            proof = {
+                "account_fingerprint": f"acct_{self._account_fingerprint}",
+                "trading_day": self._trading_day,
+                "instrument": instrument,
+                "connection_generation": self._connection_generation,
+                "environment_profile": SDK_ADMITTED_PROFILE,
+                "preflight_sha256": preflight,
+                "receipt_sha256": receipt,
+                "native_sha256": native_digest,
+                "ctp_package_sha256": package_digest,
+                "source_hashes_sha256": source_digest,
+                "dependency_hashes_sha256": dependency_digest,
+            }
+            authorization = self._issue_execution_authorization_for_core(
+                capability,
+                proof,
+                environment_profile=SDK_ADMITTED_PROFILE,
+                environment_verified=True,
+                strategy_identity_sha256=strategy_identity,
+                execution_cycle_id=cycle_id,
+            )
+            state = self.arm_execution_gate(
+                capability,
+                authorization,
+                _environment_profile=SDK_ADMITTED_PROFILE,
+                _environment_verified=True,
+            )
+            return dict(state)
+
     @staticmethod
     def _registered_sim_file_digest(module_name: str, error_code: str) -> str:
         """Measure one shipped module file for the registered-sim proof."""
@@ -8256,6 +8467,26 @@ class TraderClient:
             # happen after that check and before this recorder acquires the
             # lock. Revalidate the originating SPI/API atomically with the
             # evidence mutation so a stale callback cannot resolve a request.
+            if (
+                origin_spi is None
+                or origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+            ):
+                return
+            if error_code not in (None, 0) and self._execution_listeners:
+                insert_listeners = list(self._execution_listeners)
+                insert_payload = self._execution_listener_payload_locked(
+                    _snapshot_ctp_field(field),
+                    _error_code=error_code,
+                    _error_message=error_message,
+                    _source=source,
+                )
+            else:
+                insert_listeners = []
+                insert_payload = {}
+        if insert_listeners:
+            self._emit_execution_listeners(insert_listeners, "order_insert_error", insert_payload)
+        with self._query_state_lock:
             if (
                 origin_spi is None
                 or origin_spi._native_api is not origin_api
@@ -8627,8 +8858,51 @@ class TraderClient:
                 return matches[0] if len(matches) == 1 else None
             return self._order_action_history.get((normalized_request_id, str(order_action_ref)))
 
+    def add_execution_listener(self, listener: Any) -> None:
+        """Register an extra observer of native order/trade/error returns.
+
+        ``listener(kind, snapshot)`` runs on the SPI thread after the native
+        return was recorded; ``kind`` is one of ``order``, ``trade``,
+        ``order_insert_error`` or ``order_action_error``.  Snapshots carry the
+        native field values plus ``_login_front_id``/``_login_session_id``/
+        ``_trading_day``/``_connection_generation`` of the receiving session.
+        """
+
+        if not callable(listener):
+            raise TypeError("execution listener must be callable")
+        with self._query_state_lock:
+            if listener not in self._execution_listeners:
+                self._execution_listeners.append(listener)
+
+    def remove_execution_listener(self, listener: Any) -> None:
+        with self._query_state_lock:
+            if listener in self._execution_listeners:
+                self._execution_listeners.remove(listener)
+
+    def _execution_listener_payload_locked(
+        self, snapshot: Mapping[str, Any] | None, **extra: Any
+    ) -> dict[str, Any]:
+        payload = dict(snapshot or {})
+        payload["_login_front_id"] = self._front_id
+        payload["_login_session_id"] = self._session_id
+        payload["_trading_day"] = self._trading_day
+        payload["_connection_generation"] = self._connection_generation
+        payload.update(extra)
+        return payload
+
+    def _emit_execution_listeners(
+        self, listeners: list[Any], kind: str, payload: dict[str, Any]
+    ) -> None:
+        for listener in listeners:
+            try:
+                listener(kind, payload)
+            except Exception:
+                _logger.debug("ctp execution listener failed for %s", kind, exc_info=True)
+
     def _handle_order_return(self, field: Any, *, origin_api: Any, origin_spi: _TraderSpi) -> None:
         callback = None
+        listeners: list[Any] = []
+        payload: dict[str, Any] = {}
         with self._query_state_lock:
             if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
                 return
@@ -8642,7 +8916,12 @@ class TraderClient:
             snapshot = _snapshot_ctp_field(field)
             if snapshot:
                 self._order_events.put(snapshot)
+                if self._execution_listeners:
+                    listeners = list(self._execution_listeners)
+                    payload = self._execution_listener_payload_locked(snapshot)
             callback = self.on_order
+        if listeners:
+            self._emit_execution_listeners(listeners, "order", payload)
         if callback is not None:
             callback(field)
 
@@ -8661,6 +8940,22 @@ class TraderClient:
             is_last = None
 
         error_callback = None
+        action_listeners: list[Any] = []
+        action_payload: dict[str, Any] = {}
+        with self._query_state_lock:
+            if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
+                return
+            peek_code, peek_message = _rsp_error(rsp_info)
+            if peek_code not in (None, 0) and self._execution_listeners:
+                action_listeners = list(self._execution_listeners)
+                action_payload = self._execution_listener_payload_locked(
+                    _snapshot_ctp_field(field),
+                    _error_code=peek_code,
+                    _error_message=peek_message,
+                    _source=source,
+                )
+        if action_listeners:
+            self._emit_execution_listeners(action_listeners, "order_action_error", action_payload)
         with self._query_state_lock:
             if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
                 return
@@ -9638,8 +9933,8 @@ class TraderClient:
         try:
             startup_calls = (
                 lambda: api.RegisterSpi(spi),
-                lambda: api.SubscribePrivateTopic(2),
-                lambda: api.SubscribePublicTopic(2),
+                lambda: api.SubscribePrivateTopic(int(self.private_topic_resume_type)),
+                lambda: api.SubscribePublicTopic(int(self.public_topic_resume_type)),
                 lambda: api.RegisterFront(self._bound_front),
             )
             for startup_call in startup_calls:
@@ -11380,8 +11675,16 @@ class TraderClient:
 
     def _push_trade_event(self, trade_field) -> None:
         snapshot = _snapshot_ctp_field(trade_field)
+        listeners: list[Any] = []
+        payload: dict[str, Any] = {}
         if snapshot:
             self._trade_events.put(snapshot)
+            with self._query_state_lock:
+                if self._execution_listeners:
+                    listeners = list(self._execution_listeners)
+                    payload = self._execution_listener_payload_locked(snapshot)
+        if listeners:
+            self._emit_execution_listeners(listeners, "trade", payload)
         if self.on_trade:
             self.on_trade(trade_field)
 

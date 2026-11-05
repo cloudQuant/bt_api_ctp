@@ -39,9 +39,14 @@ def map_order_request(request: Any) -> dict[str, Any]:
             "make_order", detail="CTP does not support ticket-specific closes",
             definite_reject=True,
         )
-    if request.time_in_force not in (None, "", "GFD", "gfd", "DAY", "day", "GTC", "gtc"):
+    # I62-02 / D62-33: an unspecified validity uses the venue default (GFD);
+    # an explicit GTC (or anything else) is not representable on CTP and is
+    # reported as such instead of being silently converted to GFD.
+    if request.time_in_force not in (None, "", "GFD", "gfd", "DAY", "day"):
         raise CapabilityNotSupportedError(
-            "make_order", detail="CTP orders are good-for-day", definite_reject=True,
+            "make_order",
+            detail="order_validity_unrepresentable: CTP orders are good-for-day",
+            definite_reject=True,
         )
     result: dict[str, Any] = {
         "symbol": request.symbol,

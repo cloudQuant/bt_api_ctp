@@ -1820,6 +1820,8 @@ class CtpProviderQueryService(ProviderQueryPort):
     ) -> tuple[tuple[Mapping[str, Any], ...], tuple[str, ...]]:
         blockers: list[str] = []
         totals: dict[tuple[str, str, str], tuple[AccountPosition, int]] = {}
+        today_totals: dict[tuple[str, str, str], int] = {}
+        unknown_split: set[tuple[str, str, str]] = set()
         for row in rows:
             try:
                 if not _row_matches_session(row, self._session):
@@ -1836,12 +1838,26 @@ class CtpProviderQueryService(ProviderQueryPort):
                     key = (exchange_id, instrument_id, position.side)
                     prior = totals.get(key)
                     totals[key] = (position, quantity + (prior[1] if prior else 0))
+                    if position.today_quantity is None or key in unknown_split:
+                        unknown_split.add(key)
+                    else:
+                        today_totals[key] = _integer(position.today_quantity) + today_totals.get(
+                            key, 0
+                        )
             except Exception:
                 blockers.append("position_record_invalid")
         records: list[Mapping[str, Any]] = []
-        for (exchange_id, instrument_id, _side), (position, quantity) in sorted(totals.items()):
+        for key, (position, quantity) in sorted(totals.items()):
             instrument = replace(position.instrument, environment=self._session.environment)
-            normalized = replace(position, instrument=instrument, quantity=str(quantity))
+            known = key not in unknown_split
+            today_quantity = today_totals.get(key, 0)
+            normalized = replace(
+                position,
+                instrument=instrument,
+                quantity=str(quantity),
+                today_quantity=str(today_quantity) if known else None,
+                yesterday_quantity=str(quantity - today_quantity) if known else None,
+            )
             records.append(normalized.to_dict())
         return tuple(records), tuple(sorted(set(blockers)))
 
