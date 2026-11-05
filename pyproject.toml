@@ -45,6 +45,9 @@ CTP___FUTURE = "bt_api_ctp.store_account_session:register_ctp_account_session_pr
 [project.entry-points."bt_api.market_session_providers"]
 CTP___FUTURE = "bt_api_ctp.market_session_registration:register_ctp_market_session_provider"
 
+[project.entry-points."bt_api.market_stream_providers"]
+CTP___FUTURE = "bt_api_ctp.market_stream_provider:register_ctp_market_stream_provider"
+
 [project.entry-points."bt_api.market_tick_providers"]
 CTP___FUTURE = "bt_api_ctp.market_tick_registration:register_ctp_market_tick_provider"
 

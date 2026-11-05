@@ -2538,6 +2538,13 @@ class CtpMarketStream(BaseDataStream):
         # default of FUTURE would silently mislabel the option legs, so an
         # omitted identity stays explicit and conservative instead.
         self.asset_type = str(resolved_kwargs.get("asset_type") or "UNKNOWN")
+        # SimNow MD fronts answer the login with RequestID 0 and empty account
+        # fields.  ``MdClient`` accepts that only when asked to and then opens
+        # market subscriptions without producing an execution identity, so
+        # this stays opt-in for market-data-only consumers.
+        self._allow_zero_md_login_response = _as_bool(
+            resolved_kwargs.get("allow_zero_md_login_response"), default=False
+        )
         self._md_client = None
         self._ingest_seq = 0
         # The native client generation resets when a new ``MdClient`` object
@@ -3123,7 +3130,16 @@ class CtpMarketStream(BaseDataStream):
                 advance_subscription_epoch=self._has_connected_once
             )
             self._observed_client_generation = None
-            client = ctp_client.MdClient(self.md_front, self.broker_id, self.user_id, self.password)
+            # Pass the opt-in only when enabled so the default construction
+            # call stays exactly as before.
+            md_client_options = (
+                {"allow_zero_login_response": True}
+                if self._allow_zero_md_login_response
+                else {}
+            )
+            client = ctp_client.MdClient(
+                self.md_front, self.broker_id, self.user_id, self.password, **md_client_options
+            )
             self._md_client = client
             # Bind the callback to this concrete client and its lifecycle
             # token.  A late callback from a stopped/replaced client cannot be
