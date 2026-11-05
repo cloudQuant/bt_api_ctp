@@ -6107,9 +6107,14 @@ class TraderClient:
                     or request_id != envelope["native_request_id"]
                 ):
                     raise CtpExecutionGateError("ctp_managed_native_call_binding_changed")
+                sdk_admitted = self._direct_sim_admission_is_current_locked()
                 if (
                     self._is_simnow_write_restricted_locked()
                     and self._runtime_simnow_credential_binding is None
+                    # Iteration 62 (I62-10, D62-01/02): bt_api_py write admission
+                    # replaces the SimNow credential binding; the armed native
+                    # gate is still revalidated below on every write.
+                    and not sdk_admitted
                 ):
                     raise CtpExecutionGateError("ctp_simnow_execution_not_admitted")
                 detached_extras: dict[str, Any] = {}
@@ -6193,9 +6198,11 @@ class TraderClient:
                             managed_cancel_intent_id=None,
                         )
                     else:
-                        if not managed_cancel_tuple_supplied:
+                        if not managed_cancel_tuple_supplied and not sdk_admitted:
                             # Never infer runtime cancellation authority from
                             # the managed intent or Store action identifier.
+                            # (Under SDK admission no SimNow cancel grant is
+                            # consumed; the armed gate is revalidated instead.)
                             raise CtpExecutionGateError(
                                 "ctp_simnow_runtime_action_id_required"
                             )
@@ -7036,6 +7043,12 @@ class TraderClient:
             "runtime_simnow_write_verifier_configured": bool(
                 self._runtime_simnow_credential_binding is not None
                 and callable(self._runtime_simnow_credential_binding.write_intent_verifier)
+            ),
+            # Iteration 62: bt_api_py write admission recorded for the bound
+            # front (environment-neutral; revalidated on every write).
+            "sdk_write_admission": bool(
+                self._direct_sim_admission_profile == SDK_ADMITTED_PROFILE
+                and self._direct_sim_admission_is_current_locked()
             ),
         }
 

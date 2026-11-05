@@ -38,12 +38,18 @@ def resolve_service_observation_instrument(
             instrument=MarketInstrumentKey(
                 provider="ctp",
                 venue=metadata.exchange_id,
-                environment=account_key.environment,
+                # SimNow accounts carry the provider identity label "simnow";
+                # their market keys use the SDK route label "demo" (I62-10).
+                environment=(
+                    "demo" if account_key.environment == "simnow" else account_key.environment
+                ),
                 product_type=metadata.asset_type,
                 instrument_id=metadata.instrument_id,
                 native_symbol=metadata.instrument_id,
             ),
-            channel="ctp.quote.v2",
+            # The market provider's neutral subscription channel (iteration 62);
+            # ``ctp.quote.v2`` is the payload schema the provider projects.
+            channel="tick",
         )
     except Exception:
         raise error_type("SERVICE_MARKET_KEY_INVALID") from None
