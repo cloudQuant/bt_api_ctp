@@ -2081,7 +2081,8 @@ def test_market_stream_public_quote_metadata_cannot_qualify_native_receipt(
         def subscribe(self, instruments) -> None:
             self.subscriptions.append(list(instruments))
 
-        def start(self, *, block=False) -> None:
+        def start(self, *, block=False, join_observer=True) -> None:
+            assert join_observer is False  # iteration 62: market stop must be provable
             self.started = block
 
         def stop(self) -> None:
@@ -2210,7 +2211,8 @@ def test_market_quote_clock_source_scope_is_bound_to_authenticated_session(
         def subscribe(self, _instruments) -> None:
             pass
 
-        def start(self, *, block=False) -> None:
+        def start(self, *, block=False, join_observer=True) -> None:
+            assert join_observer is False  # iteration 62: market stop must be provable
             self.started = block
 
         def stop(self) -> None:
@@ -2359,7 +2361,8 @@ def test_market_stream_reconnect_advances_quote_v2_subscription_epoch(
         def subscribe(self, instruments) -> None:
             self.subscriptions.append(list(instruments))
 
-        def start(self, *, block=False) -> None:
+        def start(self, *, block=False, join_observer=True) -> None:
+            assert join_observer is False  # iteration 62: market stop must be provable
             self.started = block
 
         def stop(self) -> None:
@@ -2421,7 +2424,8 @@ def test_market_stream_reconnect_fences_delayed_old_client_quotes(monkeypatch) -
         def subscribe(self, instruments) -> None:
             self.subscriptions.append(list(instruments))
 
-        def start(self, *, block=False) -> None:
+        def start(self, *, block=False, join_observer=True) -> None:
+            assert join_observer is False  # iteration 62: market stop must be provable
             self.started = block
 
         def stop(self) -> None:

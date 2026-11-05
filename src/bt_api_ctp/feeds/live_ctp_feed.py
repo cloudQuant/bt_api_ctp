@@ -3171,7 +3171,12 @@ class CtpMarketStream(BaseDataStream):
             instruments = list(self._quote_v2_subscription_metadata)
             if instruments:
                 client.subscribe(instruments)
-            client.start(block=False)
+            # No Join observer: the vendor Join() returns only after Release(),
+            # and an observed generation defers Release until its Join returns,
+            # so its stop could never be proven (SimNow 2026-11-06: receipt still
+            # incomplete after 30 s; a no-Join generation released in 0.02 s and
+            # a Gateway subscription closed with upstream_released=True).
+            client.start(block=False, join_observer=False)
             self._has_connected_once = True
 
     def _on_login(

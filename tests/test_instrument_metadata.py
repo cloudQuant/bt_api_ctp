@@ -101,8 +101,11 @@ def _read_ready_trader() -> TraderClient:
 def _ready_market(monkeypatch: pytest.MonkeyPatch) -> CtpMarketStream:
     monkeypatch.setattr(ctp_client, "CThostFtdcReqUserLoginField", _SyntheticLoginField)
 
-    def start_without_native_library(client: MdClient, *, block: bool = True) -> None:
+    def start_without_native_library(
+        client: MdClient, *, block: bool = True, join_observer: bool = True
+    ) -> None:
         assert block is False
+        assert join_observer is False
         api = _FakeMdApi()
         spi = client._create_md_spi(api)
         client._api = api

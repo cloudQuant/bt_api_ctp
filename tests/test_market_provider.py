@@ -93,8 +93,9 @@ class _SyntheticMdClient:
         self.subscribed = [item for item in self.subscribed if item not in instruments]
         return True
 
-    def start(self, *, block: bool = False) -> None:
+    def start(self, *, block: bool = False, join_observer: bool = True) -> None:
         assert block is False
+        assert join_observer is False  # a stop must be provable (no Join observer)
         self.start_thread_id = threading.get_ident()
         if self.start_entered is not None:
             self.start_entered.set()
