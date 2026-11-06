@@ -123,6 +123,7 @@ NOT_READY_CODES = frozenset(
         "ctp_catalog_query_incomplete",
         "ctp_catalog_session_changed",
         "ctp_catalog_lock_timeout",
+        "ctp_catalog_not_built",
         "ctp_catalog_unavailable",
     }
 )
@@ -725,8 +726,18 @@ class InstrumentCatalogCache:
             native_queries=1 if origin == "full_query" else 0,
         )
 
-    def lookup(self, source: CatalogSource, instrument_id: str) -> CatalogLookup:
-        """Entries for ``instrument_id``; queries it on demand when missing."""
+    def lookup(
+        self, source: CatalogSource, instrument_id: str, *, build: bool = True
+    ) -> CatalogLookup:
+        """Entries for ``instrument_id``; queries it on demand when missing.
+
+        ``build=False`` never starts the full catalog query: without a catalog
+        of the current trading day in memory or a published file it raises
+        ``InstrumentCatalogNotReady("ctp_catalog_not_built")``. Latency-bound
+        callers (the order path) use it, because a full query can take minutes
+        on a slow front and occupies the session's only query slot meanwhile
+        (SimNow 2026-11-06: under 2,000 of over 10,000 rows in 60 s).
+        """
 
         if (
             type(instrument_id) is not str
@@ -736,7 +747,10 @@ class InstrumentCatalogCache:
         ):
             raise InstrumentCatalogNotReady("ctp_catalog_instrument_invalid")
         scope, day, generation = self._session(source)
-        catalog, origin = self._ready_catalog(source, scope, day, generation)
+        if build:
+            catalog, origin = self._ready_catalog(source, scope, day, generation)
+        else:
+            catalog, origin = self._published_catalog(scope, day)
         queries = 1 if origin == "full_query" else 0
         if instrument_id in catalog.conflicts:
             return CatalogLookup(instrument_id, scope, day, (), origin, queries, conflicted=True)
@@ -950,6 +964,23 @@ class InstrumentCatalogCache:
         except InstrumentCatalogNotReady:
             self._count("build_failures")
             raise
+
+    def _published_catalog(self, scope: str, day: str) -> tuple[_Catalog, str]:
+        """The current day's catalog from memory or the published file, no query.
+
+        Takes no build lock: files are published atomically, so a concurrent
+        builder (this or another process) never makes this wait.
+        """
+        catalog = self._memory_get(scope, day)
+        if catalog is not None:
+            self._count("memory_hits")
+            return catalog, "memory"
+        catalog = self._read_file(scope, day)
+        if catalog is not None:
+            self._install(catalog)
+            self._count("file_hits")
+            return catalog, "file"
+        raise InstrumentCatalogNotReady("ctp_catalog_not_built")
 
     def _ready_catalog(
         self, source: CatalogSource, scope: str, day: str, generation: int

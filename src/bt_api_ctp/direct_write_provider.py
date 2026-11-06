@@ -792,15 +792,37 @@ class CtpDirectWriteProvider:
             counters["provider_native_queries"] = self.catalog_queries
         return counters
 
-    def resolve_exchange_id(self, symbol: str) -> Optional[str]:
-        """Venue (``ExchangeID``) of ``symbol`` from the instrument catalog.
+    def warm_instrument_catalog(self) -> Any:
+        """Build (or load) the current trading day's instrument catalog.
 
-        Uses the two-level trading-day catalog cache (memory, local shared
-        file, one full native query per scope and CTP trading day, missing
-        instruments on demand; D62-11b/11c).  When the catalog is not ready
-        the previous single-instrument query is used.  Returns ``None`` when
-        the catalog does not prove a unique venue.  Catalog entries are
-        reference data only, not quote, position or permission evidence.
+        The one full native query per scope and CTP trading day (D62-11b/11c)
+        runs only here, never inside an order: it can take minutes on a slow
+        front and holds the session's only query slot meanwhile (I62-12a).
+        Call it when the session has no other queries to make, e.g. before
+        trading starts; other processes then reuse the published file.
+        Returns the cache's ``CatalogReady`` or raises
+        ``InstrumentCatalogNotReady``.
+        """
+        trader = self._trader()
+        self._session_fields(trader)
+        from bt_api_ctp.instrument_catalog_cache import CtpFeedCatalogSource
+
+        ready = self._instrument_catalog().ensure_ready(CtpFeedCatalogSource(self._feed))
+        with self._catalog_lock:
+            self.catalog_queries += ready.native_queries
+            self.last_catalog_error = None
+        return ready
+
+    def resolve_exchange_id(self, symbol: str) -> Optional[str]:
+        """Venue (``ExchangeID``) of ``symbol`` for an order (latency-bound).
+
+        Uses the current trading day's catalog when it is already in memory
+        or published by any process (missing instruments are then queried on
+        demand and added, D62-11b/11c), otherwise the single-instrument query.
+        It never starts the full catalog query (see
+        :meth:`warm_instrument_catalog`).  Returns ``None`` when no unique
+        venue is proven.  Catalog entries are reference data only, not quote,
+        position or permission evidence.
         """
         if not symbol:
             return None
@@ -812,7 +834,9 @@ class CtpDirectWriteProvider:
         )
 
         try:
-            lookup = self._instrument_catalog().lookup(CtpFeedCatalogSource(self._feed), symbol)
+            lookup = self._instrument_catalog().lookup(
+                CtpFeedCatalogSource(self._feed), symbol, build=False
+            )
         except InstrumentCatalogNotReady as exc:
             code = exc.code
         except Exception:

@@ -647,34 +647,77 @@ def _provider(tmp_path, answer, **cache_kwargs):
     return CtpDirectWriteProvider(feed, catalog_cache=cache), trader, calls, cache
 
 
-def test_provider_resolves_venues_through_the_cache(tmp_path):
-    provider, _trader, calls, cache = _provider(
-        tmp_path, lambda kw: _result(CATALOG_ROWS if not kw["instrument_id"] else ())
-    )
+def _filtered(rows):
+    """A front answering the single-instrument query with that instrument only."""
+
+    def answer(kwargs):
+        wanted = kwargs["instrument_id"]
+        return _result(tuple(r for r in rows if not wanted or r.get("InstrumentID") == wanted))
+
+    return answer
+
+
+def test_order_path_never_starts_the_full_catalog_query(tmp_path):
+    """SimNow 2026-11-06 (I62-12a): a full catalog query inside an order outlasted
+    its budget, held the session's only query slot, and the order was refused
+    ``ctp_direct_exchange_id_required``. Without a catalog of the day an order
+    resolves its venue with the single-instrument query."""
+
+    provider, _trader, calls, cache = _provider(tmp_path, _filtered(CATALOG_ROWS))
     assert provider.resolve_exchange_id("rb2701") == "SHFE"
     assert provider.resolve_exchange_id("IF2612") == "CFFEX"
     assert provider.resolve_exchange_id("zz9999") is None
-    assert [kw["instrument_id"] for kw in calls] == ["", "zz9999"]
+    assert [kw["instrument_id"] for kw in calls] == ["rb2701", "IF2612", "zz9999"]
+    assert provider.last_catalog_error == "ctp_catalog_not_built"
+    counters = provider.instrument_catalog_counters()
+    assert counters["full_queries"] == 0 and counters["incremental_queries"] == 0
+    assert counters["provider_native_queries"] == 3
+    source = CtpFeedCatalogSource(provider._feed)
+    assert not cache.catalog_path(source.catalog_scope(), DAY).exists()
+
+
+def test_warmed_catalog_serves_orders_and_supplements_missing_instruments(tmp_path):
+    provider, _trader, calls, cache = _provider(tmp_path, _filtered(CATALOG_ROWS))
+    ready = provider.warm_instrument_catalog()
+    assert ready.origin == "full_query" and ready.entry_count == 3
+    assert [kw["instrument_id"] for kw in calls] == [""]
     assert calls[0]["max_duration"] == 90.0
+    assert provider.resolve_exchange_id("rb2701") == "SHFE"
+    assert provider.resolve_exchange_id("IF2612") == "CFFEX"
+    assert provider.resolve_exchange_id("zz9999") is None  # queried once, on demand
+    assert [kw["instrument_id"] for kw in calls] == ["", "zz9999"]
     counters = provider.instrument_catalog_counters()
     assert counters["full_queries"] == 1 and counters["incremental_queries"] == 1
-    assert counters["memory_hits"] == 2 and counters["provider_native_queries"] == 2
+    assert counters["memory_hits"] == 3 and counters["provider_native_queries"] == 2
     assert provider.last_catalog_error is None
     source = CtpFeedCatalogSource(provider._feed)
     assert cache.catalog_path(source.catalog_scope(), DAY).is_file()
 
 
-def test_provider_falls_back_to_the_single_query_when_not_ready(tmp_path):
+def test_order_path_reuses_a_catalog_published_by_another_process(tmp_path):
+    builder, _t1, _c1, cache_one = _provider(tmp_path, _filtered(CATALOG_ROWS))
+    builder.warm_instrument_catalog()
+    # Another process: a fresh in-process cache over the same shared directory.
+    provider, _t2, calls, _cache_two = _provider(tmp_path, _filtered(CATALOG_ROWS))
+    assert provider.resolve_exchange_id("ag2512") == "SHFE"
+    assert calls == []  # read from the published file, no native query
+    assert provider.instrument_catalog_counters()["file_hits"] == 1
+
+
+def test_failed_warm_up_leaves_orders_on_the_single_query(tmp_path):
     def answer(kwargs):
         if not kwargs["instrument_id"]:
             return _result(CATALOG_ROWS, complete=False, timed_out=True)
         return _result((_native("rb2701", "SHFE"), _native("ag2512", "SHFE")))
 
     provider, _trader, calls, _cache_ = _provider(tmp_path, answer)
+    with pytest.raises(InstrumentCatalogNotReady) as error:
+        provider.warm_instrument_catalog()
+    assert error.value.code == "ctp_catalog_full_query_incomplete"
     assert provider.resolve_exchange_id("rb2701") == "SHFE"
-    assert provider.last_catalog_error == "ctp_catalog_full_query_incomplete"
+    assert provider.last_catalog_error == "ctp_catalog_not_built"
     assert [kw["instrument_id"] for kw in calls] == ["", "rb2701"]
-    assert provider.catalog_queries == 1  # the fallback query
+    assert provider.catalog_queries == 1  # the single query
 
 
 def test_provider_reserve_uses_the_catalog_venue(tmp_path):
