@@ -11,8 +11,9 @@ ordering; this module owns only CTP facts and native calls:
 * cancel by the original venue identity (``OrderRef`` + ``FrontID`` +
   ``SessionID``, or ``ExchangeID`` + ``OrderSysID``), never mixing the two;
 * confirm the trading day's settlement statement after SDK admission;
-* after a same-day re-login, restore trading readiness before a write with
-  one bounded, read-only settlement readback (never a confirmation);
+* after a same-day re-login, restore trading readiness with bounded,
+  read-only settlement readbacks (never a confirmation): proactively on a
+  background monitor thread, with a write-path fallback;
 * convert native order/trade/error returns into neutral
   :class:`~bt_api_base.direct_write_protocol.DirectExecutionEvent` rows.
 
@@ -23,8 +24,10 @@ path serves simulation and production accounts (D62-01/02).
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Mapping
 from typing import Any, Optional
@@ -68,11 +71,29 @@ CTP_DIRECT_WRITE_EXCHANGE = "CTP___FUTURE"
 _MAX_EVENTS = 50_000
 _ORDER_REF_DIGITS = 12
 
+_logger = logging.getLogger(__name__)
+# Monotonic clock of the readback cooldown/backoff (module alias for tests).
+_monotonic = time.monotonic
+
 # Settlement confirmation readback (read-only ReqQrySettlementInfoConfirm).
 _SETTLEMENT_READBACK_TIMEOUT = 10.0
-# Write-path readbacks per trader session generation: the first one, plus a
-# retry only after an attempt that provably never reached the venue.
-_MAX_WRITE_READBACKS_PER_GENERATION = 3
+# Background readback after a same-day re-login (I62-17 revision, 2026-11-06).
+# One monitor thread per provider polls the in-memory readiness at this
+# interval and retries a failed readback after this backoff (seconds after the
+# 1st, 2nd, ... consecutive failure; the last value is the cap).
+_READBACK_MONITOR_INTERVAL = 0.5
+_READBACK_BACKOFF = (2.0, 5.0, 10.0, 20.0, 30.0)
+_READBACK_MONITOR_THREAD_NAME = "ctp-direct-settlement-readback"
+_READBACK_MONITOR_JOIN_TIMEOUT = 2.0
+# A write runs its own readback only when no attempt ended this recently;
+# otherwise it is refused locally (``settlement_readback_pending``).
+_READBACK_WRITE_COOLDOWN = 5.0
+# Readbacks (background plus write path) per trader session generation.  730
+# lets the background schedule alone retry for just over six hours (2+5+10+20
+# s, then 30 s apart; the longest CTP continuous session, the night session,
+# is 5.5 h), and bounds a write loop that meets the 5 s cooldown to 730
+# read-only queries per generation.
+_MAX_READBACKS_PER_GENERATION = 730
 _READBACK_NOT_SENT_ORIGINS = frozenset({"query_slot_busy", "submit_rejected"})
 # Settlement states in which only this session's readback is missing:
 # a fresh login, or a confirmation acknowledged without its readback.
@@ -479,13 +500,23 @@ class CtpDirectWriteProvider:
             f"ctp-direct-host|{self._cycle_id}".encode("utf-8")
         ).hexdigest()
         self._capability: Any = None
-        # Write-path settlement readback state (guarded by ``_lock``): the
-        # (trading day, account fingerprint) this provider saw trading-ready,
-        # and the attempts made for one (trader, connection generation).
+        # Settlement readback state (guarded by ``_lock``): the (trading day,
+        # account fingerprint) this provider saw trading-ready, the (trader,
+        # generation) that observation came from, and the attempts, last end
+        # and next background slot for one (trader, connection generation).
         self._settled_day: Optional[tuple[str, str]] = None
+        self._ready_scope: Optional[tuple[Any, int]] = None
         self._readback_scope: Optional[tuple[Any, int]] = None
         self._readback_attempts = 0
-        self._readback_retry_allowed = False
+        self._readback_failures = 0
+        self._readback_last_at: Optional[float] = None
+        self._readback_next_at = 0.0
+        # Background readback monitor (guarded by ``_monitor_lock``, a leaf
+        # lock taken after ``_lock`` and never held while waiting).
+        self._monitor_lock = threading.Lock()
+        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_stop: Optional[threading.Event] = None
+        self._monitor_closed = False
 
     # ------------------------------------------------------------------
     # session
@@ -600,7 +631,8 @@ class CtpDirectWriteProvider:
         """Remember the trading day and account seen trading-ready (lock held).
 
         Observation only: a failed state read records nothing and never
-        changes the caller's result.
+        changes the caller's result.  A recorded day also starts the
+        background readback monitor (at most one per provider).
         """
         if state is None:
             try:
@@ -613,31 +645,41 @@ class CtpDirectWriteProvider:
         account = _text(state.get("account_fingerprint"))
         if day and account:
             self._settled_day = (day, account)
+            generation = _int_or_none(state.get("connection_generation"))
+            self._ready_scope = None if generation is None else (trader, generation)
+            self._ensure_readback_monitor()
 
-    def _settlement_readback_for_write(self, trader: Any) -> bool:
-        """Restore trading readiness after a same-day re-login (lock held).
+    def _note_ready_generation(self, trader: Any) -> None:
+        """Hot path of a trading-ready write (lock held).
 
-        Every CTP login resets readiness until the session reads back the
-        trading day's settlement confirmation.  When this account was already
-        trading-ready on the session's trading day and only this session's
-        readback is missing, run one bounded, read-only readback before the
-        write is armed.  Settlement is never confirmed here (an explicit SDK
-        step, D62-20/29), and a new trading day is left to that step.
+        The day and account cannot change within one session generation, so
+        the full session state is read only when the generation is new.
+        """
+        try:
+            generation = trader.connection_generation
+        except Exception:
+            return
+        scope = self._ready_scope
+        if scope is not None and scope[0] is trader and scope[1] == generation:
+            return
+        self._note_trading_ready(trader)
 
-        At most one readback per trader session generation; a later write may
-        retry only after an attempt that provably never reached the venue
-        (query slot busy, request rejected locally), capped per generation.
-        Returns True when a readback ran (the caller re-reads the session);
-        raises ``ctp_direct_settlement_unverified`` when the session is still
-        not trading-ready.  Any other not-ready state is left to the native
-        gate, unchanged.
+    def _readback_candidate(self, trader: Any) -> Optional[int]:
+        """Generation whose settlement readback may run now, else None (lock held).
+
+        Only the same-day re-login qualifies: logged in, not trading-ready,
+        only this session's readback missing, and this provider already saw
+        the same account trading-ready on the same trading day.  A new or
+        never-verified trading day and another account are left to the
+        explicit SDK settlement step (R-3); any other not-ready state is left
+        to the native gate, unchanged.
         """
         state = trader.get_session_state()
         if not isinstance(state, dict):
-            return False
+            return None
         if state.get("trading_ready") is True:
             self._note_trading_ready(trader, state)
-            return False
+            return None
         day = _text(state.get("trading_day"))
         account = _text(state.get("account_fingerprint"))
         generation = _int_or_none(state.get("connection_generation"))
@@ -649,40 +691,165 @@ class CtpDirectWriteProvider:
             or not account
             or self._settled_day != (day, account)
         ):
-            return False
+            return None
+        return generation
+
+    def _enter_readback_scope(self, trader: Any, generation: int) -> None:
+        """Start a fresh attempt cycle for a new (trader, generation) (lock held)."""
         scope = self._readback_scope
         if scope is None or scope[0] is not trader or scope[1] != generation:
             self._readback_scope = (trader, generation)
             self._readback_attempts = 0
-            self._readback_retry_allowed = True
-        if (
-            not self._readback_retry_allowed
-            or self._readback_attempts >= _MAX_WRITE_READBACKS_PER_GENERATION
-        ):
-            raise DirectWriteError(
-                "ctp_direct_settlement_unverified", "settlement_readback_not_repeated"
-            )
+            self._readback_failures = 0
+            self._readback_last_at = None
+            self._readback_next_at = 0.0
+
+    def _run_settlement_readback(self, trader: Any, should_stop: Any = None) -> Optional[str]:
+        """Run one bounded, read-only readback (lock held); None when ready.
+
+        Settlement is never confirmed here (an explicit SDK step, D62-20/29).
+        A failure schedules the next background attempt on the backoff and
+        returns a fixed, value-free detail.
+        """
         self._readback_attempts += 1
-        self._readback_retry_allowed = False
         try:
-            result = trader.verify_settlement_confirmation(timeout=_SETTLEMENT_READBACK_TIMEOUT)
+            if should_stop is None:
+                result = trader.verify_settlement_confirmation(
+                    timeout=_SETTLEMENT_READBACK_TIMEOUT
+                )
+            else:
+                result = trader.verify_settlement_confirmation(
+                    timeout=_SETTLEMENT_READBACK_TIMEOUT, should_stop=should_stop
+                )
         except Exception:
             result = None
-        if trader.is_trading_ready:
+        try:
+            ready = trader.is_trading_ready is True
+        except Exception:
+            ready = False
+        now = _monotonic()
+        self._readback_last_at = now
+        if ready:
+            self._readback_failures = 0
+            self._readback_next_at = 0.0
             self._note_trading_ready(trader)
-            return True
+            return None
+        step = min(self._readback_failures, len(_READBACK_BACKOFF) - 1)
+        self._readback_failures += 1
+        self._readback_next_at = now + _READBACK_BACKOFF[step]
         if getattr(result, "completion_origin", None) in _READBACK_NOT_SENT_ORIGINS:
-            self._readback_retry_allowed = True
-            detail = "settlement_readback_not_sent"
-        elif (
+            return "settlement_readback_not_sent"
+        if (
             getattr(result, "complete", False) is True
             and getattr(result, "timed_out", False) is not True
             and getattr(result, "error_code", None) in (None, 0)
         ):
-            detail = "settlement_readback_unconfirmed"
-        else:
-            detail = "settlement_readback_incomplete"
+            return "settlement_readback_unconfirmed"
+        return "settlement_readback_incomplete"
+
+    def _settlement_readback_for_write(self, trader: Any) -> bool:
+        """Write-path fallback of the same-day settlement readback (lock held).
+
+        Every CTP login resets readiness until the session reads back the
+        trading day's settlement confirmation.  The background monitor
+        normally restores it before the next write; a background readback in
+        flight holds ``_lock``, so a write waits for it (bounded by the
+        readback timeout) and then re-checks here without a second query.
+
+        Trading-ready: go (no session-state read).  Same-day re-login and no
+        attempt ended within the cooldown: one inline readback.  Otherwise
+        refuse locally with ``ctp_direct_settlement_unverified`` /
+        ``settlement_readback_pending``; at the per-generation cap with
+        ``settlement_readback_not_repeated``.  Returns True when a readback
+        ran (the caller re-reads the session); any other not-ready state is
+        left to the native gate, unchanged.
+        """
+        try:
+            ready = trader.is_trading_ready is True
+        except Exception:
+            ready = False
+        if ready:
+            self._note_ready_generation(trader)
+            return False
+        generation = self._readback_candidate(trader)
+        if generation is None:
+            return False
+        self._enter_readback_scope(trader, generation)
+        if self._readback_attempts >= _MAX_READBACKS_PER_GENERATION:
+            raise DirectWriteError(
+                "ctp_direct_settlement_unverified", "settlement_readback_not_repeated"
+            )
+        last = self._readback_last_at
+        if last is not None and _monotonic() - last < _READBACK_WRITE_COOLDOWN:
+            raise DirectWriteError(
+                "ctp_direct_settlement_unverified", "settlement_readback_pending"
+            )
+        detail = self._run_settlement_readback(trader)
+        if detail is None:
+            return True
         raise DirectWriteError("ctp_direct_settlement_unverified", detail)
+
+    # ------------------------------------------------------------------
+    # background settlement readback (I62-17 revision)
+    # ------------------------------------------------------------------
+    def _ensure_readback_monitor(self) -> None:
+        """Start the provider's monitor thread unless running or closed."""
+        with self._monitor_lock:
+            if self._monitor_closed or self._monitor_thread is not None:
+                return
+            stop = threading.Event()
+            thread = threading.Thread(
+                target=_settlement_readback_monitor,
+                args=(weakref.ref(self), stop),
+                name=_READBACK_MONITOR_THREAD_NAME,
+                daemon=True,
+            )
+            self._monitor_thread = thread
+            self._monitor_stop = stop
+            thread.start()
+
+    def _readback_monitor_exited(self, thread: threading.Thread) -> None:
+        with self._monitor_lock:
+            if self._monitor_thread is thread:
+                self._monitor_thread = None
+                self._monitor_stop = None
+
+    def _readback_monitor_tick(self, stop: threading.Event) -> bool:
+        """One monitor step; False ends the thread.
+
+        Reads only in-memory readiness (never connects, never confirms).  The
+        readback runs under ``_lock`` so writes and the explicit settlement
+        steps are serialised with it; the lock is only tried for one interval
+        so ``close`` is never held up by a long write.
+        """
+        trader = self._feed.trader_client
+        if trader is None:
+            return False  # the feed released its session
+        try:
+            if trader.is_trading_ready is True:
+                return True
+        except Exception:
+            return True
+        if not self._lock.acquire(timeout=_READBACK_MONITOR_INTERVAL):
+            return True  # a write or settlement step holds the lock
+        try:
+            if stop.is_set():
+                return False
+            if self._feed.trader_client is not trader:
+                return True
+            generation = self._readback_candidate(trader)
+            if generation is None:
+                return True
+            self._enter_readback_scope(trader, generation)
+            if (
+                self._readback_attempts >= _MAX_READBACKS_PER_GENERATION
+                or _monotonic() < self._readback_next_at
+            ):
+                return True
+            self._run_settlement_readback(trader, stop.is_set)
+            return True
+        finally:
+            self._lock.release()
 
     # ------------------------------------------------------------------
     # orders
@@ -1423,6 +1590,18 @@ class CtpDirectWriteProvider:
         return self._dropped_events
 
     def close(self) -> None:
+        # Stop the background readback for good (a reused provider falls back
+        # to the write-path readback).  Joined without ``_lock``: the monitor
+        # only tries that lock for one interval and its readback polls stop.
+        with self._monitor_lock:
+            self._monitor_closed = True
+            thread, stop = self._monitor_thread, self._monitor_stop
+            self._monitor_thread = None
+            self._monitor_stop = None
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(_READBACK_MONITOR_JOIN_TIMEOUT)
         trader = self._listening_trader
         if trader is not None:
             try:
@@ -1430,6 +1609,33 @@ class CtpDirectWriteProvider:
             except Exception:
                 pass
         self._listening_trader = None
+
+
+def _settlement_readback_monitor(provider_ref: Any, stop: threading.Event) -> None:
+    """Background readback loop of one provider.
+
+    Holds no strong reference to the provider while waiting, so the thread
+    also ends when the provider is collected; ``close`` and a released feed
+    session end it too.  It never runs on a CTP SPI callback thread.
+    """
+    current = threading.current_thread()
+    try:
+        while not stop.wait(_READBACK_MONITOR_INTERVAL):
+            provider = provider_ref()
+            if provider is None:
+                return
+            try:
+                keep = provider._readback_monitor_tick(stop)
+            except Exception:
+                _logger.debug("ctp direct settlement readback monitor step failed")
+                keep = True
+            del provider
+            if not keep:
+                return
+    finally:
+        provider = provider_ref()
+        if provider is not None:
+            provider._readback_monitor_exited(current)
 
 
 def create_ctp_direct_write_provider(feed: Any) -> CtpDirectWriteProvider:
