@@ -1576,8 +1576,9 @@ def test_default_request_feed_constructs_only_an_explicitly_safe_trader() -> Non
             self.auto_settlement_confirm = kwargs["auto_settlement_confirm"]
             self.is_read_only_ready = True
 
-        def start(self, *, block=False) -> None:
+        def start(self, *, block=False, join_observer=True) -> None:
             assert block is False
+            assert join_observer is False  # iteration 62: trader stop must be provable
 
         def confirm_settlement(self, *_args, **_kwargs) -> None:
             native_writes.append("settlement")
@@ -2726,6 +2727,37 @@ def test_trade_stream_reuses_request_feed_trader_without_second_td_client(
     stream.disconnect()
     assert stopped == []
     assert trader.on_order is None and trader.on_trade is None
+
+
+def test_trade_stream_owned_trader_starts_without_join_observer(monkeypatch) -> None:
+    starts = []
+    stops = []
+
+    class OwnedTrader:
+        def __init__(self, *_args, **kwargs) -> None:
+            self.auto_settlement_confirm = kwargs["auto_settlement_confirm"]
+            self.on_order = self.on_trade = self.on_login = self.on_error = None
+
+        def start(self, **kwargs) -> None:
+            starts.append(kwargs)
+
+        def stop(self) -> None:
+            stops.append(True)
+
+    monkeypatch.setattr(client_module, "TraderClient", OwnedTrader)
+    stream = CtpTradeStream(
+        broker_id="9999",
+        user_id="account",
+        password="secret",
+        td_front="tcp://test-td",
+        md_front="tcp://test-md",
+    )
+    stream.connect()
+
+    # iteration 62: a Join-observed trader stop could never be proven.
+    assert starts == [{"block": False, "join_observer": False}]
+    stream.disconnect()
+    assert stops == [True]
 
 
 def test_request_feed_reuses_disconnected_td_client_instead_of_replacing_it(

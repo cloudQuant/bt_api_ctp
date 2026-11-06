@@ -22,7 +22,7 @@ client = TraderClient(
     app_id=os.environ["BTAPI_SIMNOW_APP_ID"],
     auth_code=os.environ["BTAPI_SIMNOW_AUTH_CODE"],
 )
-client.start(block=False)
+client.start(block=False, join_observer=False)
 ready = client.wait_ready(timeout=6)
 print(f"{ready=}", flush=True)
 client.stop()

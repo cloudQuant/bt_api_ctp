@@ -28,6 +28,9 @@ class _NativeApi:
         fail_release: bool = False,
         fail_init: bool = False,
         fail_front: bool = False,
+        fail_register_spi: bool = False,
+        fail_private_topic: bool = False,
+        fail_public_topic: bool = False,
     ) -> None:
         self.calls: list[tuple[str, Any]] = []
         self._lock = threading.Lock()
@@ -39,6 +42,10 @@ class _NativeApi:
         self.fail_release = fail_release
         self.fail_init = fail_init
         self.fail_front = fail_front
+        self.fail_register_spi = fail_register_spi
+        self.fail_private_topic = fail_private_topic
+        self.fail_public_topic = fail_public_topic
+        self.release_thread_ids: list[int] = []
         self.init_entered = threading.Event()
         self.init_returned = threading.Event()
         self.allow_init = threading.Event()
@@ -70,6 +77,8 @@ class _NativeApi:
             self.register_spi_entered.set()
             if self.block_register_spi:
                 assert self.allow_register_spi.wait(3.0)
+            if self.fail_register_spi:
+                raise RuntimeError("fake_register_spi_failure")
 
     def RegisterFront(self, front: str) -> None:
         self._record("register_front", front)
@@ -78,9 +87,13 @@ class _NativeApi:
 
     def SubscribePrivateTopic(self, mode: int) -> None:
         self._record("private_topic", mode)
+        if self.fail_private_topic:
+            raise RuntimeError("fake_private_topic_failure")
 
     def SubscribePublicTopic(self, mode: int) -> None:
         self._record("public_topic", mode)
+        if self.fail_public_topic:
+            raise RuntimeError("fake_public_topic_failure")
 
     def Init(self) -> None:
         self._record("init")
@@ -100,6 +113,7 @@ class _NativeApi:
 
     def Release(self) -> None:
         self._record("release")
+        self.release_thread_ids.append(threading.get_ident())
         self.release_entered.set()
         if self.block_release:
             assert self.allow_release.wait(3.0)
@@ -697,4 +711,278 @@ def test_no_join_cleanup_worker_start_failure_stays_incomplete_without_retry(
     assert [name for name, _ in api.calls].count("release") == 0
 
 
+def _assert_released_startup_receipt(client: TraderClient, receipt: object) -> None:
+    assert type(receipt) is CtpNativeStartupStopReceipt
+    assert receipt.outcome == "api_created_released"
+    assert receipt.complete is True
+    assert receipt.api_attempt_id == client.native_startup_attempt.api_attempt_id
+    assert receipt.connection_generation == 0
+    assert receipt.native_released is True
+    assert receipt.join_required is False
+    assert receipt.join_completed is True
+    assert receipt.thread_alive is False
+    assert receipt.timed_out is False
 
+
+def _release_count(api: _NativeApi) -> int:
+    return [name for name, _ in api.calls].count("release")
+
+
+_TRADER_PRE_INIT_FAILURES = {
+    "register_spi": ("fail_register_spi", "fake_register_spi_failure"),
+    "private_topic": ("fail_private_topic", "fake_private_topic_failure"),
+    "public_topic": ("fail_public_topic", "fake_public_topic_failure"),
+    "register_front": ("fail_front", "fake_register_front_failure"),
+}
+
+
+@pytest.mark.parametrize("step", sorted(_TRADER_PRE_INIT_FAILURES))
+def test_trader_no_join_preinit_failure_releases_inline_with_complete_receipts(
+    monkeypatch, step
+) -> None:
+    flag, message = _TRADER_PRE_INIT_FAILURES[step]
+    api = _NativeApi(**{flag: True})
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+
+    with pytest.raises(RuntimeError, match=message):
+        client.start(block=False, join_observer=False)
+
+    # Init was never entered, so no vendor callback thread exists and a no-Join
+    # generation has no Join to race: the failing start released the exact
+    # API on its own thread, after detaching the SPI, before it raised.
+    assert api.release_returned.is_set()
+    assert api.release_thread_ids == [threading.get_ident()]
+    names = [name for name, _ in api.calls]
+    assert names.count("init") == 0
+    assert names.count("join") == 0
+    assert names.count("release") == 1
+    assert api.calls.index(("register_spi", None)) < names.index("release")
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+    assert client._callback_ingress_deferred_cleanup is None
+    assert client._pending_native_join_api_ids == set()
+
+    # Both receipts are complete without waiting.
+    _assert_released_startup_receipt(client, client.stop_startup_and_wait(timeout=0))
+    stop_receipt = client.stop_and_wait(timeout=0)
+    assert type(stop_receipt) is CtpNativeStopReceipt
+    assert stop_receipt.complete
+    assert _release_count(api) == 1
+
+    # The released attempt leaves no custody behind, so a retry starts at once.
+    retry_api = _NativeApi()
+    monkeypatch.setattr(
+        client_module,
+        "CThostFtdcTraderApi",
+        SimpleNamespace(CreateFtdcTraderApi=lambda _flow: retry_api),
+    )
+    client.start(block=False, join_observer=False)
+    assert client.stop_and_wait(timeout=2.0).complete
+    assert _release_count(api) == 1
+    assert _release_count(retry_api) == 1
+    assert [name for name, _ in retry_api.calls].count("join") == 0
+
+
+def test_trader_no_join_preinit_failure_with_ingress_owner_releases_inline_once(
+    monkeypatch,
+) -> None:
+    from test_ctp_callback_ingress_client import _OwnerIntent, _session_binder, _Sink
+
+    api = _NativeApi(fail_front=True)
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+    owner = _OwnerIntent()
+    client.install_callback_ingress_sink(
+        owner,
+        _Sink(),
+        _session_binder,
+        lambda verified_owner, binding: binding if verified_owner is owner else None,
+    )
+    started_threads: list[str] = []
+    real_thread_start = threading.Thread.start
+
+    def record_thread_start(thread, *args, **kwargs):
+        started_threads.append(thread.name)
+        return real_thread_start(thread, *args, **kwargs)
+
+    monkeypatch.setattr(threading.Thread, "start", record_thread_start)
+
+    with pytest.raises(RuntimeError, match="fake_register_front_failure"):
+        client.start(block=False, join_observer=False)
+
+    # Clearing ``_api`` with an ingress owner installed must not also schedule
+    # the lease-drain worker: the inline release is the only Release owner.
+    assert "bt-api-ctp-ingress-release" not in started_threads
+    assert api.release_thread_ids == [threading.get_ident()]
+    assert _release_count(api) == 1
+    assert [name for name, _ in api.calls].count("init") == 0
+    assert client._callback_ingress.poisoned is True
+    assert client._callback_ingress_deferred_cleanup is None
+    _assert_released_startup_receipt(client, client.stop_startup_and_wait(timeout=0))
+    assert client.stop_and_wait(timeout=0).complete
+    assert _release_count(api) == 1
+
+
+def test_trader_no_join_stop_during_spi_construction_releases_inline(monkeypatch) -> None:
+    api = _NativeApi()
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+    real_spi = client_module._TraderSpi
+
+    def stop_then_construct(owner, native_api):
+        owner.stop()
+        return real_spi(owner, native_api)
+
+    monkeypatch.setattr(client_module, "_TraderSpi", stop_then_construct)
+
+    # The stop cancels the reserved generation; start returns without error.
+    client.start(block=False, join_observer=False)
+
+    assert api.release_thread_ids == [threading.get_ident()]
+    assert all(
+        not (name == "register_spi" and value is not None) for name, value in api.calls
+    )
+    names = [name for name, _ in api.calls]
+    assert names.count("init") == 0
+    assert names.count("join") == 0
+    assert names.count("release") == 1
+    assert api.calls.index(("register_spi", None)) < names.index("release")
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+    _assert_released_startup_receipt(client, client.stop_startup_and_wait(timeout=0))
+    assert client.stop_and_wait(timeout=0).complete
+    assert _release_count(api) == 1
+
+
+def test_trader_no_join_stop_before_init_without_call_in_flight_releases_inline(
+    monkeypatch,
+) -> None:
+    api = _NativeApi()
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+    real_run_startup_call = client._run_startup_call
+
+    def stop_before_init(native_api, spi, generation, callback, **kwargs):
+        if kwargs.get("starts_native_thread"):
+            # Every registration call has returned; Init has not started.
+            client.stop()
+        return real_run_startup_call(native_api, spi, generation, callback, **kwargs)
+
+    monkeypatch.setattr(client, "_run_startup_call", stop_before_init)
+
+    client.start(block=False, join_observer=False)
+
+    names = [name for name, _ in api.calls]
+    assert names[:4] == ["register_spi", "private_topic", "public_topic", "register_front"]
+    assert names.count("init") == 0
+    assert names.count("join") == 0
+    assert names.count("release") == 1
+    assert api.calls.index(("register_spi", None)) < names.index("release")
+    assert api.release_thread_ids == [threading.get_ident()]
+    assert client_module._RETIRED_CTP_NATIVE_SESSIONS == []
+    _assert_released_startup_receipt(client, client.stop_startup_and_wait(timeout=0))
+    assert client.stop_and_wait(timeout=0).complete
+    assert _release_count(api) == 1
+
+
+@pytest.mark.parametrize("receipt_method", ["stop_startup_and_wait", "stop_and_wait"])
+def test_trader_no_join_stop_during_preinit_call_receipt_waits_for_release(
+    monkeypatch, receipt_method
+) -> None:
+    api = _NativeApi(block_register_spi=True, block_release=True)
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+    errors: list[BaseException] = []
+
+    def start() -> None:
+        try:
+            client.start(block=False, join_observer=False)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    starter = threading.Thread(target=start)
+    starter.start()
+    _wait(api.register_spi_entered)
+
+    client.stop()
+    # RegisterSpi still holds its startup lease: no detach and no Release yet.
+    assert not api.detached.is_set()
+    assert not api.release_entered.is_set()
+
+    api.allow_register_spi.set()
+    starter.join(2.0)
+    assert not starter.is_alive()
+    assert errors == []
+    # The final lease scheduled Release; hold it so the receipt must wait.
+    _wait(api.release_entered)
+    allow_release = threading.Timer(0.05, api.allow_release.set)
+    allow_release.start()
+    try:
+        receipt = getattr(client, receipt_method)(timeout=2.0)
+    finally:
+        api.allow_release.set()
+        allow_release.join()
+
+    if receipt_method == "stop_startup_and_wait":
+        _assert_released_startup_receipt(client, receipt)
+    else:
+        assert type(receipt) is CtpNativeStopReceipt
+        assert receipt.complete
+        assert receipt.join_required is False
+    names = [name for name, _ in api.calls]
+    assert names.count("init") == 0
+    assert names.count("join") == 0
+    assert names.count("release") == 1
+    assert client._callback_ingress_deferred_cleanup is None
+
+
+@pytest.mark.parametrize("receipt_method", ["stop_and_wait", "stop_startup_and_wait"])
+def test_trader_no_join_after_init_receipt_completes_once_callback_lease_drains(
+    monkeypatch, receipt_method
+) -> None:
+    api = _NativeApi()
+    client = _client_with_fake_api(monkeypatch, TraderClient, api)
+    client.start(block=False, join_observer=False)
+    assert client._native_init_started is True
+    assert client.connection_generation == 0
+    spi = client._spi
+    callback_entered = threading.Event()
+    allow_callback_return = threading.Event()
+
+    def blocking_callback(_value) -> None:
+        callback_entered.set()
+        assert allow_callback_return.wait(3.0)
+        api._record("callback_returned")
+
+    client.on_trade = blocking_callback
+    callback = threading.Thread(target=lambda: spi.OnRtnTrade(SimpleNamespace(TradeID="fake")))
+    callback.start()
+    _wait(callback_entered)
+
+    client.stop()
+    assert not api.detached.is_set()
+    assert not api.release_entered.is_set()
+    drain = threading.Timer(0.05, allow_callback_return.set)
+    drain.start()
+    try:
+        # A stop already detached the API; the receipt still waits for the
+        # lease drain and the deferred Release instead of reporting custody.
+        receipt = getattr(client, receipt_method)(timeout=2.0)
+    finally:
+        allow_callback_return.set()
+        drain.join()
+        callback.join(2.0)
+
+    assert not callback.is_alive()
+    if receipt_method == "stop_startup_and_wait":
+        _assert_released_startup_receipt(client, receipt)
+    else:
+        assert type(receipt) is CtpNativeStopReceipt
+        assert receipt.complete
+        assert receipt.join_required is False
+    names = [name for name, _ in api.calls]
+    assert names.index("callback_returned") < names.index("release")
+    assert names.count("release") == 1
+    assert names.count("join") == 0
+
+
+def test_simnow_trader_probe_starts_without_join_observer() -> None:
+    from bt_api_ctp import simnow_probe
+
+    script = simnow_probe._SIMNOW_PROBE_SCRIPT
+    assert "client.start(block=False, join_observer=False)" in script
+    assert script.count(".start(") == 1

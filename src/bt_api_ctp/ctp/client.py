@@ -9755,6 +9755,7 @@ class TraderClient:
 
         release_now = False
         observe_join = False
+        release_inline = False
         with self._query_state_lock:
             if not self._is_start_current_locked(api, spi, generation):
                 return False
@@ -9772,6 +9773,11 @@ class TraderClient:
                 self._last_stop_join_required = bool(join_observer)
                 self._last_stop_join_thread = self._thread
                 self._last_stop_join_tracker = self._native_join_tracker
+                if not join_observer and self._callback_ingress_deferred_cleanup is None:
+                    # Record the owner in this lock: re-recording it after the
+                    # lock could revive a record a drained worker had already
+                    # released and cleared.
+                    self._callback_ingress_deferred_cleanup = (api, spi, True, False, False)
             else:
                 self._pending_native_join_api_ids.add(id(api))
                 if join_observer:
@@ -9781,6 +9787,10 @@ class TraderClient:
                     self._callback_ingress_deferred_cleanup = (
                         api, spi, False, False, False
                     )
+                    # Init was never entered, so release promptly once no
+                    # lease is in flight. Claim before ``_api`` is cleared so
+                    # the ingress setter cannot schedule a second worker.
+                    release_inline = self._claim_uninitialized_no_join_release_locked(api)
             self._api = None
             self._thread = None
             self._join_active = False
@@ -9798,12 +9808,10 @@ class TraderClient:
             self._start_join_observer(api)
         elif release_now:
             self._release_native_api_immediately(api, spi)
+        elif release_inline:
+            self._finish_deferred_native_release()
         elif not join_observer:
             with self._query_state_lock:
-                if self._callback_ingress_deferred_cleanup is None:
-                    self._callback_ingress_deferred_cleanup = (
-                        api, spi, True, False, False
-                    )
                 self._maybe_finish_deferred_native_release_locked()
         return True
 
@@ -12057,6 +12065,61 @@ class TraderClient:
                 )
         return released
 
+    def _claim_uninitialized_no_join_release_locked(self, api: Any) -> bool:
+        """Claim the drained, inline Release of a no-Join API that never ran Init.
+
+        The caller proves ``Init`` was never entered for ``api``: the vendor
+        has then started no callback thread, and a no-Join generation never
+        calls ``Join``, so nothing can race a prompt Release.  The claim takes
+        the same once-only worker slot the lease-drain path uses, so the
+        caller then runs ``_finish_deferred_native_release`` outside SDK locks:
+        it detaches the SPI first, rechecks every lease, and poisons and
+        retains the exact API on any failure.  While any startup, request, or
+        callback lease is in flight the claim is refused and the final lease
+        schedules Release as before.
+        """
+
+        pending = self._callback_ingress_deferred_cleanup
+        state = self._callback_ingress
+        if (
+            api is None
+            or pending is None
+            or pending[0] is not api
+            or pending[4] is not False
+            or self._join_observer_for_api_locked(api)
+            or self._callback_ingress_cleanup_scheduled
+            or self._native_request_inflight_refs != 0
+            or self._callback_inflight_refs != 0
+            or (state is not None and (state.native_call_refs != 0 or state.callback_refs != 0))
+            or _ctp_native_join_claimed(api)
+        ):
+            return False
+        self._callback_ingress_cleanup_scheduled = True
+        return True
+
+    def _stopped_no_join_release_pending_locked(self, api: Any) -> bool:
+        """Whether this client stopped ``api`` and still owns its no-Join Release.
+
+        Such an API has left startup custody: the stop or startup abort that
+        recorded it already cancelled its start generation, and the deferred
+        owner releases it once every lease drains.  Receipts wait boundedly
+        for that Release instead of reporting startup custody as unresolved.
+        A poisoned API keeps the established unresolved receipt.
+        """
+
+        if api is None or self._last_stopped_native_api is not api:
+            return False
+        entry = self._join_observer_policy_by_api_id.get(id(api))
+        pending = self._callback_ingress_deferred_cleanup
+        return (
+            entry is not None
+            and entry[0] is api
+            and entry[1] is False
+            and pending is not None
+            and pending[0] is api
+            and not _ctp_native_api_release_poisoned(api)
+        )
+
     def _stop_native_session(self, *, expected_api: Any = _NO_EXPECTED_NATIVE_API) -> bool:
         """Stop a CTP trader session without freeing a live SWIG director.
 
@@ -12135,7 +12198,17 @@ class TraderClient:
                     join_claimed,
                     join_observer,
                 )
+            # A no-Join API that never entered Init has no vendor thread to
+            # race; release it now unless a lease is still in flight.
+            release_inline = (
+                not join_observer
+                and not native_may_be_live
+                and self._claim_uninitialized_no_join_release_locked(api)
+            )
 
+        if release_inline:
+            self._finish_deferred_native_release()
+            return True
         if not join_observer:
             with self._query_state_lock:
                 self._maybe_finish_deferred_native_release_locked()
@@ -12212,6 +12285,9 @@ class TraderClient:
                     stopped_api is not startup_api
                     or not _ctp_native_api_release_confirmed(startup_api)
                 )
+                # A stopped no-Join API awaiting its lease drain is no longer
+                # startup custody; the generic receipt waits for its Release.
+                and not self._stopped_no_join_release_pending_locked(startup_api)
             )
         if startup_custody_unresolved:
             # Keep this legacy method's concrete return type, but never let an
@@ -12259,6 +12335,9 @@ class TraderClient:
             active_session_api = self._session_native_api
             starting_generation = self._starting_generation
             binding = self._startup_api_client_binding
+            # A stopped no-Join API awaiting its lease drain has left startup
+            # custody; the generic receipt below waits for its Release.
+            no_join_release_pending = self._stopped_no_join_release_pending_locked(created_api)
         startup_custody_unresolved = (
             phase == "factory_uncertain"
             or (phase == "preflight_no_owner" and starting_generation is not None)
@@ -12270,6 +12349,7 @@ class TraderClient:
                     stopped_api is not created_api
                     or not _ctp_native_api_release_confirmed(created_api)
                 )
+                and not no_join_release_pending
             )
         )
         if startup_custody_unresolved:
@@ -12285,6 +12365,7 @@ class TraderClient:
                 current_api = self._api
                 starting_generation = self._starting_generation
                 binding = self._startup_api_client_binding
+                no_join_release_pending = self._stopped_no_join_release_pending_locked(created_api)
         if phase == "preflight_no_owner" and starting_generation is not None:
             # A start reservation is still in flight even after the stop
             # fence; a no-owner receipt now could race a factory attempt.
@@ -12338,6 +12419,7 @@ class TraderClient:
                 stopped_api is not created_api
                 or not _ctp_native_api_release_confirmed(created_api)
             )
+            and not no_join_release_pending
         ):
             # SPI construction still owns the exact API reference.  It is not
             # yet published for normal stop, so report uncertainty and leave

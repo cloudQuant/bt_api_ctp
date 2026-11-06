@@ -15,6 +15,7 @@ from bt_api_ctp.account_provider import (
 )
 from bt_api_ctp.ctp import client as ctp_client_module
 from bt_api_ctp.ctp.client import (
+    CtpNativeStartupAttempt,
     CtpNativeStartupStopReceipt,
     CtpNativeStopReceipt,
 )
@@ -298,12 +299,11 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
         == source_package / "feeds" / "live_ctp_feed.py"
     )
 
-    class JoinGateApi:
+    class ReleaseGateApi:
         def __init__(self) -> None:
             self.calls: list[tuple[str, object]] = []
-            self.join_entered = threading.Event()
-            self.allow_join_return = threading.Event()
-            self.join_returned = threading.Event()
+            self.release_entered = threading.Event()
+            self.allow_release = threading.Event()
             self.released = threading.Event()
 
         def RegisterSpi(self, spi: object | None) -> None:
@@ -322,18 +322,19 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
             self.calls.append(("init", None))
 
         def Join(self) -> int:
+            # The vendor Join returns only after Release; a stop of a Join-
+            # observed generation could never be proven (iteration 62).
             self.calls.append(("join", None))
-            self.join_entered.set()
-            if not self.allow_join_return.wait(2.0):
-                raise AssertionError("synthetic Join was not released by the test")
-            self.join_returned.set()
-            return 0
+            raise AssertionError("the production feed must start a no-Join trader")
 
         def Release(self) -> None:
             self.calls.append(("release", None))
+            self.release_entered.set()
+            if not self.allow_release.wait(2.0):
+                raise AssertionError("synthetic Release was not allowed by the test")
             self.released.set()
 
-    api = JoinGateApi()
+    api = ReleaseGateApi()
     monkeypatch.setattr(ctp_client_module, "_check_native_module", lambda: None)
     monkeypatch.setattr(ctp_client_module, "_flow_dir", lambda _prefix: "synthetic-flow")
     monkeypatch.setattr(ctp_client_module, "_TraderSpi", lambda _client, _api: SimpleNamespace())
@@ -358,7 +359,6 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
         monotonic_clock=lambda: 102.0,
         utc_clock=lambda: datetime(2026, 10, 17, 2, 0, tzinfo=timezone.utc),
     )
-    trader = None
 
     try:
         with pytest.raises(CtpAccountSessionProviderError, match="SESSION_NOT_CONNECTED"):
@@ -366,21 +366,22 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
 
         trader = feed._trader
         assert trader is not None
-        assert api.join_entered.wait(1.0)
+        assert ("init", None) in api.calls
         assert trader._connection_generation == 0
         with pytest.raises(CtpAccountSessionProviderError, match="NATIVE_CUSTODY_UNCERTAIN"):
             _ = provider.native_owner_created
 
-        # A bounded close while Join is pending preserves the exact feed/API.
+        # A bounded close while the no-Join Release is still running preserves
+        # the exact feed/API.
         assert provider.close() is False
+        assert api.release_entered.wait(1.0)
         assert not api.released.is_set()
         assert provider._request_feed is feed
         assert feed._trader is trader
 
-        # Once Join returns, the retained API is released and the provider can
-        # confirm the exact generation-zero startup stop.
-        api.allow_join_return.set()
-        assert api.join_returned.wait(1.0)
+        # Once Release returns, the provider confirms the exact generation-zero
+        # startup stop without any Join.
+        api.allow_release.set()
         assert api.released.wait(1.0)
         assert provider.close() is True
         receipt = provider.last_native_startup_stop_receipt
@@ -389,21 +390,104 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
         assert receipt.connection_generation == 0
         assert receipt.complete is True
         assert receipt.native_released is True
-        assert receipt.join_required is True
+        assert receipt.join_required is False
         assert receipt.join_completed is True
         assert receipt.thread_alive is False
         assert receipt.timed_out is False
         assert api.calls.count(("release", None)) == 1
+        assert ("join", None) not in api.calls
         assert provider.last_native_stop_receipt is None
         assert provider._request_feed is None
         assert feed._trader is None
     finally:
-        api.allow_join_return.set()
-        current_trader = feed._trader or trader
-        if current_trader is not None:
-            join_thread = current_trader._last_stop_join_thread or current_trader._thread
-            if join_thread is not None and join_thread is not threading.current_thread():
-                join_thread.join(1.0)
+        api.allow_release.set()
+
+
+def test_production_feed_preinit_start_failure_closes_with_released_startup_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FrontFailureApi:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+            self.release_thread_ids: list[int] = []
+
+        def RegisterSpi(self, spi: object | None) -> None:
+            self.calls.append(("register_spi", spi))
+
+        def SubscribePrivateTopic(self, mode: int) -> None:
+            self.calls.append(("subscribe_private", mode))
+
+        def SubscribePublicTopic(self, mode: int) -> None:
+            self.calls.append(("subscribe_public", mode))
+
+        def RegisterFront(self, front: str) -> None:
+            self.calls.append(("register_front", front))
+            raise RuntimeError("synthetic RegisterFront failure")
+
+        def Init(self) -> None:
+            self.calls.append(("init", None))
+
+        def Join(self) -> int:
+            self.calls.append(("join", None))
+            return 0
+
+        def Release(self) -> None:
+            self.calls.append(("release", None))
+            self.release_thread_ids.append(threading.get_ident())
+
+    api = FrontFailureApi()
+    monkeypatch.setattr(ctp_client_module, "_check_native_module", lambda: None)
+    monkeypatch.setattr(ctp_client_module, "_flow_dir", lambda _prefix: "synthetic-flow")
+    monkeypatch.setattr(ctp_client_module, "_TraderSpi", lambda _client, _api: SimpleNamespace())
+    monkeypatch.setattr(
+        ctp_client_module,
+        "CThostFtdcTraderApi",
+        SimpleNamespace(CreateFtdcTraderApi=lambda _flow: api),
+    )
+    feed = CtpRequestDataFuture(
+        broker_id="broker-test",
+        user_id="investor-test",
+        password="synthetic-only",
+        td_front="tcp://127.0.0.1:19991",
+        md_front="tcp://127.0.0.1:19992",
+        auto_settlement_confirm=False,
+    )
+    provider = CtpReadOnlyAccountSessionProvider(
+        lambda: feed,
+        stop_timeout_seconds=0.05,
+        monotonic_clock=lambda: 102.0,
+        utc_clock=lambda: datetime(2026, 10, 17, 2, 0, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(CtpAccountSessionProviderError, match="SESSION_NOT_CONNECTED"):
+        provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=1.0)
+
+    # The failed no-Join start never entered Init, so it released the exact
+    # API on the connecting thread, after detaching the SPI, before raising.
+    assert api.release_thread_ids == [threading.get_ident()]
+    assert api.calls[-2:] == [("register_spi", None), ("release", None)]
+    assert ("init", None) not in api.calls
+    assert ("join", None) not in api.calls
+    attempt = provider.native_startup_attempt
+    assert type(attempt) is CtpNativeStartupAttempt
+    assert attempt.phase == "api_created"
+    with pytest.raises(CtpAccountSessionProviderError, match="NATIVE_CUSTODY_UNCERTAIN"):
+        _ = provider.native_owner_created
+
+    # The first close proves the generation-zero release.
+    assert provider.close() is True
+    receipt = provider.last_native_startup_stop_receipt
+    assert type(receipt) is CtpNativeStartupStopReceipt
+    assert receipt.outcome == "api_created_released"
+    assert receipt.api_attempt_id == attempt.api_attempt_id
+    assert receipt.complete is True
+    assert receipt.native_released is True
+    assert receipt.join_required is False
+    assert receipt.timed_out is False
+    assert provider.native_owner_created is True
+    assert provider.last_native_stop_receipt is None
+    assert feed._trader is None
+    assert api.calls.count(("release", None)) == 1
 
 
 def test_exact_ctp_feed_constructor_failure_confirms_native_free_close(

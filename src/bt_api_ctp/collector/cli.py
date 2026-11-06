@@ -305,7 +305,9 @@ def build_engine(
     )
     try:
         check_stop(stop_event)
-        trader.start(block=False)
+        # No Join observer: the vendor Join() returns only after Release(),
+        # so an observed generation's stop could never be proven.
+        trader.start(block=False, join_observer=False)
         login_timeout_sec = float(ctp.get("login_timeout_sec", 30))
         _logger.info("CTP trader login: front=%s broker=%s user=%s", td_front, broker_id, user_id)
         wait_kwargs = {"timeout": login_timeout_sec}

@@ -1676,7 +1676,11 @@ class CtpRequestData(Feed):
                     self.private_topic_mode
                 ]
                 self._trader = trader
-                trader.start(block=False)
+                # No Join observer: the vendor Join() returns only after
+                # Release(), so an observed generation's stop could never be
+                # proven. A no-Join generation releases once its leases drain;
+                # one that fails or stops before Init releases at once.
+                trader.start(block=False, join_observer=False)
             if getattr(trader, "is_read_only_ready", False):
                 self._connected = True
                 return
@@ -3767,7 +3771,8 @@ class CtpTradeStream(BaseDataStream):
         self._trader.on_login = self._on_login
         self._trader.on_error = self._on_error
         if self._owns_trader:
-            self._trader.start(block=False)
+            # No Join observer, as for the request feed's trader above.
+            self._trader.start(block=False, join_observer=False)
         elif getattr(self._trader, "is_read_only_ready", False):
             self.state = ConnectionState.AUTHENTICATED
 

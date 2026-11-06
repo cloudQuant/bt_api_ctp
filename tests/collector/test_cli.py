@@ -549,7 +549,8 @@ class TestBuildEngineLogging:
             def __init__(self, *_args, **_kwargs):
                 pass
 
-            def start(self, block: bool = True):
+            def start(self, block: bool = True, join_observer: bool = True):
+                assert join_observer is False  # the trader stop must be provable
                 return None
 
             def wait_ready(self, timeout: float = 30):
@@ -619,7 +620,8 @@ class TestBuildEngineLogging:
             def __init__(self, *_args, **_kwargs):
                 pass
 
-            def start(self, block: bool = True):
+            def start(self, block: bool = True, join_observer: bool = True):
+                assert join_observer is False  # the trader stop must be provable
                 return None
 
             def wait_ready(self, timeout: float = 30):
@@ -797,8 +799,8 @@ class TestStartupCancellation:
             def __init__(self, *_args, **_kwargs):
                 pass
 
-            def start(self, **_kwargs):
-                pass
+            def start(self, **kwargs):
+                assert kwargs == {"block": False, "join_observer": False}
 
             def wait_ready(self, *, timeout, should_stop):
                 event.set()
