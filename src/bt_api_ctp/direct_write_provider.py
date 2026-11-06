@@ -11,6 +11,8 @@ ordering; this module owns only CTP facts and native calls:
 * cancel by the original venue identity (``OrderRef`` + ``FrontID`` +
   ``SessionID``, or ``ExchangeID`` + ``OrderSysID``), never mixing the two;
 * confirm the trading day's settlement statement after SDK admission;
+* after a same-day re-login, restore trading readiness before a write with
+  one bounded, read-only settlement readback (never a confirmation);
 * convert native order/trade/error returns into neutral
   :class:`~bt_api_base.direct_write_protocol.DirectExecutionEvent` rows.
 
@@ -65,6 +67,16 @@ __all__ = (
 CTP_DIRECT_WRITE_EXCHANGE = "CTP___FUTURE"
 _MAX_EVENTS = 50_000
 _ORDER_REF_DIGITS = 12
+
+# Settlement confirmation readback (read-only ReqQrySettlementInfoConfirm).
+_SETTLEMENT_READBACK_TIMEOUT = 10.0
+# Write-path readbacks per trader session generation: the first one, plus a
+# retry only after an attempt that provably never reached the venue.
+_MAX_WRITE_READBACKS_PER_GENERATION = 3
+_READBACK_NOT_SENT_ORIGINS = frozenset({"query_slot_busy", "submit_rejected"})
+# Settlement states in which only this session's readback is missing:
+# a fresh login, or a confirmation acknowledged without its readback.
+_READBACK_SETTLEMENT_STATES = frozenset({"not_requested", "confirmed"})
 
 _DIRECTION = {"0": "buy", "1": "sell"}
 _OFFSET = {
@@ -456,6 +468,13 @@ class CtpDirectWriteProvider:
             f"ctp-direct-host|{self._cycle_id}".encode("utf-8")
         ).hexdigest()
         self._capability: Any = None
+        # Write-path settlement readback state (guarded by ``_lock``): the
+        # (trading day, account fingerprint) this provider saw trading-ready,
+        # and the attempts made for one (trader, connection generation).
+        self._settled_day: Optional[tuple[str, str]] = None
+        self._readback_scope: Optional[tuple[Any, int]] = None
+        self._readback_attempts = 0
+        self._readback_retry_allowed = False
 
     # ------------------------------------------------------------------
     # session
@@ -566,6 +585,94 @@ class CtpDirectWriteProvider:
             preflight_sha256=preflight,
         )
 
+    def _note_trading_ready(self, trader: Any, state: Any = None) -> None:
+        """Remember the trading day and account seen trading-ready (lock held).
+
+        Observation only: a failed state read records nothing and never
+        changes the caller's result.
+        """
+        if state is None:
+            try:
+                state = trader.get_session_state()
+            except Exception:
+                return
+        if not isinstance(state, dict) or state.get("trading_ready") is not True:
+            return
+        day = _text(state.get("trading_day"))
+        account = _text(state.get("account_fingerprint"))
+        if day and account:
+            self._settled_day = (day, account)
+
+    def _settlement_readback_for_write(self, trader: Any) -> bool:
+        """Restore trading readiness after a same-day re-login (lock held).
+
+        Every CTP login resets readiness until the session reads back the
+        trading day's settlement confirmation.  When this account was already
+        trading-ready on the session's trading day and only this session's
+        readback is missing, run one bounded, read-only readback before the
+        write is armed.  Settlement is never confirmed here (an explicit SDK
+        step, D62-20/29), and a new trading day is left to that step.
+
+        At most one readback per trader session generation; a later write may
+        retry only after an attempt that provably never reached the venue
+        (query slot busy, request rejected locally), capped per generation.
+        Returns True when a readback ran (the caller re-reads the session);
+        raises ``ctp_direct_settlement_unverified`` when the session is still
+        not trading-ready.  Any other not-ready state is left to the native
+        gate, unchanged.
+        """
+        state = trader.get_session_state()
+        if not isinstance(state, dict):
+            return False
+        if state.get("trading_ready") is True:
+            self._note_trading_ready(trader, state)
+            return False
+        day = _text(state.get("trading_day"))
+        account = _text(state.get("account_fingerprint"))
+        generation = _int_or_none(state.get("connection_generation"))
+        if (
+            state.get("read_only_ready") is not True
+            or state.get("settlement_state") not in _READBACK_SETTLEMENT_STATES
+            or generation is None
+            or not day
+            or not account
+            or self._settled_day != (day, account)
+        ):
+            return False
+        scope = self._readback_scope
+        if scope is None or scope[0] is not trader or scope[1] != generation:
+            self._readback_scope = (trader, generation)
+            self._readback_attempts = 0
+            self._readback_retry_allowed = True
+        if (
+            not self._readback_retry_allowed
+            or self._readback_attempts >= _MAX_WRITE_READBACKS_PER_GENERATION
+        ):
+            raise DirectWriteError(
+                "ctp_direct_settlement_unverified", "settlement_readback_not_repeated"
+            )
+        self._readback_attempts += 1
+        self._readback_retry_allowed = False
+        try:
+            result = trader.verify_settlement_confirmation(timeout=_SETTLEMENT_READBACK_TIMEOUT)
+        except Exception:
+            result = None
+        if trader.is_trading_ready:
+            self._note_trading_ready(trader)
+            return True
+        if getattr(result, "completion_origin", None) in _READBACK_NOT_SENT_ORIGINS:
+            self._readback_retry_allowed = True
+            detail = "settlement_readback_not_sent"
+        elif (
+            getattr(result, "complete", False) is True
+            and getattr(result, "timed_out", False) is not True
+            and getattr(result, "error_code", None) in (None, 0)
+        ):
+            detail = "settlement_readback_unconfirmed"
+        else:
+            detail = "settlement_readback_incomplete"
+        raise DirectWriteError("ctp_direct_settlement_unverified", detail)
+
     # ------------------------------------------------------------------
     # orders
     # ------------------------------------------------------------------
@@ -640,6 +747,14 @@ class CtpDirectWriteProvider:
                 raise DirectWriteError("ctp_direct_reservation_session_changed")
             mapped = map_order_request(request)
             exchange_id = _text(fields.get("exchange_id"))
+            if self._settlement_readback_for_write(trader):
+                session = self._session_fields(trader)
+                if (
+                    session["front_id"] != fields.get("front_id")
+                    or session["session_id"] != fields.get("session_id")
+                    or session["connection_generation"] != reservation.identity.session_generation
+                ):
+                    raise DirectWriteError("ctp_direct_reservation_session_changed")
             verifier.consume(
                 grant,
                 exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
@@ -716,6 +831,10 @@ class CtpDirectWriteProvider:
                 order_id = str(order_sys_id_raw) if order_sys_id_raw else order_sys_id
             else:
                 raise DirectWriteError("ctp_direct_cancel_identity_incomplete")
+            if self._settlement_readback_for_write(trader):
+                # Consume against the session after the readback: a reconnect
+                # meanwhile fails the grant's session-generation check.
+                session = self._session_fields(trader)
             verifier.consume(
                 grant,
                 exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
@@ -750,9 +869,13 @@ class CtpDirectWriteProvider:
             try:
                 trader = self._trader()
                 if trader.is_trading_ready:
+                    self._note_trading_ready(trader)
                     return SettlementStatus.CONFIRMED
-                result = trader.verify_settlement_confirmation(timeout=10.0)
+                result = trader.verify_settlement_confirmation(
+                    timeout=_SETTLEMENT_READBACK_TIMEOUT
+                )
                 if trader.is_trading_ready:
+                    self._note_trading_ready(trader)
                     return SettlementStatus.CONFIRMED
                 # A complete, error-free readback for this session that holds
                 # no confirmation for the current trading day means the
@@ -794,6 +917,8 @@ class CtpDirectWriteProvider:
                 raise DirectWriteError(
                     getattr(exc, "code", None) or "ctp_direct_settlement_failed", str(exc)
                 ) from None
+            if ready:
+                self._note_trading_ready(trader)
             return SettlementStatus.CONFIRMED if ready else SettlementStatus.UNKNOWN
 
     # ------------------------------------------------------------------
