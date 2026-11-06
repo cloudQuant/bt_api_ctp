@@ -21,6 +21,14 @@ consumer explicitly acknowledged the data loss -- binds each channel to the
 new source under a new epoch whose cursor starts again at 1.  No tick of the
 lost session is delivered after the switch (the provider fences its callbacks
 and discarded its queues when the recovery began).
+
+While the lost source is being replaced (and when its replacement failed) every
+``poll`` fails as well, so the SDK owner holds the channels in recovery for the
+whole outage instead of reporting them live with no data (SimNow 2026-11-07:
+a feed stayed LIVE through a disconnect).  Meanwhile
+``channel_recovery_code`` declares nothing, so the owner reports
+``PROVIDER_POLL_FAILED``, which a consumer never acknowledges with a resync;
+the restart declaration that follows replaces it.
 """
 
 from __future__ import annotations
@@ -262,6 +270,12 @@ class CtpDirectMarketStreamSession:
                 # A confirmed native source restart needs a new epoch: fail
                 # this poll so the SDK owner marks the channels for recovery.
                 raise _invalid("MARKET_STREAM_PROVIDER_EVENT_INVALID")
+            if self._source_unavailable(provider):
+                # A lost source being replaced, or whose replacement failed:
+                # fail every poll so the SDK owner keeps the channels in
+                # recovery (D62-38 point 7) instead of reporting them live
+                # with no data.  ``maintain`` above still drives the recovery.
+                raise _invalid("MARKET_STREAM_PROVIDER_EVENT_INVALID")
             for channel in self._channels.values():
                 if channel.awaiting_resync:
                     continue
@@ -345,7 +359,18 @@ class CtpDirectMarketStreamSession:
         channel = self._channels.get(getattr(binding, "token", None))
         if channel is None or channel.binding is not binding:
             return None
+        # A lost source still being replaced (or whose replacement failed)
+        # declares nothing: the owner reports the failed poll as such
+        # (``PROVIDER_POLL_FAILED``), which a consumer never resyncs.
         return SOURCE_RESTART_RECOVERY_CODE if channel.awaiting_resync else None
+
+    def _source_unavailable(self, provider: object) -> bool:
+        """Whether a channel not yet held for a resync has no current source."""
+        return any(
+            not channel.awaiting_resync
+            and provider.source_recovery_state(channel.handle) is not None
+            for channel in self._channels.values()
+        )
 
     def _note_source_restart(self, provider: object) -> bool:
         """Hold every channel back once the provider confirms a new source."""

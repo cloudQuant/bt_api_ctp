@@ -716,13 +716,28 @@ def _poll(session, *, timeout: float = 3.0, want: int = 1):
     return events
 
 
+def _outage(session) -> bool:
+    """Whether the provider reports a lost source being replaced (or failed)."""
+    provider = session._provider
+    return any(
+        provider.source_recovery_state(channel.handle) is not None
+        for channel in session._channels.values()
+    )
+
+
 def _poll_until_restart(session, *, timeout: float = 5.0) -> None:
+    """Poll until a confirmed restart holds the channels for a resync.
+
+    Every poll of the outage before it fails as well (D62-38 point 7).
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             session.poll(timeout_ms=20, max_events=16)
         except MarketStreamProviderContractError:
-            return
+            if any(channel.awaiting_resync for channel in session._channels.values()):
+                return
+            assert _outage(session)
     raise AssertionError("no source restart was reported")
 
 
@@ -736,10 +751,16 @@ def _wait(predicate, timeout: float = 3.0) -> None:
 
 
 def _pump_until(session, predicate, timeout: float = 3.0) -> None:
-    """Poll the session (the owner thread drives the recovery) until true."""
+    """Poll the session (the owner thread drives the recovery) until true.
+
+    A poll during the outage fails (D62-38 point 7) and never delivers an event.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        assert session.poll(timeout_ms=10, max_events=8) == ()
+        try:
+            assert session.poll(timeout_ms=10, max_events=8) == ()
+        except MarketStreamProviderContractError:
+            assert _outage(session)
         if predicate():
             return
     raise AssertionError("condition not reached")
@@ -806,12 +827,17 @@ def test_direct_stream_survives_the_closed_gap_a_refused_login_and_a_new_trading
     replacement.drop()
     replacement.settle()
 
-    # Closed for longer than the native start deadline: no failure, no event.
+    # Closed for longer than the native start deadline: the recovery does not
+    # fail, and every poll reports the outage (D62-38 point 7: DELAYED during a
+    # disconnect) with no declared code, so a consumer cannot resync yet.
     for _ in range(3):
         time.sleep(0.8)
-        assert session.poll(timeout_ms=10, max_events=8) == ()
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
+        assert session.channel_recovery_code(binding) is None
     recovery = provider._source_recovery
     assert recovery is not None and recovery.state == "connecting"
+    assert provider.source_recovery_state(session._channels[binding.token].handle) == "recovering"
     assert replacement.spi is not None and replacement.released is False
 
     # The night session: the front reopens with the next trading day.
@@ -837,6 +863,45 @@ def test_direct_stream_survives_the_closed_gap_a_refused_login_and_a_new_trading
     session.close()
 
 
+def test_the_outage_is_reported_on_every_poll_until_the_restart(md_front):
+    """SimNow 2026-11-07: a feed stayed LIVE through a disconnect (D62-38 point 7).
+
+    From the source loss to the confirmed restart every poll fails with no
+    declared code (the SDK owner keeps the channel in recovery as
+    ``PROVIDER_POLL_FAILED``, never resynced); the restart then declares
+    ``PROVIDER_RESYNC_REQUIRED`` and an acknowledged resync resumes delivery.
+    """
+    session, bindings = _direct_session()
+    binding = bindings["rb2701"]
+    assert _poll(session)
+    provider = _provider(session)
+    handle = session._channels[binding.token].handle
+    assert provider.source_recovery_state(handle) is None
+    # The replacement reaches the front but its logins are refused as not ready.
+    md_front.login_script = ["not_ready"] * 50
+    md_front.apis[0].drop()
+    _pump_until(session, lambda: len(md_front.apis) == 2 and md_front.apis[1].login_requests)
+    replacement = md_front.apis[1]
+    replacement.settle()
+    for _ in range(5):
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
+        assert session.channel_recovery_code(binding) is None
+        assert provider.source_recovery_state(handle) == "recovering"
+    # The front is ready again: the next login succeeds and the source restarts.
+    md_front.login_script = []
+    replacement.reconnect()
+    _poll_until_restart(session)
+    assert session.channel_recovery_code(binding) == SOURCE_RESTART_RECOVERY_CODE
+    assert provider.source_recovery_state(handle) is None
+    rebound = session.resync(binding, acknowledge_data_loss=True)
+    assert session.channel_recovery_code(rebound) is None
+    replacement.tick("rb2701")
+    events = _poll(session)
+    assert events and events[0].cursor.sequence == 1 and events[0].source == rebound.source
+    session.close()
+
+
 def test_a_relogin_naming_another_account_fails_the_direct_stream_closed(md_front):
     session, bindings = _direct_session()
     binding = bindings["rb2701"]
@@ -847,9 +912,12 @@ def test_a_relogin_naming_another_account_fails_the_direct_stream_closed(md_fron
     _pump_until(session, lambda: len(md_front.apis) == 2 and md_front.apis[1].login_requests)
     md_front.apis[1].settle()
     for _ in range(5):
-        assert session.poll(timeout_ms=10, max_events=8) == ()
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)  # the outage stays reported
+        assert session.channel_recovery_code(binding) is None
     assert provider._source_recovery is not None
     assert provider._source_recovery.state == "failed"
+    assert provider.source_recovery_state(session._channels[binding.token].handle) == "failed"
     assert md_front.apis[1].login_requests == [md_front.apis[1].login_requests[0]]
     with pytest.raises(MarketStreamProviderContractError):
         session.resync(binding, acknowledge_data_loss=True)
@@ -932,8 +1000,10 @@ def test_close_is_confirmed_while_the_front_stays_closed(md_front):
     md_front.accepting = False
     md_front.apis[0].drop()
     _pump_until(session, lambda: len(md_front.apis) == 2)
+    _pump_until(session, lambda: _provider(session)._source_recovery.state == "connecting")
     for _ in range(3):
-        session.poll(timeout_ms=10, max_events=8)
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
     assert _provider(session)._source_recovery.state == "connecting"
     assert session.unsubscribe(bindings["rb2701"]) is True
     assert session.close() is True

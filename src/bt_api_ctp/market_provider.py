@@ -639,6 +639,31 @@ class CtpQuoteV2MarketProvider:
             and self._current_source_scope(handle.stream) is recovery.new_scope
         )
 
+    def source_recovery_state(self, handle: object) -> str | None:
+        """``"recovering"`` or ``"failed"`` while this handle's lost source is replaced.
+
+        Typed optional hook for a direct consumer (iteration 62, D62-38 point 7:
+        DELAYED during a disconnect or a recovery).  From a confirmed source loss
+        until the replacement session is described the handle delivers nothing,
+        so a consumer must not keep reporting the channel as live meanwhile.
+        ``None`` when no recovery is in progress, and once the replacement awaits
+        its new consumer epoch (see :meth:`source_epoch_reset_required`).
+        Owner-thread only; never raises for a foreign or inactive handle.
+        """
+
+        self._check_owner()
+        if (
+            type(handle) is not CtpQuoteV2MarketHandle
+            or handle.owner_token is not self._owner_token
+            or not handle.active
+            or self._active_handles.get(id(handle)) is not handle
+        ):
+            return None
+        recovery = self._source_recovery
+        if recovery is None or recovery.state == "reset_pending":
+            return None
+        return "failed" if recovery.state == "failed" else "recovering"
+
     def maintain(self) -> None:
         """Drive a pending source recovery without draining any handle queue.
 
