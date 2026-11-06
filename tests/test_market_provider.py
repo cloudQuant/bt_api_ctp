@@ -1737,3 +1737,123 @@ def test_ctp_native_callback_queue_is_bounded_and_nonblocking() -> None:
     assert callback_queue.dropped_oldest == 1
     assert callback_queue.drain(2) == ("second", "third")
     assert callback_queue.size == 0
+
+
+def _added_key() -> MarketSubscriptionKey:
+    return _key(
+        instrument=MarketInstrumentKey(
+            provider="ctp",
+            venue="CFFEX",
+            environment="simnow",
+            product_type="future",
+            instrument_id="IH2612",
+            native_symbol="IH2612",
+        )
+    )
+
+
+class _AsyncAckMdClient(_SyntheticMdClient):
+    """A real front acknowledges an added subscription later, on its own thread."""
+
+    ack_delay_seconds: float | None = 0.15
+    ack_error_id = 0
+
+    def subscribe_additional(self, instruments: list[str]) -> tuple[str, ...]:
+        self.subscribe_additional_calls += 1
+        additions = tuple(item for item in instruments if item not in self.subscribed)
+        self.subscribed.extend(additions)
+        if additions and self.ack_delay_seconds is not None:
+            request_id = self.next_request_id
+            self.next_request_id += 1
+            timer = threading.Timer(
+                self.ack_delay_seconds,
+                self.emit_subscription_batch,
+                args=(additions,),
+                kwargs={"request_id": request_id, "error_id": self.ack_error_id},
+            )
+            timer.daemon = True
+            timer.start()
+        return additions
+
+
+def _async_ack_provider(
+    monkeypatch: pytest.MonkeyPatch, *, delay: float | None, error_id: int = 0, timeout: float = 2.0
+) -> CtpQuoteV2MarketProvider:
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _AsyncAckMdClient)
+    monkeypatch.setattr(_AsyncAckMdClient, "ack_delay_seconds", delay)
+    monkeypatch.setattr(_AsyncAckMdClient, "ack_error_id", error_id)
+    return CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=timeout,
+    )
+
+
+def test_added_key_is_acquired_only_after_the_asynchronous_venue_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Iteration 62 (SimNow 2026-11-06): the Gateway Hub describes an added key's
+    source in the same subscribe call; a real front acknowledges it later."""
+
+    provider = _async_ack_provider(monkeypatch, delay=0.15)
+    first_key, added_key = _key(), _added_key()
+    first = provider.subscribe(first_key, generation="hub-generation-a")
+
+    started = time.monotonic()
+    added = provider.subscribe(added_key, generation="hub-generation-b")
+    assert time.monotonic() - started >= 0.1  # returned after the acknowledgement
+
+    descriptor = provider.describe_source(
+        added,
+        key=added_key,
+        generation="hub-generation-b",
+        stream_id=added_key.stream_id,
+        epoch="hub-epoch-b",
+    )
+    assert descriptor is not None
+    assert descriptor.key == added_key
+    assert (
+        provider.describe_source(
+            first,
+            key=first_key,
+            generation="hub-generation-a",
+            stream_id=first_key.stream_id,
+            epoch="hub-epoch-a",
+        )
+        is not None
+    )
+    assert first.stream.quote_v2_service_fail_closed is False
+    assert provider.unsubscribe(added) is True
+    assert provider.unsubscribe(first) is True
+    assert provider.diagnostics["active_sessions"] == 0
+
+
+@pytest.mark.parametrize(
+    ("delay", "error_id"),
+    [(None, 0), (0.05, 16)],  # no acknowledgement at all / the venue rejects the add
+)
+def test_unacknowledged_added_key_fails_the_shared_session_closed(
+    monkeypatch: pytest.MonkeyPatch, delay: float | None, error_id: int
+) -> None:
+    provider = _async_ack_provider(monkeypatch, delay=delay, error_id=error_id, timeout=0.4)
+    first = provider.subscribe(_key(), generation="hub-generation-a")
+    stream = first.stream
+
+    started = time.monotonic()
+    with pytest.raises(CtpQuoteV2MarketProviderError) as error:
+        provider.subscribe(_added_key(), generation="hub-generation-b")
+    elapsed = time.monotonic() - started
+
+    assert error.value.code == "CTP_MARKET_SUBSCRIBE_UNACKNOWLEDGED"
+    if delay is not None:
+        assert elapsed < 0.35  # a rejection fails promptly, not at the timeout
+    # The native add was sent: its outcome is ambiguous, so the shared session
+    # is fenced and only the existing handle remains, as cleanup authority.
+    assert stream._ambiguous_quote_v2_subscriptions == {"IH2612"}
+    assert stream.get_quote_clock_source_scope() is None
+    assert stream.state is ConnectionState.ERROR
+    assert set(provider._handles_by_symbol) == {"IF2612"}
+    assert provider.unsubscribe(first) is True
+    assert provider.diagnostics["active_handles"] == 0

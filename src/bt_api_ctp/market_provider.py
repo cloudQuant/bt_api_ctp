@@ -57,6 +57,7 @@ class CtpQuoteV2MarketProviderError(RuntimeError):
             "CTP_MARKET_STREAM_INVALID",
             "CTP_MARKET_STREAM_NOT_FRESH",
             "CTP_MARKET_SUBSCRIBE_FAILED",
+            "CTP_MARKET_SUBSCRIBE_UNACKNOWLEDGED",
             "CTP_MARKET_START_FAILED",
             "CTP_MARKET_AUTH_TIMEOUT",
             "CTP_MARKET_AUTH_FAILED",
@@ -691,6 +692,16 @@ class CtpQuoteV2MarketProvider:
                 if type(subscribed) is dict:
                     ambiguous_symbols.update(expected.symmetric_difference(subscribed))
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED")
+            # Like the first key (``_start_shared_stream`` waits for the
+            # authenticated scope), an added key is acquired only after the
+            # venue acknowledged it, so its source can be described at once:
+            # the Gateway Hub describes it in the same subscribe call.  A real
+            # front acknowledges asynchronously (SimNow, 2026-11-06: the second
+            # key of a Gateway pair failed MARKET_SOURCE_DESCRIPTOR_UNAVAILABLE).
+            # A missing or rejected acknowledgement leaves the native add
+            # ambiguous and fails the shared session closed below.
+            if not self._await_symbol_ready(stream, symbol):
+                raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_UNACKNOWLEDGED")
         except CtpMarketStreamSubscriptionError as exc:
             # This typed stream exception denotes a pre-mutation rejection.
             # Remove only the tentative target; preserve active handle queues
@@ -1196,6 +1207,27 @@ class CtpQuoteV2MarketProvider:
             if remaining <= 0:
                 return None
             time.sleep(min(0.05, remaining))
+
+    def _await_symbol_ready(self, stream: CtpMarketStream, symbol: str) -> bool:
+        """Wait (bounded) until the venue acknowledged an added symbol."""
+        deadline = time.monotonic() + self._connect_timeout_seconds
+        while True:
+            try:
+                if stream.is_quote_v2_service_symbol_ready(symbol) is True:
+                    return True
+            except Exception:
+                return False
+            if stream.quote_v2_service_fail_closed or stream.quote_v2_service_recovery_required:
+                return False
+            if stream.state is ConnectionState.ERROR:
+                return False
+            thread = getattr(stream, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.02, remaining))
 
     def _stop_stream(
         self,
