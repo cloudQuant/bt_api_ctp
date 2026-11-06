@@ -1761,6 +1761,11 @@ class CtpRequestData(Feed):
                 trader.private_topic_resume_type = _PRIVATE_TOPIC_RESUME_TYPES[
                     self.private_topic_mode
                 ]
+                # A long-running feed session must log in again by itself: the
+                # native API reconnects and authenticates on every front
+                # connection, and a "not ready" refusal is retried on the same
+                # link with bounded backoff (iteration 62, continuity-7).
+                trader.session_retry_enabled = True
                 self._trader = trader
                 # No Join observer: the vendor Join() returns only after
                 # Release(), so an observed generation's stop could never be
@@ -2675,6 +2680,11 @@ class CtpMarketStream(BaseDataStream):
         # login-only diagnostic source scope unless this is enabled explicitly.
         self._quote_v2_service_readiness_enabled = False
         self._quote_v2_service_ready = False
+        # Whether the current MdClient was ever ready (a source scope issued
+        # and ticks published).  Until then nothing was published from it, so
+        # an in-place native reconnect and re-login of that client stays in
+        # the same wait instead of forcing a full source recovery.
+        self._quote_v2_service_scope_issued = False
         self._quote_v2_service_fail_closed = False
         self._quote_v2_service_recovery_required = False
         self._quote_v2_service_reconnect_authorized = False
@@ -3022,6 +3032,7 @@ class CtpMarketStream(BaseDataStream):
             self._md_client = None
             self._observed_client_generation = None
             self._quote_v2_service_ready = False
+            self._quote_v2_service_scope_issued = False
             self._quote_v2_service_login_generation = None
             self._quote_v2_service_required_symbols = set(
                 self._quote_v2_subscription_metadata
@@ -3191,6 +3202,7 @@ class CtpMarketStream(BaseDataStream):
                 self._quote_v2_service_recovery_required = False
                 self._quote_v2_service_fail_closed = False
                 self._quote_v2_service_ready = False
+                self._quote_v2_service_scope_issued = False
                 self._quote_v2_service_login_generation = None
                 self._quote_v2_service_required_symbols = set(
                     self._quote_v2_subscription_metadata
@@ -3265,6 +3277,15 @@ class CtpMarketStream(BaseDataStream):
             client.on_error = lambda rsp_info, _client=client, _token=client_token: self._on_error(
                 rsp_info, client=_client, client_token=_token
             )
+            # A refused login arrives here instead of ``on_error``; the client
+            # retries a transient refusal on the same link with bounded
+            # backoff and logs in again on every reconnect (continuity-7).
+            client.on_login_failure = (
+                lambda refusal, _client=client, _token=client_token: self._on_login_failure(
+                    refusal, client=_client, client_token=_token
+                )
+            )
+            client.login_retry_enabled = True
             client.on_disconnect = (
                 lambda reason,
                 _client=client,
@@ -3539,6 +3560,7 @@ class CtpMarketStream(BaseDataStream):
                         self.state = ConnectionState.ERROR
                         return
                     self._quote_v2_service_ready = True
+                    self._quote_v2_service_scope_issued = True
                     # This tick proves the new source is flowing after the
                     # complete ACK set, and it is published like every later
                     # one (D62-38, iteration 62). It belongs to this exact
@@ -3646,6 +3668,35 @@ class CtpMarketStream(BaseDataStream):
                 self._quote_v2_service_ready = False
             self.state = ConnectionState.ERROR
 
+    def _on_login_failure(
+        self, refusal: Any, *, client: Any = None, client_token: int | None = None
+    ) -> None:
+        """A refused MD login: wait for the client's retry unless it is final.
+
+        A refusal that only says the front is not ready (the client retries it
+        on the same link and logs in again on every reconnect) revokes the
+        source scope and keeps waiting.  A final refusal -- another account's
+        identity in the response, or a venue refusal that is not "not ready"
+        -- keeps the historical fail-closed handling of ``_on_error``.
+        """
+
+        if getattr(refusal, "retryable", False) is not True:
+            self._on_error(refusal, client=client, client_token=client_token)
+            return
+        with self._md_callback_lock:
+            if client is None or not self._is_current_md_callback(client, client_token):
+                return
+            self._managed_quote_clock_source_scope = None
+            if not self._quote_v2_service_readiness_enabled:
+                self.state = ConnectionState.ERROR
+                return
+            self._quote_v2_service_ready = False
+            if (
+                not self._quote_v2_service_fail_closed
+                and not self._quote_v2_service_recovery_required
+            ):
+                self.state = ConnectionState.CONNECTING
+
     def _on_disconnect(
         self,
         reason,
@@ -3666,6 +3717,28 @@ class CtpMarketStream(BaseDataStream):
             # observed, before that generation change becomes visible.
             self._managed_quote_clock_source_scope = None
             self._quote_v2_service_ready = False
+            if (
+                self._quote_v2_service_readiness_enabled
+                and not self._quote_v2_service_fail_closed
+                and not self._quote_v2_service_recovery_required
+                and not self._quote_v2_service_scope_issued
+            ):
+                # Nothing was published from this client yet (no scope was
+                # ever issued for it), so its native reconnect and re-login
+                # are awaited in place: the next login, a complete ACK set and
+                # a fresh tick issue its first scope.  The subscription state
+                # of the lost link is void.
+                self._quote_v2_service_login_generation = None
+                self._quote_v2_service_required_symbols = set(
+                    self._quote_v2_subscription_metadata
+                )
+                self._quote_v2_service_acknowledged_symbols.clear()
+                self._quote_v2_service_symbol_request_ids.clear()
+                self._quote_v2_service_completed_request_ids.clear()
+                self._quote_v2_service_pending_addition_symbols.clear()
+                self._quote_v2_service_pending_addition_request_ids.clear()
+                self.state = ConnectionState.CONNECTING
+                return
             if self._quote_v2_service_readiness_enabled and not self._quote_v2_service_fail_closed:
                 self._quote_v2_service_recovery_required = True
                 self._quote_v2_service_required_symbols = set(

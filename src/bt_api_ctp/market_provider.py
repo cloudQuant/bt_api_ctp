@@ -11,6 +11,7 @@ callback queue.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import threading
 import time
@@ -41,6 +42,14 @@ MAX_CTP_PROVIDER_POLL_LIMIT = 256
 MAX_CTP_QUOTE_EVENT_BYTES = 256 * 1024
 MAX_CTP_CONNECT_TIMEOUT_SECONDS = 300.0
 MAX_CTP_STOP_TIMEOUT_SECONDS = 30.0
+
+_logger = logging.getLogger(__name__)
+
+# Recovery states after the replacement client was started.  The recovery
+# deadline bounds only the native stop and start; from here the provider waits
+# for the client's own reconnect and re-login (a front can stay closed for
+# hours between sessions), and a confirmed stop of the replacement is possible.
+_RECOVERY_STARTED_STATES = frozenset({"connecting", "reset_pending"})
 
 
 class CtpQuoteV2MarketProviderError(RuntimeError):
@@ -332,8 +341,18 @@ class CtpQuoteV2MarketProvider:
             return True
         if self._active_handles.get(id(handle)) is not handle:
             return False
-        if self._source_recovery is not None:
-            return False
+        recovery = self._source_recovery
+        if recovery is not None:
+            # While the native stop or start is in flight the recovery owns
+            # the clients.  Afterwards (waiting for the replacement's login,
+            # for a new consumer epoch, or failed) a channel can be released:
+            # the last one closes the session, another one leaves the
+            # recovery's symbol set.
+            if not self._recovery_old_stop_settled(recovery):
+                return False
+            if len(self._active_handles) <= 1:
+                return self.close()
+            return self._unsubscribe_during_recovery(handle, recovery)
         if len(self._active_handles) > 1:
             symbol = handle.key.instrument.native_symbol
             try:
@@ -380,28 +399,7 @@ class CtpQuoteV2MarketProvider:
         recovery = self._source_recovery
         recovery_stop_confirmed = False
         if recovery is not None:
-            worker = recovery.stop_worker
-            reconnect_worker = recovery.reconnect_worker
-            receipt = recovery.stop_receipt
-            if (
-                recovery.state != "failed"
-                or not recovery.stop_done.is_set()
-                or (worker is not None and worker.is_alive())
-                or (
-                    reconnect_worker is not None
-                    and (
-                        not recovery.reconnect_done.is_set()
-                        or reconnect_worker.is_alive()
-                    )
-                )
-                or recovery.stop_error is not None
-                or recovery.stop_timed_out
-                or type(receipt) is not CtpNativeStopReceipt
-                or receipt.complete is not True
-                or type(receipt.connection_generation) is not int
-                or receipt.connection_generation != recovery.old_client_generation
-                or recovery.stream is not stream
-            ):
+            if not self._recovery_old_stop_settled(recovery):
                 # Until the exact old stop has completed, recovery owns its
                 # client and API. A failed reconnect may close only after the
                 # worker is done and that old stop receipt is fully confirmed.
@@ -465,6 +463,68 @@ class CtpQuoteV2MarketProvider:
         except CtpQuoteV2MarketProviderError:
             return False
         return not self._active_handles and not self._pending_start_cleanup and self._stream is None
+
+    def _recovery_old_stop_settled(self, recovery: _SourceRecovery) -> bool:
+        """The lost client's stop is confirmed and no recovery worker runs.
+
+        True only after the replacement was started (``connecting``,
+        ``reset_pending``) or the recovery failed, for this exact stream.
+        """
+
+        worker = recovery.stop_worker
+        reconnect_worker = recovery.reconnect_worker
+        receipt = recovery.stop_receipt
+        return not (
+            (recovery.state != "failed" and recovery.state not in _RECOVERY_STARTED_STATES)
+            or not recovery.stop_done.is_set()
+            or (worker is not None and worker.is_alive())
+            or (
+                reconnect_worker is not None
+                and (
+                    not recovery.reconnect_done.is_set()
+                    or reconnect_worker.is_alive()
+                )
+            )
+            or recovery.stop_error is not None
+            or recovery.stop_timed_out
+            or type(receipt) is not CtpNativeStopReceipt
+            or receipt.complete is not True
+            or type(receipt.connection_generation) is not int
+            or receipt.connection_generation != recovery.old_client_generation
+            or recovery.stream is not self._stream
+        )
+
+    def _unsubscribe_during_recovery(
+        self, handle: CtpQuoteV2MarketHandle, recovery: _SourceRecovery
+    ) -> bool:
+        """Release one of several channels once the old stop is settled."""
+
+        stream = recovery.stream
+        symbol = handle.key.instrument.native_symbol
+        try:
+            # On the replacement client (or with no client, metadata only).
+            stream.unsubscribe_topics([{"topic": "tick", "symbol": symbol}])
+        except CtpMarketStreamSubscriptionError as exc:
+            if exc.code == "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT":
+                raise CtpQuoteV2MarketProviderError("CTP_MARKET_RETIRED_SYMBOL_LIMIT") from None
+            return False
+        except Exception:
+            return False
+        fanout = self._fanout
+        if fanout is None or not fanout.unregister(symbol, handle.queue):
+            return False
+        self._remove_handle(handle)
+        recovery.symbols = frozenset(recovery.symbols - {symbol})
+        if (
+            recovery.state == "reset_pending"
+            and self._active_handles
+            and all(not active.source_epoch_reset_pending for active in self._active_handles.values())
+        ):
+            # Every remaining channel already took its new epoch.
+            self._source_scope = recovery.new_scope
+            self._native_client = getattr(stream, "_md_client", None)
+            self._source_recovery = None
+        return True
 
     def poll(self, handle: object, *, limit: int) -> tuple[MarketProviderEvent, ...]:
         self._check_owner()
@@ -576,7 +636,27 @@ class CtpQuoteV2MarketProvider:
             and recovery.state == "reset_pending"
             and handle.source_scope is recovery.new_scope
             and handle.source_epoch_reset_pending is True
+            and self._current_source_scope(handle.stream) is recovery.new_scope
         )
+
+    def maintain(self) -> None:
+        """Drive a pending source recovery without draining any handle queue.
+
+        Owner-thread only.  A direct consumer that holds a channel back until
+        it takes a new epoch still needs the recovery to progress (stop the
+        lost session, start and await its replacement); ``poll`` would drain
+        that channel's queue.
+        """
+
+        self._check_owner()
+        if self._source_recovery is not None:
+            self._drive_source_recovery()
+            return
+        stream = self._stream
+        if stream is not None and stream.quote_v2_service_recovery_required:
+            self._begin_source_recovery(stream)
+            if self._source_recovery is not None:
+                self._drive_source_recovery()
 
     def acknowledge_source_epoch_reset(self, handle: object, *, epoch: str) -> bool:
         """Accept only the Hub epoch bound to this exact current handle."""
@@ -836,6 +916,12 @@ class CtpQuoteV2MarketProvider:
             deadline=time.monotonic() + self._connect_timeout_seconds,
             state="stopping",
         )
+        _logger.warning(
+            "CTP market source lost (stream_generation=%s, symbols=%d); "
+            "stopping the MD session and starting a new one",
+            stream_generation,
+            len(symbols),
+        )
 
     def _drive_source_recovery(self) -> None:
         recovery = self._source_recovery
@@ -847,7 +933,10 @@ class CtpQuoteV2MarketProvider:
             and reconnect_worker is not None
             and reconnect_worker.is_alive()
         )
-        if time.monotonic() >= recovery.deadline:
+        if (
+            recovery.state not in _RECOVERY_STARTED_STATES
+            and time.monotonic() >= recovery.deadline
+        ):
             if reconnect_inflight:
                 # CtpMarketStream.connect holds its callback lock across the
                 # synchronous vendor Create/Register/Init calls. Do not take
@@ -964,6 +1053,12 @@ class CtpQuoteV2MarketProvider:
                 handle.source_scope = new_scope
                 handle.source_epoch_reset_pending = True
                 handle.source_epoch_reset_epoch = None
+            _logger.warning(
+                "CTP market source restarted on a new MD session "
+                "(stream_generation=%s, symbols=%d); awaiting a new consumer epoch",
+                new_scope.connection_generation,
+                len(recovery.symbols),
+            )
             return
 
         if recovery.state == "reset_pending":
@@ -972,6 +1067,20 @@ class CtpQuoteV2MarketProvider:
                 for handle in self._active_handles.values()
             ):
                 self._fail_source_recovery()
+                return
+            if (
+                stream.quote_v2_service_recovery_required is True
+                and stream.quote_v2_service_fail_closed is not True
+            ):
+                # The replacement session was lost before every consumer took
+                # its new epoch.  Nothing of it is described any more; restart
+                # the recovery from that replacement (stop it, start another).
+                self._source_recovery = None
+                self._source_scope = recovery.new_scope
+                self._native_client = getattr(stream, "_md_client", None)
+                self._begin_source_recovery(stream)
+                if self._source_recovery is not None:
+                    self._drive_source_recovery()
 
     @staticmethod
     def _observe_source_recovery_stop(recovery: _SourceRecovery) -> None:
@@ -1143,6 +1252,12 @@ class CtpQuoteV2MarketProvider:
     def _fail_source_recovery(self, stream: CtpMarketStream | None = None) -> None:
         recovery = self._source_recovery
         if recovery is not None:
+            if recovery.state != "failed":
+                _logger.error(
+                    "CTP market source recovery failed in state %s; the MD session "
+                    "stays closed until the provider is closed",
+                    recovery.state,
+                )
             worker = recovery.reconnect_worker
             if worker is not None and worker.is_alive():
                 self._fail_source_recovery_without_stream_lock(recovery)

@@ -1543,7 +1543,7 @@ def test_ctp_market_provider_closes_constructor_failed_reconnect_from_exact_old_
     assert constructor_attempts == 2
 
 
-def test_ctp_market_provider_recovery_without_fresh_ack_tick_fails_closed(
+def test_ctp_market_provider_recovery_without_fresh_ack_tick_publishes_nothing_while_waiting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _SyntheticMdClient.instances.clear()
@@ -1586,7 +1586,14 @@ def test_ctp_market_provider_recovery_without_fresh_ack_tick_fails_closed(
     assert provider.source_epoch_reset_required(handle) is False
     time.sleep(0.06)
     assert provider.poll(handle, limit=1) == ()
-    assert handle.stream.quote_v2_service_fail_closed is True
+    # Iteration 62 continuity-7: the recovery deadline bounds only the native
+    # stop and start.  A started replacement that is not yet ticking (a front
+    # can stay closed for hours between sessions) is awaited, but nothing is
+    # authorized meanwhile: no scope, no reset, no event, no descriptor.
+    assert provider._source_recovery is recovery
+    assert recovery.state == "connecting"
+    assert handle.stream.quote_v2_service_fail_closed is False
+    assert provider.source_epoch_reset_required(handle) is False
     assert handle.stream.get_quote_v2_service_ready_scope() is None
     assert provider.describe_source(
         handle,

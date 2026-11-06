@@ -105,6 +105,13 @@ from ._ctp_base import (
 from .callback_events import CtpTraderCallbackSourceEvent, snapshot_exact_fields
 from .callback_ingress import SKIP_ORIGINAL_CALLBACK as _CALLBACK_INGRESS_SKIP_ORIGINAL
 from .ctp_md_api import CThostFtdcMdApi, CThostFtdcMdSpi
+from .session_relogin import (
+    LoginRefusal,
+    relogin_delay,
+    should_log_refusal,
+    transient_provider_refusal,
+    transient_submit_code,
+)
 from .ctp_structs_common import (
     CThostFtdcReqAuthenticateField,
     CThostFtdcReqUserLoginField,
@@ -2317,12 +2324,15 @@ class _MdSpi(CThostFtdcMdSpi):
             self._c._loggedin = False
             self._c._clear_active_md_identity_locked()
             generation = self._c._connection_generation
+            # A new connection supersedes any retry armed for the previous one;
+            # its first login is sent at once and its refusals count afresh.
+            self._c._front_link_generation = generation
+            self._c._cancel_relogin_locked()
+            self._c._relogin_generation = generation
+            self._c._relogin_failures = 0
             front = self._c._bound_front
             request_id = self._c._begin_md_login_request_locked(generation)
-            field = CThostFtdcReqUserLoginField()
-            field.BrokerID = self._c._bound_broker_id
-            field.UserID = self._c._bound_user_id
-            field.Password = self._c.password
+            field = self._c._md_login_field()
             api = self._c._api
         # 连接代次是断线/重连的唯一权威标识，必须留痕，否则无人值守时断线不可见。
         _logger.info(
@@ -2334,39 +2344,7 @@ class _MdSpi(CThostFtdcMdSpi):
             )
             return
         if api is not None:
-            try:
-                result = self._c._invoke_native_request(
-                    api, "ReqUserLogin", field, request_id
-                )
-            except Exception:
-                result = -1
-            if result is not None and (type(result) is not int or result != 0):
-                if result is _MD_NATIVE_REQUEST_NOT_STARTED:
-                    return
-                with self._c._state_lock:
-                    if (
-                        self._is_current_locked()
-                        and self._c._login_request_id == request_id
-                        and self._c._login_request_generation == generation
-                    ):
-                        self._c._login_request_pending = False
-                        self._c._login_request_id = None
-                        self._c._login_request_generation = None
-                        self._c._loggedin = False
-                        self._c._connected = False
-                        self._c._clear_active_md_identity_locked()
-                        error_callback = self._c.on_error
-                    else:
-                        error_callback = None
-                _logger.warning(
-                    "CTP market-data login request rejected "
-                    "(generation=%s, request_id=%s, result=%s)",
-                    generation,
-                    request_id,
-                    result,
-                )
-                if error_callback is not None:
-                    error_callback(_MdLoginError(-1, "login_request_rejected"))
+            self._c._submit_md_login(api, self, generation, request_id, field)
 
     @_fence_md_spi_callback
     def OnFrontDisconnected(self, nReason):
@@ -2379,6 +2357,11 @@ class _MdSpi(CThostFtdcMdSpi):
             self._c._login_request_pending = False
             self._c._login_request_id = None
             self._c._login_request_generation = None
+            # The link is gone: a pending same-connection retry is void.  The
+            # native API reconnects by itself and the next OnFrontConnected
+            # logs in again.
+            self._c._front_link_generation = None
+            self._c._cancel_relogin_locked()
             generation = self._c._connection_generation
             callback = self._c.on_disconnect
             generation_callback = self._c.on_disconnect_with_generation
@@ -2398,6 +2381,11 @@ class _MdSpi(CThostFtdcMdSpi):
         callback = None
         error_callback = None
         error_info = None
+        failure_callback = None
+        refusal = None
+        retry_in = None
+        refusal_count = 0
+        previous_day = None
         login_ok = False
         trading_day = ""
         pending = 0
@@ -2482,9 +2470,34 @@ class _MdSpi(CThostFtdcMdSpi):
                     )
                     error_callback = self._c.on_error
                     error_info = _MdLoginError(-1, f"login_identity_rejected:{failure_reason}")
+                    # An empty or unreadable identity field, or an invalid
+                    # trading day, is a front that is not ready; a field that
+                    # names another broker or user stays a final rejection.
+                    if failure_reason == "broker_id_mismatch":
+                        retryable = self._c._login_callback_broker_id_shape in (
+                            MdLoginBrokerIdShape.EMPTY,
+                            MdLoginBrokerIdShape.UNREADABLE,
+                        )
+                    elif failure_reason == "user_id_mismatch":
+                        retryable = self._c._login_callback_user_id_shape in (
+                            MdLoginUserIdShape.EMPTY,
+                            MdLoginUserIdShape.UNREADABLE,
+                        )
+                    else:
+                        retryable = True
+                    refusal = LoginRefusal(
+                        reason=failure_reason,
+                        retryable=retryable,
+                        connection_generation=generation,
+                        error_id=None,
+                    )
                 else:
                     self._c._loggedin = True
                     login_ok = True
+                    self._c._cancel_relogin_locked()
+                    self._c._relogin_failures = 0
+                    previous_day = self._c._login_trading_day
+                    self._c._login_trading_day = trading_day
                     self._c._login_callback_disposition = (
                         MdLoginCallbackDisposition.READ_ONLY_ACCEPTED
                         if zero_response
@@ -2519,6 +2532,25 @@ class _MdSpi(CThostFtdcMdSpi):
                 self._c._login_callback_disposition = MdLoginCallbackDisposition.PROVIDER_REJECTED
                 error_callback = self._c.on_error
                 error_info = _MdLoginError(error_id if error_id not in (None, 0) else -1, "provider_login_rejected")
+                # Only "not ready" venue codes are retried; a missing or
+                # unreadable ErrorID is no credential refusal either.
+                refusal = LoginRefusal(
+                    reason="provider_login_rejected",
+                    retryable=(
+                        status is not MdLoginResponseErrorStatus.NONZERO
+                        or transient_provider_refusal(error_id)
+                    ),
+                    connection_generation=generation,
+                    error_id=error_id,
+                )
+            if refusal is not None:
+                retry_in = self._c._schedule_relogin_locked(generation, refusal.retryable)
+                refusal_count = self._c._relogin_failures
+                if self._c.on_login_failure is not None:
+                    # A bound refusal callback replaces the legacy error
+                    # callback for login refusals (OnRspError is unchanged).
+                    failure_callback = self._c.on_login_failure
+                    error_callback = None
         if login_ok:
             if zero_response:
                 _logger.info(
@@ -2526,17 +2558,26 @@ class _MdSpi(CThostFtdcMdSpi):
                     "correlated identity unavailable"
                 )
             _logger.info(
-                "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d)",
+                "CTP market-data login ok (generation=%s, trading_day=%s, pending=%d, "
+                "trading_day_changed=%s)",
                 generation,
                 trading_day,
                 pending,
+                previous_day is not None and previous_day != trading_day,
             )
         else:
-            _logger.warning(
-                "CTP market-data login failed (generation=%s, error_id=%s, error_msg=%s)",
+            # Fixed reason tokens only; the venue message stays redacted.
+            _logger.log(
+                logging.WARNING if should_log_refusal(max(refusal_count, 1)) else logging.DEBUG,
+                "CTP market-data login failed (generation=%s, error_id=%s, error_msg=%s, "
+                "reason=%s, retryable=%s, attempt=%s, retry_in=%s)",
                 generation,
                 error_id,
                 "[redacted]",
+                refusal.reason if refusal is not None else "unknown",
+                refusal.retryable if refusal is not None else False,
+                refusal_count,
+                retry_in,
             )
         if subscribe is not None and subscribe[0] is not None:
             self._c._invoke_native_request(
@@ -2544,6 +2585,8 @@ class _MdSpi(CThostFtdcMdSpi):
             )
         if callback is not None:
             callback(pRspUserLogin)
+        if failure_callback is not None:
+            failure_callback(refusal)
         if error_callback is not None:
             error_callback(error_info)
 
@@ -2640,10 +2683,27 @@ class MdClient:
         # callback(nReason, connection_generation), for consumers that must
         # bind disconnect evidence to the exact SPI generation.
         self.on_disconnect_with_generation = None
+        # callback(LoginRefusal): a refused login, delivered instead of
+        # ``on_error`` when bound (OnRspError keeps using ``on_error``).
+        self.on_login_failure = None
+        # Retry a transient login refusal on the same connection with bounded
+        # backoff (iteration 62, continuity-7).  Off for direct MdClient users;
+        # the managed CtpMarketStream turns it on.
+        self.login_retry_enabled = False
 
         self._connected = False
         self._loggedin = False
         self._pending_instruments = []
+        # Same-connection re-login state (guarded by ``_state_lock``): the
+        # generation whose link is up, the armed timer/token, and the refusals
+        # counted on that connection.  The factory is a test seam.
+        self._front_link_generation: int | None = None
+        self._relogin_timer: Any = None
+        self._relogin_token: object | None = None
+        self._relogin_timer_factory: Callable[..., Any] = threading.Timer
+        self._relogin_generation: int | None = None
+        self._relogin_failures = 0
+        self._login_trading_day: str | None = None
         # True = 登录回调内直接全量重订阅（历史行为，向后兼容）；
         # False = 调用方自行异步分批重订阅，避免阻塞 CTP 原生回调线程。
         self.auto_resubscribe_on_login = True
@@ -2776,6 +2836,146 @@ class MdClient:
         self._active_md_identity_api = None
         self._active_md_identity_spi = None
 
+    # -- login and same-connection re-login ---------------------------------
+    def _md_login_field(self) -> CThostFtdcReqUserLoginField:
+        field = CThostFtdcReqUserLoginField()
+        field.BrokerID = self._bound_broker_id
+        field.UserID = self._bound_user_id
+        field.Password = self.password
+        return field
+
+    def _submit_md_login(
+        self, api: Any, spi: Any, generation: int, request_id: int, field: Any
+    ) -> None:
+        """Send one login request; a refused submit may arm a bounded retry."""
+
+        try:
+            result = self._invoke_native_request(api, "ReqUserLogin", field, request_id)
+        except Exception:
+            result = -1
+        if result is None or (type(result) is int and result == 0):
+            return
+        if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+            return
+        retry_in = None
+        error_callback = None
+        failure_callback = None
+        refusal = LoginRefusal(
+            reason="login_request_rejected",
+            retryable=transient_submit_code(result),
+            connection_generation=generation,
+            error_id=None,
+        )
+        with self._state_lock:
+            if (
+                spi._is_current_locked()
+                and self._login_request_id == request_id
+                and self._login_request_generation == generation
+            ):
+                self._login_request_pending = False
+                self._login_request_id = None
+                self._login_request_generation = None
+                self._loggedin = False
+                self._connected = False
+                self._clear_active_md_identity_locked()
+                retry_in = self._schedule_relogin_locked(generation, refusal.retryable)
+                if self.on_login_failure is not None:
+                    failure_callback = self.on_login_failure
+                else:
+                    error_callback = self.on_error
+        _logger.warning(
+            "CTP market-data login request rejected "
+            "(generation=%s, request_id=%s, result=%s, retry_in=%s)",
+            generation,
+            request_id,
+            result,
+            retry_in,
+        )
+        if failure_callback is not None:
+            failure_callback(refusal)
+        if error_callback is not None:
+            error_callback(_MdLoginError(-1, "login_request_rejected"))
+
+    def _schedule_relogin_locked(self, generation: Any, retryable: bool) -> float | None:
+        """Count one refusal and arm at most one retry for this link (lock held).
+
+        Returns the delay in seconds, or ``None`` when no retry was armed: not
+        retryable, retry disabled, the link is gone, or the per-connection cap
+        was reached.  A new connection resets the count in OnFrontConnected.
+        """
+
+        if self._relogin_generation != generation:
+            self._relogin_generation = generation
+            self._relogin_failures = 0
+        self._relogin_failures += 1
+        if (
+            retryable is not True
+            or self.login_retry_enabled is not True
+            or type(generation) is not int
+            or self._front_link_generation != generation
+            or self._connection_generation != generation
+            or self._api is None
+            or self._spi is None
+        ):
+            return None
+        delay = relogin_delay(self._relogin_failures)
+        if delay is None:
+            return None
+        self._cancel_relogin_locked()
+        token = object()
+        timer = self._relogin_timer_factory(
+            delay, self._relogin_due, args=(token, generation, self._api, self._spi)
+        )
+        timer.daemon = True
+        self._relogin_timer = timer
+        self._relogin_token = token
+        timer.start()
+        return delay
+
+    def _cancel_relogin_locked(self) -> None:
+        timer = self._relogin_timer
+        self._relogin_timer = None
+        self._relogin_token = None
+        if timer is not None:
+            timer.cancel()
+
+    def _relogin_due(self, token: object, generation: int, api: Any, spi: Any) -> None:
+        """Timer callback: resend the login if the same link is still waiting."""
+
+        with self._state_lock:
+            if self._relogin_token is not token:
+                return
+            self._relogin_timer = None
+            self._relogin_token = None
+            if (
+                self._api is not api
+                or self._spi is not spi
+                or self._front_link_generation != generation
+                or self._connection_generation != generation
+                or self._loggedin
+                or self._login_request_pending
+            ):
+                return
+            request_id = self._begin_md_login_request_locked(generation)
+            if request_id is None:
+                return
+            # The link was never reported down (_front_link_generation), so a
+            # refused submit's "not connected" mark is lifted for the resend.
+            self._connected = True
+            attempt = self._relogin_failures + 1
+            field = self._md_login_field()
+        _logger.info(
+            "CTP market-data login retry (generation=%s, attempt=%s)", generation, attempt
+        )
+        self._submit_md_login(api, spi, generation, request_id, field)
+
+    @property
+    def login_trading_day(self) -> str | None:
+        """Trading day of the current login (``None`` while not logged in)."""
+
+        with self._state_lock:
+            return self._login_trading_day if self._loggedin else None
+
     def _reserve_start_generation(self) -> int:
         """Reserve one startup generation before creating the native API."""
 
@@ -2784,6 +2984,8 @@ class MdClient:
                 raise RuntimeError("ctp_md_client_native_join_pending")
             if self._api is not None or self._starting_generation is not None:
                 raise RuntimeError("ctp_md_client_already_started")
+            self._cancel_relogin_locked()
+            self._front_link_generation = None
             self._lifecycle_generation += 1
             generation = self._lifecycle_generation
             self._starting_generation = generation
@@ -3094,6 +3296,8 @@ class MdClient:
             self._login_request_id = None
             self._login_request_generation = None
             self._login_request_pending = False
+            self._front_link_generation = None
+            self._cancel_relogin_locked()
 
         if observe_join:
             detach_error: BaseException | None = None
@@ -3475,6 +3679,8 @@ class MdClient:
             self._login_request_id = None
             self._login_request_generation = None
             self._login_request_pending = False
+            self._front_link_generation = None
+            self._cancel_relogin_locked()
             spi = self._spi
             join_thread = self._thread
             native_may_be_live = self._native_init_started or self._join_active
@@ -4585,49 +4791,10 @@ class _TraderSpi(CThostFtdcTraderSpi):
             if not self._is_current_locked():
                 return
             self._c._on_front_connected()
-            field = CThostFtdcReqAuthenticateField()
-            field.BrokerID = self._c._bound_broker_id
-            field.UserID = self._c._bound_user_id
-            field.AppID = self._c.app_id
-            field.AuthCode = self._c.auth_code
-            request_id = self._c._next_request_id()
-            generation = self._c._connection_generation
-            self._c._authentication_request_id = request_id
-            self._c._authentication_connection_generation = generation
-            self._c._record_request("authenticate")
+            field, request_id, generation = self._c._begin_authenticate_locked()
             api = self._c._api
-        try:
-            ret = self._c._invoke_session_native_request(
-                api,
-                "ReqAuthenticate",
-                field,
-                request_id,
-            )
-        except Exception as exc:
-            with self._c._query_state_lock:
-                if (
-                    self._c._authentication_request_id == request_id
-                    and self._c._authentication_connection_generation == generation
-                    and self._c._connection_generation == generation
-                ):
-                    self._c._authentication_state = "failed"
-                    self._c._last_session_error = {
-                        "error": "authentication_submit_failed",
-                        "detail": type(exc).__name__,
-                    }
-            return
-        if ret not in (None, 0):
-            with self._c._query_state_lock:
-                if (
-                    self._c._authentication_request_id == request_id
-                    and self._c._authentication_connection_generation == generation
-                    and self._c._connection_generation == generation
-                ):
-                    self._c._authentication_state = "failed"
-                    self._c._last_session_error = {
-                        "error": "authentication_submit_rejected",
-                        "submit_code": ret,
-                    }
+        _logger.info("CTP trader front connected (generation=%s)", generation)
+        self._c._submit_authenticate(api, generation, request_id, field)
 
     @_fence_trader_spi_callback
     def OnFrontDisconnected(self, nReason):
@@ -4640,6 +4807,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
     def OnRspAuthenticate(self, pRspAuthenticateField, pRspInfo, nRequestID, bIsLast):
         error_callback = None
         login_submission = None
+        auth_failed = False
         with self._c._query_state_lock:
             accepted = (
                 self._is_current_locked()
@@ -4655,80 +4823,48 @@ class _TraderSpi(CThostFtdcTraderSpi):
             self._c._authentication_request_id = None
             self._c._authentication_connection_generation = None
             error_id, _ = _rsp_error(pRspInfo)
+            generation = self._c._connection_generation
+            retry_in = None
             if error_id not in (None, 0):
                 self._c._authentication_state = "failed"
                 self._c._login_identity_observation = None
                 self._c._trading_day = ""
                 self._c._last_session_error = _snapshot_ctp_field(pRspInfo)
                 error_callback = self._c.on_error
+                auth_failed = True
+                # Only "not ready" codes; a client-authentication refusal
+                # (63, 4060, ...) is never repeated on the same link.
+                retry_in = self._c._schedule_session_retry_locked(
+                    generation, transient_provider_refusal(error_id), "authenticate"
+                )
             else:
                 self._c._authentication_state = "authenticated"
                 self._c._login_identity_observation = None
                 self._c._trading_day = ""
-                field = CThostFtdcReqUserLoginField()
-                field.BrokerID = self._c._bound_broker_id
-                field.UserID = self._c._bound_user_id
-                field.Password = self._c.password
-                request_id = self._c._next_request_id()
-                generation = self._c._connection_generation
-                self._c._login_state = "logging_in"
-                self._c._login_request_id = request_id
-                self._c._login_connection_generation = generation
-                self._c._record_request("login")
+                field, request_id, generation = self._c._begin_user_login_locked()
                 login_submission = (self._c._api, field, request_id, generation)
-        if error_callback is not None:
-            error_callback(pRspInfo)
+        if auth_failed:
+            _logger.warning(
+                "CTP trader authentication failed (generation=%s, error_id=%s, "
+                "error_msg=[redacted], retry_in=%s)",
+                generation,
+                error_id,
+                retry_in,
+            )
+            if error_callback is not None:
+                error_callback(pRspInfo)
             return
         if login_submission is None:
             return
         api, field, request_id, generation = login_submission
-        try:
-            ret = self._c._invoke_session_native_request(
-                api,
-                "ReqUserLogin",
-                field,
-                request_id,
-                request_submitter=lambda pinned_api, request_args: _submit_trader_user_login(
-                    pinned_api, *request_args
-                ),
-            )
-        except Exception as exc:
-            with self._c._query_state_lock:
-                if (
-                    self._c._login_request_id == request_id
-                    and self._c._login_connection_generation == generation
-                    and self._c._connection_generation == generation
-                ):
-                    self._c._login_state = "failed"
-                    self._c._login_identity_observation = None
-                    self._c._trading_day = ""
-                    self._c._last_session_error = {
-                        "error": "login_submit_failed",
-                        "detail": (
-                            exc.code if isinstance(exc, CtpNativeAbiError) else type(exc).__name__
-                        ),
-                    }
-            return
-        if ret not in (None, 0):
-            with self._c._query_state_lock:
-                if (
-                    self._c._login_request_id == request_id
-                    and self._c._login_connection_generation == generation
-                    and self._c._connection_generation == generation
-                ):
-                    self._c._login_state = "failed"
-                    self._c._login_identity_observation = None
-                    self._c._trading_day = ""
-                    self._c._last_session_error = {
-                        "error": "login_submit_rejected",
-                        "submit_code": ret,
-                    }
+        self._c._submit_user_login(api, generation, request_id, field)
 
     @_fence_trader_spi_callback
     def OnRspUserLogin(self, pRspUserLogin, pRspInfo, nRequestID, bIsLast):
         login_callback = None
         error_callback = None
         error_info = pRspInfo
+        login_logged = None
         with self._c._query_state_lock:
             try:
                 request_id = int(nRequestID)
@@ -4772,6 +4908,19 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 self._c._front_id = getattr(pRspUserLogin, "FrontID", 0)
                 self._c._session_id = getattr(pRspUserLogin, "SessionID", 0)
                 self._c._trading_day = trading_day
+                # A new trading day at a re-login of the same broker/user is a
+                # valid login: the day is adopted here and the switch is left to
+                # the consumer (R-3).  Identity is still checked above.
+                previous_day = self._c._last_login_trading_day
+                self._c._last_login_trading_day = trading_day
+                self._c._cancel_session_retry_locked()
+                self._c._session_retry_failures = 0
+                login_logged = (
+                    "ok",
+                    generation,
+                    trading_day,
+                    previous_day is not None and previous_day != trading_day,
+                )
                 # Tests may substitute ``time``; never let clock capture
                 # break the login path.
                 wall_ns = getattr(time, "time_ns", None)
@@ -4819,6 +4968,42 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 error_callback = self._c.on_error
                 if error_callback is not None and error_id == 0:
                     error_info = _TraderLoginError(ErrorID=-1, ErrorMsg=failure_reason)
+                # Retried on the same link only when the front is not ready:
+                # a "not ready" venue code, an invalid trading day, or an empty
+                # identity field.  A response naming another broker/user and
+                # any credential refusal stay final (no lockout by repetition).
+                if failure_reason == "provider_login_rejected":
+                    retryable = transient_provider_refusal(error_id)
+                elif failure_reason == "broker_id_mismatch":
+                    retryable = not broker_id
+                elif failure_reason == "user_id_mismatch":
+                    retryable = not user_id
+                else:
+                    retryable = True
+                retry_in = self._c._schedule_session_retry_locked(
+                    generation, retryable, "login"
+                )
+                login_logged = (
+                    "failed",
+                    generation,
+                    error_id,
+                    failure_reason,
+                    retryable,
+                    retry_in,
+                    self._c._session_retry_failures,
+                )
+        if login_logged is not None and login_logged[0] == "ok":
+            _logger.info(
+                "CTP trader login ok (generation=%s, trading_day=%s, trading_day_changed=%s)",
+                *login_logged[1:],
+            )
+        elif login_logged is not None:
+            _logger.log(
+                logging.WARNING if should_log_refusal(max(login_logged[6], 1)) else logging.DEBUG,
+                "CTP trader login failed (generation=%s, error_id=%s, error_msg=[redacted], "
+                "reason=%s, retryable=%s, retry_in=%s, attempt=%s)",
+                *login_logged[1:],
+            )
         if login_callback is not None:
             ingress = self._c._callback_ingress
             if ingress is None:
@@ -5192,6 +5377,16 @@ class TraderClient:
         self._api = None
         self._session_native_api = None
         self._session_native_front: str | None = None
+        # Retry a transient authentication/login refusal on the same
+        # connection with bounded backoff (iteration 62, continuity-7).  Off by
+        # default; the CTP request feed's own session turns it on.
+        self.session_retry_enabled = False
+        self._session_retry_timer: Any = None
+        self._session_retry_token: object | None = None
+        self._session_retry_timer_factory: Callable[..., Any] = threading.Timer
+        self._session_retry_generation: int | None = None
+        self._session_retry_failures = 0
+        self._last_login_trading_day: str | None = None
         self._spi = None
         self._thread = None
         self._join_active = False
@@ -9210,6 +9405,11 @@ class TraderClient:
             # The registered front is fixed by start(); a reconnect does not
             # accept a mutable public ``front`` replacement.
             self._session_native_front = self._bound_front
+            # A new connection supersedes a retry armed for the previous one;
+            # it authenticates at once and its refusals count afresh.
+            self._cancel_session_retry_locked()
+            self._session_retry_generation = self._connection_generation + 1
+            self._session_retry_failures = 0
             self._connection_generation += 1
             self._execution_preflight_epoch += 1
             self._connected = True
@@ -9236,6 +9436,15 @@ class TraderClient:
         self, reason: Any, *, query_completion_origin: str = "front_disconnected"
     ) -> None:
         with self._query_state_lock:
+            # The link is gone: a pending same-connection retry is void; the
+            # native API reconnects by itself and authenticates again.
+            self._cancel_session_retry_locked()
+            if query_completion_origin == "front_disconnected":
+                _logger.warning(
+                    "CTP trader front disconnected (reason=%s, generation=%s)",
+                    reason,
+                    self._connection_generation,
+                )
             self._revoke_execution_gate_locked("ctp_execution_gate_disconnected")
             self._session_native_api = None
             self._session_native_front = None
@@ -9270,6 +9479,206 @@ class TraderClient:
                 accumulator.completed_at_utc = datetime.now(timezone.utc)
                 accumulator.sealed = True
                 accumulator.event.set()
+
+    # -- authentication, login and same-connection retry ---------------------
+    def _begin_authenticate_locked(self) -> tuple[Any, int, int]:
+        """Record one authentication request of the current link (lock held)."""
+
+        field = CThostFtdcReqAuthenticateField()
+        field.BrokerID = self._bound_broker_id
+        field.UserID = self._bound_user_id
+        field.AppID = self.app_id
+        field.AuthCode = self.auth_code
+        request_id = self._next_request_id()
+        generation = self._connection_generation
+        self._authentication_state = "authenticating"
+        self._authentication_request_id = request_id
+        self._authentication_connection_generation = generation
+        self._record_request("authenticate")
+        return field, request_id, generation
+
+    def _submit_authenticate(self, api: Any, generation: int, request_id: int, field: Any) -> None:
+        """Send one authentication request; a refused submit may arm a retry."""
+
+        try:
+            ret = self._invoke_session_native_request(api, "ReqAuthenticate", field, request_id)
+        except Exception as exc:
+            error = {"error": "authentication_submit_failed", "detail": type(exc).__name__}
+            code: Any = -1
+        else:
+            if ret in (None, 0):
+                return
+            error = {"error": "authentication_submit_rejected", "submit_code": ret}
+            code = ret
+        retry_in = None
+        with self._query_state_lock:
+            if (
+                self._authentication_request_id == request_id
+                and self._authentication_connection_generation == generation
+                and self._connection_generation == generation
+            ):
+                self._authentication_state = "failed"
+                self._last_session_error = error
+                retry_in = self._schedule_session_retry_locked(
+                    generation, transient_submit_code(code), "authenticate"
+                )
+        _logger.warning(
+            "CTP trader authentication request rejected (generation=%s, result=%s, retry_in=%s)",
+            generation,
+            code,
+            retry_in,
+        )
+
+    def _begin_user_login_locked(self) -> tuple[Any, int, int]:
+        """Record one login request of the current link (lock held)."""
+
+        field = CThostFtdcReqUserLoginField()
+        field.BrokerID = self._bound_broker_id
+        field.UserID = self._bound_user_id
+        field.Password = self.password
+        request_id = self._next_request_id()
+        generation = self._connection_generation
+        self._login_state = "logging_in"
+        self._login_request_id = request_id
+        self._login_connection_generation = generation
+        self._record_request("login")
+        return field, request_id, generation
+
+    def _submit_user_login(self, api: Any, generation: int, request_id: int, field: Any) -> None:
+        """Send one login request; a refused submit may arm a retry."""
+
+        try:
+            ret = self._invoke_session_native_request(
+                api,
+                "ReqUserLogin",
+                field,
+                request_id,
+                request_submitter=lambda pinned_api, request_args: _submit_trader_user_login(
+                    pinned_api, *request_args
+                ),
+            )
+        except Exception as exc:
+            error = {
+                "error": "login_submit_failed",
+                "detail": (
+                    exc.code if isinstance(exc, CtpNativeAbiError) else type(exc).__name__
+                ),
+            }
+            code: Any = -1
+        else:
+            if ret in (None, 0):
+                return
+            error = {"error": "login_submit_rejected", "submit_code": ret}
+            code = ret
+        retry_in = None
+        with self._query_state_lock:
+            if (
+                self._login_request_id == request_id
+                and self._login_connection_generation == generation
+                and self._connection_generation == generation
+            ):
+                self._login_state = "failed"
+                self._login_identity_observation = None
+                self._trading_day = ""
+                self._last_session_error = error
+                retry_in = self._schedule_session_retry_locked(
+                    generation, transient_submit_code(code), "login"
+                )
+        _logger.warning(
+            "CTP trader login request rejected (generation=%s, result=%s, retry_in=%s)",
+            generation,
+            code,
+            retry_in,
+        )
+
+    def _schedule_session_retry_locked(
+        self, generation: Any, retryable: bool, step: str
+    ) -> float | None:
+        """Count one refusal and arm at most one retry of ``step`` (lock held).
+
+        ``step`` is ``"authenticate"`` or ``"login"``.  Returns the delay, or
+        ``None`` when no retry was armed (not retryable, disabled, the link is
+        gone, or the per-connection cap was reached).
+        """
+
+        if self._session_retry_generation != generation:
+            self._session_retry_generation = generation
+            self._session_retry_failures = 0
+        self._session_retry_failures += 1
+        if (
+            retryable is not True
+            or self.session_retry_enabled is not True
+            or step not in ("authenticate", "login")
+            or type(generation) is not int
+            or self._connection_generation != generation
+            or not self._connected
+            or self._api is None
+            or self._spi is None
+            or self._session_native_api is not self._api
+        ):
+            return None
+        delay = relogin_delay(self._session_retry_failures)
+        if delay is None:
+            return None
+        self._cancel_session_retry_locked()
+        token = object()
+        timer = self._session_retry_timer_factory(
+            delay, self._session_retry_due, args=(token, generation, step, self._api, self._spi)
+        )
+        timer.daemon = True
+        self._session_retry_timer = timer
+        self._session_retry_token = token
+        timer.start()
+        return delay
+
+    def _cancel_session_retry_locked(self) -> None:
+        timer = self._session_retry_timer
+        self._session_retry_timer = None
+        self._session_retry_token = None
+        if timer is not None:
+            timer.cancel()
+
+    def _session_retry_due(
+        self, token: object, generation: int, step: str, api: Any, spi: Any
+    ) -> None:
+        """Timer callback: resend the refused step if the same link still waits."""
+
+        with self._query_state_lock:
+            if self._session_retry_token is not token:
+                return
+            self._session_retry_timer = None
+            self._session_retry_token = None
+            if (
+                self._api is not api
+                or self._spi is not spi
+                or self._session_native_api is not api
+                or not self._connected
+                or self._connection_generation != generation
+            ):
+                return
+            if step == "authenticate":
+                if self._authentication_state != "failed":
+                    return
+                field, request_id, _ = self._begin_authenticate_locked()
+            else:
+                if self._authentication_state != "authenticated" or self._login_state != "failed":
+                    return
+                field, request_id, _ = self._begin_user_login_locked()
+            attempt = self._session_retry_failures + 1
+        _logger.info(
+            "CTP trader %s retry (generation=%s, attempt=%s)", step, generation, attempt
+        )
+        if step == "authenticate":
+            self._submit_authenticate(api, generation, request_id, field)
+        else:
+            self._submit_user_login(api, generation, request_id, field)
+
+    @property
+    def last_login_trading_day(self) -> str | None:
+        """Trading day of the latest accepted login (kept across reconnects)."""
+
+        with self._query_state_lock:
+            return self._last_login_trading_day
 
     def _require_settlement_write_locked(
         self,
