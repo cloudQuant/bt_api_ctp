@@ -225,18 +225,32 @@ class CtpTickerData(TickerData):
         self._ensure_init()
         return self.delta_volume
 
-    def apply_volume_delta(self, delta, *, complete, quality):
-        """Attach the one authoritative cumulative-to-delta conversion."""
+    def apply_volume_delta(self, delta, *, complete, quality, continuity_status=None):
+        """Attach the one authoritative cumulative-to-delta conversion.
+
+        ``continuity_status`` is the stream's own verdict (D62-38, iteration
+        62): ``"continuous"`` when the row belongs to the current connection,
+        subscription and trading-day scope with no locally known message loss,
+        otherwise ``"gap"``.  Volume completeness never decides it; any other
+        value fails closed to ``"gap"``.  A caller that states no verdict keeps
+        the historical volume-derived value (continuous only for complete
+        ``CONTINUOUS`` volume); the CTP market stream always states one.
+        """
         self._ensure_init()
         self.delta_volume = float(delta or 0.0)
         self.volume_semantics = "delta"
         self.volume_complete = bool(complete)
         self.volume_quality = str(quality)
-        self.continuity_status = (
-            "continuous"
-            if self.volume_complete and self.volume_quality.upper() == "CONTINUOUS"
-            else "gap"
-        )
+        if continuity_status is None:
+            self.continuity_status = (
+                "continuous"
+                if self.volume_complete and self.volume_quality.upper() == "CONTINUOUS"
+                else "gap"
+            )
+        else:
+            self.continuity_status = (
+                "continuous" if continuity_status == "continuous" else "gap"
+            )
         self.execution_eligible = False
         return self
 

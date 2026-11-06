@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -22,6 +23,8 @@ _FRESHNESS_REASONS = (
     "GENERIC_EVENT_TIME_NOT_BOUND",
     "SOURCE_CLOCK_CALIBRATION_NOT_PROVIDED",
 )
+# CTP fills a missing price with DBL_MAX; the same threshold as the stream.
+_CTP_MISSING_PRICE_THRESHOLD = sys.float_info.max / 2
 
 
 def _finite_number(value: Any) -> Optional[float]:
@@ -32,6 +35,19 @@ def _finite_number(value: Any) -> Optional[float]:
     number = float(value)
     if not math.isfinite(number):
         raise ValueError("invalid market number")
+    return number
+
+
+def _price(value: Any) -> Optional[float]:
+    """A CTP price, with the DBL_MAX missing-value sentinel projected as absent.
+
+    A neutral consumer must never read the sentinel as a price, e.g. the empty
+    ask of a limit-up book.
+    """
+
+    number = _finite_number(value)
+    if number is not None and abs(number) >= _CTP_MISSING_PRICE_THRESHOLD:
+        return None
     return number
 
 
@@ -58,15 +74,22 @@ def _volume_quality(value: Any) -> str:
     normalized = value.casefold()
     if normalized == "continuous":
         return "continuous"
-    if normalized == "baseline":
+    # A new connection, subscription or trading-day scope starts a new volume
+    # baseline exactly like the first tick (D62-38, iteration 62).
+    if normalized in {"baseline", "connection_or_trading_day_reset"}:
         return "baseline"
-    if normalized in {"out_of_order", "connection_or_trading_day_reset", "volume_reset"}:
+    if normalized in {"out_of_order", "volume_reset"}:
         return "discontinuous"
     return "unavailable"
 
 
 def _quality_flags(values: Any) -> tuple[str, ...]:
-    """Convert CTP-local diagnostics into stable neutral quality categories."""
+    """Convert CTP-local diagnostics into stable neutral quality categories.
+
+    The quote warnings keep their own names (user decision 6, iteration 62):
+    they never made the quote invalid, so they are not reported as a provider
+    quality failure.  Every other unknown diagnostic still is.
+    """
 
     if not isinstance(values, (tuple, list)):
         return ("PROVIDER_QUALITY_INVALID",)
@@ -75,6 +98,10 @@ def _quality_flags(values: Any) -> tuple[str, ...]:
         "AMBIGUOUS_EVENT_DATE": "EVENT_DATE_AMBIGUOUS",
         "OUT_OF_ORDER": "SOURCE_SEQUENCE_OUT_OF_ORDER",
         "VOLUME_GAP": "VOLUME_DISCONTINUITY",
+        "LIMIT_LOCKED_UP": "LIMIT_LOCKED_UP",
+        "LIMIT_LOCKED_DOWN": "LIMIT_LOCKED_DOWN",
+        "LOCKED_BOOK": "LOCKED_BOOK",
+        "ZERO_DEPTH": "ZERO_DEPTH",
     }
     result = []
     for value in values:
@@ -123,12 +150,19 @@ def project_ctp_market_tick(
     key: MarketSubscriptionKey,
     source_scope: object,
     receipt: object,
+    *,
+    local_message_loss: bool = False,
 ) -> MarketTickPayload:
     """Map one receipt-bound CTP ticker into a neutral, not-yet-bound payload.
 
     ``source_scope`` and ``receipt`` are produced by the CTP managed callback
     path. Source/cursor authentication is added later by the consuming SDK
     after it receives the corresponding market frame.
+
+    ``continuity_status`` is ``continuous`` only when the stream reported the
+    row continuous and the caller knows of no local message loss before it
+    (``local_message_loss``, e.g. a dropped queue entry); otherwise ``gap``
+    (D62-38, iteration 62).
     """
 
     if container_class(item) is not CtpTickerData or type(key) is not MarketSubscriptionKey:
@@ -222,23 +256,31 @@ def project_ctp_market_tick(
         raise ValueError("invalid CTP tick quality facts")
     event_time = _provider_event_time(data)
     volume_quality = _volume_quality(data.get("volume_quality"))
+    volume_complete = data.get("volume_complete")
     continuity_status = (
-        "continuous" if data.get("continuity_status") == "continuous" else "gap"
+        "continuous"
+        if data.get("continuity_status") == "continuous" and local_message_loss is False
+        else "gap"
     )
+    if local_message_loss is not False and volume_quality == "continuous":
+        # The row's delta covers only its own interval; the dropped rows'
+        # volume is missing from the consumer's accounting.
+        volume_quality = "discontinuous"
+        volume_complete = False
     return MarketTickPayload(
         instrument=instrument,
-        last_price=_finite_number(data.get("last_price")),
-        bid_price=_finite_number(data.get("bid_price")),
-        ask_price=_finite_number(data.get("ask_price")),
+        last_price=_price(data.get("last_price")),
+        bid_price=_price(data.get("bid_price")),
+        ask_price=_price(data.get("ask_price")),
         bid_size=_finite_number(data.get("bid_volume")),
         ask_size=_finite_number(data.get("ask_volume")),
-        lower_limit=_finite_number(data.get("lower_limit_price")),
-        upper_limit=_finite_number(data.get("upper_limit_price")),
+        lower_limit=_price(data.get("lower_limit_price")),
+        upper_limit=_price(data.get("upper_limit_price")),
         turnover=_finite_number(data.get("turnover")),
         open_interest=_finite_number(data.get("open_interest")),
         delta_volume=_finite_number(data.get("delta_volume")),
         cumulative_volume=_finite_number(data.get("cum_volume")),
-        volume_complete=data.get("volume_complete"),
+        volume_complete=volume_complete,
         volume_quality=volume_quality,
         continuity_status=continuity_status,
         trading_date=_iso_date(data.get("trading_day")),

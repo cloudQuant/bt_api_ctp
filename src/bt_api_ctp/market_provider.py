@@ -82,7 +82,12 @@ class CtpQuoteV2MarketProviderError(RuntimeError):
 
 
 class BoundedCtpQuoteV2Queue:
-    """Thread-safe, nonblocking sink for ``CtpMarketStream.push_data``."""
+    """Thread-safe, nonblocking sink for ``CtpMarketStream.push_data``.
+
+    When full, the oldest entry is dropped.  That is a locally known message
+    loss: :meth:`drain_marking_loss` reports it with the first entry drained
+    after it, so the provider projects that entry as a ``gap`` (D62-38).
+    """
 
     def __init__(self, capacity: int = DEFAULT_CTP_QUOTE_QUEUE_CAPACITY) -> None:
         if type(capacity) is not int or not 1 <= capacity <= MAX_CTP_QUOTE_QUEUE_CAPACITY:
@@ -91,6 +96,8 @@ class BoundedCtpQuoteV2Queue:
         self._items: deque[object] = deque()
         self._lock = threading.Lock()
         self._dropped_oldest = 0
+        # Set by a drop; cleared when the next entry is drained or on clear().
+        self._loss_pending = False
 
     @property
     def dropped_oldest(self) -> int:
@@ -110,18 +117,35 @@ class BoundedCtpQuoteV2Queue:
             if len(self._items) == self._capacity:
                 self._items.popleft()
                 self._dropped_oldest += 1
+                self._loss_pending = True
             self._items.append(item)
 
     def drain(self, limit: int) -> tuple[object, ...]:
+        return self.drain_marking_loss(limit)[0]
+
+    def drain_marking_loss(self, limit: int) -> tuple[tuple[object, ...], bool]:
+        """Drain up to ``limit`` entries; ``True`` if an entry was dropped before the first.
+
+        Drops only ever remove the oldest entry, so every drop since the last
+        drain precedes the first entry returned now.
+        """
+
         if type(limit) is not int or not 1 <= limit <= MAX_CTP_PROVIDER_POLL_LIMIT:
             raise CtpQuoteV2MarketProviderError("INVALID_CTP_MARKET_PROVIDER_CONFIG")
         with self._lock:
             count = min(limit, len(self._items))
-            return tuple(self._items.popleft() for _ in range(count))
+            items = tuple(self._items.popleft() for _ in range(count))
+            loss = self._loss_pending and count > 0
+            if loss:
+                self._loss_pending = False
+            return items, loss
 
     def clear(self) -> None:
+        # Everything queued is discarded with its scope (recovery or a failed
+        # subscription); the next scope starts without a pending loss.
         with self._lock:
             self._items.clear()
+            self._loss_pending = False
 
 
 class _CtpQuoteV2Fanout:
@@ -474,11 +498,15 @@ class CtpQuoteV2MarketProvider:
             or handle.source_epoch_reset_pending
         ):
             return ()
-        raw_items = handle.queue.drain(limit)
+        raw_items, loss_before_first = handle.queue.drain_marking_loss(limit)
         events: list[MarketProviderEvent] = []
-        for item in raw_items:
+        for index, item in enumerate(raw_items):
             try:
-                events.append(_project_native_tick(item, handle))
+                events.append(
+                    _project_native_tick(
+                        item, handle, local_message_loss=loss_before_first and index == 0
+                    )
+                )
             except Exception:
                 self._invalid_events += 1
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_EVENT_INVALID") from None
@@ -1316,9 +1344,20 @@ class CtpQuoteV2MarketProvider:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_OWNER_THREAD_REQUIRED")
 
 
-def _project_native_tick(item: object, handle: CtpQuoteV2MarketHandle) -> MarketProviderEvent:
+def _project_native_tick(
+    item: object,
+    handle: CtpQuoteV2MarketHandle,
+    *,
+    local_message_loss: bool = False,
+) -> MarketProviderEvent:
     receipt = _get_ctp_managed_quote_v2_receipt(item, handle.stream)
-    payload = project_ctp_market_tick(item, handle.key, handle.source_scope, receipt)
+    payload = project_ctp_market_tick(
+        item,
+        handle.key,
+        handle.source_scope,
+        receipt,
+        local_message_loss=local_message_loss,
+    )
     projected = payload.to_dict()
     encoded = json.dumps(
         projected,

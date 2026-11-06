@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -291,10 +293,12 @@ def test_service_readiness_requires_all_symbols_and_terminal_ack_then_a_fresh_ti
         assert scope is not None
         assert stream.is_quote_v2_service_symbol_ready("IF2612") is True
         assert stream.is_quote_v2_service_symbol_ready("IH2612") is True
-        assert queue.size == 0  # the first post-ACK tick establishes readiness
+        # The first post-ACK tick establishes readiness and, since D62-38
+        # (iteration 62), is published like every later tick.
+        assert queue.size == 1
 
         _emit_synthetic_tick(client, "IH2612", 3)
-        assert queue.size == 1
+        assert queue.size == 2
     finally:
         stream.disconnect()
 
@@ -390,7 +394,10 @@ def test_ctp_market_provider_projects_the_native_callback_and_opaque_clock_ident
         UpdateMillisec=250,
     )
 
-    (event,) = provider.poll(handle, limit=8)
+    # The tick that established readiness is published first (D62-38).
+    readiness, event = provider.poll(handle, limit=8)
+    assert readiness.data["clock_source_session_id"] == scope.clock_source_session_id
+    assert readiness.data["provider_sequence"] < event.data["provider_sequence"]
     assert event.generation == "hub-generation-r1"
     assert event.observed_at_utc.endswith("Z")
     assert event.data["schema"] == MARKET_TICK_SCHEMA
@@ -550,7 +557,8 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
             UpdateTime="09:30:01",
             UpdateMillisec=250,
         )
-    (first_event,) = provider.poll(first, limit=8)
+    # The first key also delivers the tick that made the session ready (D62-38).
+    _readiness, first_event = provider.poll(first, limit=8)
     (second_event,) = provider.poll(second, limit=8)
     assert first_event.data["instrument"]["native_symbol"] == "IF2612"
     assert second_event.data["instrument"]["native_symbol"] == "IH2612"
@@ -623,18 +631,20 @@ def test_incremental_keys_keep_one_md_epoch_and_preserve_queued_ticks(
         )
 
     # The first key can already have a valid native callback in the Hub's
-    # per-key replay path while later keys are still being installed.
-    emit("IF2612", 1)
+    # per-key replay path while later keys are still being installed.  Its
+    # queue also holds the published readiness tick (D62-38).
     assert first.queue.size == 1
+    emit("IF2612", 1)
+    assert first.queue.size == 2
     assert first.stream._quote_v2_subscription_metadata["IF2612"]["subscription_epoch"] == 1
 
     second = provider.subscribe(keys[1], generation="hub-generation-b")
     emit("IH2612", 2)
-    assert first.queue.size == 1
+    assert first.queue.size == 2
     assert second.queue.size == 1
 
     third = provider.subscribe(keys[2], generation="hub-generation-c")
-    assert first.queue.size == 1
+    assert first.queue.size == 2
     assert second.queue.size == 1
     assert third.queue.size == 0
     assert {
@@ -649,7 +659,7 @@ def test_incremental_keys_keep_one_md_epoch_and_preserve_queued_ticks(
     second_events = provider.poll(second, limit=8)
     third_events = provider.poll(third, limit=8)
     assert [event.data["instrument"]["native_symbol"] for event in first_events] == [
-        "IF2612", "IF2612"
+        "IF2612", "IF2612", "IF2612"
     ]
     assert [event.data["instrument"]["native_symbol"] for event in second_events] == [
         "IH2612", "IH2612"
@@ -810,8 +820,13 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
             UpdateMillisec=250,
         )
     )
-    assert fresh.queue.size == old_queue_size == 0
-    assert provider.poll(fresh, limit=8) == ()
+    # Only the fresh session's own readiness tick is queued (D62-38).
+    assert fresh.queue.size == old_queue_size == 1
+    (readiness,) = provider.poll(fresh, limit=8)
+    assert (
+        readiness.data["clock_source_session_id"]
+        == fresh.source_scope.clock_source_session_id
+    )
     assert provider.unsubscribe(fresh) is True
 
 
@@ -1857,3 +1872,318 @@ def test_unacknowledged_added_key_fails_the_shared_session_closed(
     assert set(provider._handles_by_symbol) == {"IF2612"}
     assert provider.unsubscribe(first) is True
     assert provider.diagnostics["active_handles"] == 0
+
+
+# ---------------------------------------------------------------------------
+# D62-38 (iteration 62): continuity means the current scope with no locally
+# known loss; volume accounting is bar-only.  Evidence level: UNIT/FAKE (the
+# synthetic MdClient drives the real CtpMarketStream callbacks).
+
+_CTP_TZ = timezone(timedelta(hours=8))
+
+
+class _LiveBookMdClient(_SyntheticMdClient):
+    """Every tick carries a full valid book stamped with the current CTP time."""
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)
+        self.trading_day: str | None = None
+
+    def emit_tick(self, **fields: object) -> None:
+        now = datetime.now(_CTP_TZ)
+        tick: dict[str, object] = {
+            "ExchangeID": "CFFEX",
+            "LastPrice": 4_001.0,
+            "BidPrice1": 4_000.0,
+            "BidVolume1": 2,
+            "AskPrice1": 4_002.0,
+            "AskVolume1": 3,
+            "OpenInterest": 1_000.0,
+            "Turnover": 1.0,
+            "UpperLimitPrice": 4_200.0,
+            "LowerLimitPrice": 3_800.0,
+        }
+        tick.update(fields)
+        tick.update(
+            TradingDay=self.trading_day or now.strftime("%Y%m%d"),
+            ActionDay=now.strftime("%Y%m%d"),
+            UpdateTime=now.strftime("%H:%M:%S"),
+            UpdateMillisec=now.microsecond // 1000,
+        )
+        super().emit_tick(**tick)
+
+
+def _live_provider(
+    monkeypatch: pytest.MonkeyPatch, *, queue_capacity: int = 1_024
+) -> tuple[CtpQuoteV2MarketProvider, object, _LiveBookMdClient]:
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _LiveBookMdClient)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        queue_capacity=queue_capacity,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-c1")
+    (client,) = _SyntheticMdClient.instances
+    return provider, handle, client
+
+
+def _tick_facts(event: object) -> tuple[object, ...]:
+    data = event.data
+    return (
+        data["delta_volume"],
+        data["volume_complete"],
+        data["volume_quality"],
+        data["continuity_status"],
+    )
+
+
+def test_the_readiness_tick_is_published_as_a_continuous_volume_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The startup tick (Volume=1) proves the source flows; it is no longer
+    # discarded but published first, tradable for its price if fresh.
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=6)
+    readiness, counted = provider.poll(handle, limit=8)
+    assert readiness.data["cumulative_volume"] == 1.0
+    assert _tick_facts(readiness) == (0.0, False, "baseline", "continuous")
+    assert readiness.data["quality_flags"] == []
+    assert readiness.data["execution_eligible"] is False  # the SDK qualifies later
+    assert _tick_facts(counted) == (5.0, True, "continuous", "continuous")
+    assert provider.close() is True
+
+
+def test_a_trading_day_switch_starts_a_continuous_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=900)
+    client.trading_day = "20991231"  # the next trading day on the same session
+    client.emit_tick(InstrumentID="IF2612", Volume=4)
+    client.emit_tick(InstrumentID="IF2612", Volume=9)
+    _readiness, _old_day, new_day, resumed = provider.poll(handle, limit=8)
+    assert new_day.data["trading_date"] == "2099-12-31"
+    assert _tick_facts(new_day) == (0.0, False, "baseline", "continuous")
+    assert new_day.data["quality_flags"] == []
+    assert _tick_facts(resumed) == (5.0, True, "continuous", "continuous")
+    assert provider.close() is True
+
+
+def test_a_volume_decrease_is_continuous_with_only_the_volume_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=50)
+    client.emit_tick(InstrumentID="IF2612", Volume=40)
+    _readiness, _counted, reset = provider.poll(handle, limit=8)
+    assert _tick_facts(reset) == (0.0, False, "discontinuous", "continuous")
+    assert reset.data["quality_flags"] == ["VOLUME_DISCONTINUITY"]
+    assert provider.close() is True
+
+
+@pytest.mark.parametrize(
+    ("book", "flag", "absent"),
+    [
+        ({"LastPrice": 4_200.0, "BidPrice1": 4_200.0, "BidVolume1": 80,
+          "AskPrice1": sys.float_info.max, "AskVolume1": 0}, "LIMIT_LOCKED_UP", "ask_price"),
+        ({"LastPrice": 3_800.0, "AskPrice1": 3_800.0, "AskVolume1": 80,
+          "BidPrice1": sys.float_info.max, "BidVolume1": 0}, "LIMIT_LOCKED_DOWN", "bid_price"),
+    ],
+)
+def test_a_limit_locked_one_sided_book_is_a_valid_continuous_quote(
+    monkeypatch: pytest.MonkeyPatch, book: dict[str, float], flag: str, absent: str
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=7, **book)
+    _readiness, locked = provider.poll(handle, limit=8)
+    assert _tick_facts(locked) == (6.0, True, "continuous", "continuous")
+    assert locked.data["quality_flags"] == sorted([flag, "ZERO_DEPTH"])
+    # The empty side is absent, never CTP's DBL_MAX sentinel.
+    assert locked.data[absent] is None
+    assert locked.data["upper_limit"] == 4_200.0 and locked.data["lower_limit"] == 3_800.0
+    assert provider.close() is True
+
+
+def test_quote_warnings_are_not_reported_as_provider_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=2, BidPrice1=4_001.0, AskPrice1=4_001.0)
+    client.emit_tick(InstrumentID="IF2612", Volume=3, AskVolume1=0)
+    _readiness, locked, thin = provider.poll(handle, limit=8)
+    assert locked.data["quality_flags"] == ["LOCKED_BOOK"]
+    assert thin.data["quality_flags"] == ["ZERO_DEPTH"]
+    assert {locked.data["continuity_status"], thin.data["continuity_status"]} == {"continuous"}
+    assert provider.close() is True
+
+
+def test_a_genuinely_invalid_quote_stays_a_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=5, BidPrice1=4_003.0, AskPrice1=4_002.0)
+    client.emit_tick(InstrumentID="IF2612", Volume=6, AskPrice1=sys.float_info.max, AskVolume1=0)
+    client.emit_tick(InstrumentID="IF2612", Volume=8)
+    _readiness, crossed, one_sided, after = provider.poll(handle, limit=8)
+    for invalid in (crossed, one_sided):
+        assert _tick_facts(invalid) == (0.0, False, "unavailable", "gap")
+        assert "PROVIDER_QUALITY_FAILURE" in invalid.data["quality_flags"]
+        assert not {"LIMIT_LOCKED_UP", "LIMIT_LOCKED_DOWN"} & set(invalid.data["quality_flags"])
+    assert one_sided.data["ask_price"] is None  # not at the limit: still invalid
+    assert _tick_facts(after) == (7.0, True, "continuous", "continuous")
+    assert provider.close() is True
+
+
+def test_a_dropped_queue_entry_makes_the_next_drained_tick_a_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch, queue_capacity=2)
+    for volume in (10, 20, 30, 40):  # readiness + 4 ticks into 2 slots: 3 dropped
+        client.emit_tick(InstrumentID="IF2612", Volume=volume)
+    after_loss, next_tick = provider.poll(handle, limit=8)
+    assert after_loss.data["cumulative_volume"] == 30.0
+    # Its own delta is kept, but the dropped rows' volume is missing.
+    assert _tick_facts(after_loss) == (10.0, False, "discontinuous", "gap")
+    assert _tick_facts(next_tick) == (10.0, True, "continuous", "continuous")
+    assert provider.diagnostics["dropped_oldest"] == 3
+    client.emit_tick(InstrumentID="IF2612", Volume=41)
+    (resumed,) = provider.poll(handle, limit=8)
+    assert _tick_facts(resumed) == (1.0, True, "continuous", "continuous")
+    assert provider.close() is True
+
+
+def test_a_queue_loss_is_reported_once_and_cleared_with_the_queue() -> None:
+    queue = BoundedCtpQuoteV2Queue(capacity=1)
+    queue.put("a")
+    queue.put("b")
+    assert queue.drain_marking_loss(4) == (("b",), True)
+    assert queue.drain_marking_loss(4) == ((), False)
+    queue.put("c")
+    assert queue.drain_marking_loss(4) == (("c",), False)
+    queue.put("d")
+    queue.put("e")
+    queue.clear()  # a recovery discards the scope with its pending loss
+    queue.put("f")
+    assert queue.drain_marking_loss(4) == (("f",), False)
+
+
+def _finish_recovery(provider: CtpQuoteV2MarketProvider, handle: object, epoch: str) -> None:
+    """Drive the owner polls until the replacement source needs a Hub epoch."""
+
+    deadline = time.monotonic() + 3.0
+    while not provider.source_epoch_reset_required(handle):
+        assert provider.poll(handle, limit=8) == ()  # nothing published meanwhile
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert provider.acknowledge_source_epoch_reset(handle, epoch=epoch) is True
+
+
+def test_a_disconnect_still_publishes_nothing_until_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=2)
+    assert len(provider.poll(handle, limit=8)) == 2
+    client.emit_disconnect()
+    client.emit_tick(InstrumentID="IF2612", Volume=3)  # late callback, old session
+    assert provider.poll(handle, limit=8) == ()
+    assert provider.diagnostics["source_recovery_active"] == 1
+    assert handle.queue.size == 0
+    _finish_recovery(provider, handle, "hub-epoch-c2")
+    events = provider.poll(handle, limit=8)
+    assert events and all(
+        event.data["provider_connection_generation"] == handle.source_scope.connection_generation
+        for event in events
+    )
+    assert 3.0 not in {event.data["cumulative_volume"] for event in events}
+    assert provider.close() is True
+
+
+def test_the_first_tick_after_a_reconnect_is_a_continuous_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, handle, client = _live_provider(monkeypatch)
+    client.emit_tick(InstrumentID="IF2612", Volume=2)
+    assert len(provider.poll(handle, limit=8)) == 2
+    old_scope = handle.source_scope
+    client.emit_disconnect()
+    _finish_recovery(provider, handle, "hub-epoch-c2")
+    # The replacement session's readiness tick (Volume=1) is published first.
+    readiness, *_ = provider.poll(handle, limit=8)
+    assert handle.source_scope is not old_scope
+    assert readiness.data["provider_connection_generation"] > old_scope.connection_generation
+    assert readiness.data["clock_source_session_id"] == handle.source_scope.clock_source_session_id
+    assert _tick_facts(readiness) == (0.0, False, "baseline", "continuous")
+    assert provider.close() is True
+
+
+def test_sdk_qualification_trades_the_fresh_first_tick_but_never_a_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unchanged SDK rule (FRESH and continuous) now implements D62-38."""
+
+    clock = pytest.importorskip("bt_api_py.clock_verification")
+    from bt_api_base.market_tick_protocol import (
+        MarketEventCursor,
+        MarketFreshnessStatus,
+        MarketTickPayload,
+        bind_market_tick_event,
+    )
+
+    provider, handle, client = _live_provider(monkeypatch, queue_capacity=2)
+    source = provider.describe_source(
+        handle,
+        key=handle.key,
+        generation=handle.generation,
+        stream_id=handle.key.stream_id,
+        epoch="hub-epoch-c1",
+    )
+    assert source is not None
+    evidence = clock.ClockEvidence(
+        offset_ns=0, error_bound_ns=1_000_000, server="fake-sntp", method="fake",
+        measured_monotonic_ns=0, valid_until_monotonic_ns=2**62,
+    )
+    check = clock.VenueClockCheck(
+        consistent=True, difference_ms=0.0, tolerance_ms=50.0, source="fake"
+    )
+    sequence = 0
+
+    def qualified(events: tuple[object, ...]) -> list[object]:
+        nonlocal sequence
+        result = []
+        for event in events:
+            sequence += 1
+            bound = bind_market_tick_event(
+                MarketTickPayload.from_dict(event.data),
+                source,
+                MarketEventCursor(source.stream_id, source.epoch, sequence),
+            )
+            result.append(
+                clock.qualify_market_tick_event(bound, evidence, check, max_latency_seconds=60.0)
+            )
+        return result
+
+    client.emit_tick(InstrumentID="IF2612", Volume=1, BidPrice1=4_003.0, AskPrice1=4_002.0)
+    readiness, crossed = qualified(provider.poll(handle, limit=8))
+    for tick in (readiness, crossed):
+        assert tick.data.freshness_status is MarketFreshnessStatus.FRESH
+    assert readiness.data.volume_quality == "baseline"
+    assert readiness.data.execution_eligible is True  # the first tick trades on its price
+    assert crossed.data.execution_eligible is False
+
+    client.emit_tick(
+        InstrumentID="IF2612", Volume=2, LastPrice=4_200.0, BidPrice1=4_200.0,
+        AskPrice1=sys.float_info.max, AskVolume1=0,
+    )
+    (locked,) = qualified(provider.poll(handle, limit=8))
+    assert locked.data.execution_eligible is True  # the venue judges the order (D62-33)
+
+    for volume in (3, 4, 5):  # one more than the two queue slots: one dropped
+        client.emit_tick(InstrumentID="IF2612", Volume=volume)
+    after_loss, next_tick = qualified(provider.poll(handle, limit=8))
+    assert after_loss.data.continuity_status == "gap"
+    assert after_loss.data.execution_eligible is False
+    assert next_tick.data.execution_eligible is True
+    assert provider.close() is True

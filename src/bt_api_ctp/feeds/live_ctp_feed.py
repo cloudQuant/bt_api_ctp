@@ -841,15 +841,83 @@ def _raw_quote_value(row: CtpTickerData, field_name: str, fallback: Any) -> Any:
     return fallback
 
 
+def _empty_ctp_quote_side(price: Any, volume: Any) -> bool:
+    """True for a book side CTP reports as empty: no depth and no price.
+
+    CTP fills an empty side's price with its DBL_MAX missing-value sentinel
+    (some fronts send 0).  NaN, infinity or any depth is malformed, not empty.
+    """
+    if not _valid_ctp_quote_number(volume) or float(volume) != 0:
+        return False
+    if isinstance(price, bool) or price in (None, ""):
+        return False
+    try:
+        number = float(price)
+    except (TypeError, ValueError):
+        return False
+    return number == 0 or (isfinite(number) and number >= _CTP_QUOTE_INVALID_FLOAT_THRESHOLD)
+
+
+def _ctp_limit_locked_side(row: CtpTickerData) -> str | None:
+    """Return ``"UP"``/``"DOWN"`` for a one-sided book exactly at its limit price.
+
+    Limit up: the bid quotes exactly the snapshot's ``UpperLimitPrice`` with
+    depth and the ask side is empty; limit down mirrors it at
+    ``LowerLimitPrice``.  Both limits and the last price must be valid and the
+    last price must lie within the limits of the same snapshot.  Anything else
+    (a near miss, an empty side with depth, a crossed book) is not recognised,
+    so a damaged quote cannot pass as a limit lock.
+    """
+    upper = _raw_quote_value(row, "UpperLimitPrice", row.get_upper_limit_price())
+    lower = _raw_quote_value(row, "LowerLimitPrice", row.get_lower_limit_price())
+    last = _raw_quote_value(row, "LastPrice", row.get_last_price())
+    if not (
+        _valid_ctp_quote_number(upper, positive=True)
+        and _valid_ctp_quote_number(lower, positive=True)
+        and _valid_ctp_quote_number(last, positive=True)
+        and float(lower) < float(upper)
+        and float(lower) <= float(last) <= float(upper)
+    ):
+        return None
+    bid = _raw_quote_value(row, "BidPrice1", row.get_bid_price())
+    ask = _raw_quote_value(row, "AskPrice1", row.get_ask_price())
+    bid_volume = _raw_quote_value(row, "BidVolume1", row.get_bid_volume())
+    ask_volume = _raw_quote_value(row, "AskVolume1", row.get_ask_volume())
+
+    def quoting(price: Any, volume: Any, limit: Any) -> bool:
+        return (
+            _valid_ctp_quote_number(price, positive=True)
+            and float(price) == float(limit)
+            and _valid_ctp_quote_number(volume, positive=True)
+        )
+
+    if quoting(bid, bid_volume, upper) and _empty_ctp_quote_side(ask, ask_volume):
+        return "UP"
+    if quoting(ask, ask_volume, lower) and _empty_ctp_quote_side(bid, bid_volume):
+        return "DOWN"
+    return None
+
+
 def _validate_ctp_quote(row: CtpTickerData) -> bool:
-    """Flag malformed required fields before they can update trusted state."""
+    """Flag malformed required fields before they can update trusted state.
+
+    A one-sided book whose quoting side sits exactly at the exchange limit
+    price of the same snapshot is valid (``LIMIT_LOCKED_UP``/``_DOWN``; user
+    decision 6, iteration 62): the venue judges orders against it (D62-33).
+    ``LOCKED_BOOK``, ``ZERO_DEPTH`` and the limit flags are warnings; they never
+    make the quote invalid.
+    """
     row.init_data()
     valid = True
+    limit_locked = _ctp_limit_locked_side(row)
+    empty_side = {"UP": "ASK_PRICE", "DOWN": "BID_PRICE"}.get(limit_locked or "")
     for field_name, raw_name, value in (
         ("LAST_PRICE", "LastPrice", row.get_last_price()),
         ("BID_PRICE", "BidPrice1", row.get_bid_price()),
         ("ASK_PRICE", "AskPrice1", row.get_ask_price()),
     ):
+        if field_name == empty_side:
+            continue
         if not _valid_ctp_quote_number(_raw_quote_value(row, raw_name, value), positive=True):
             _append_quote_quality_flag(row, f"INVALID_{field_name}")
             valid = False
@@ -872,6 +940,9 @@ def _validate_ctp_quote(row: CtpTickerData) -> bool:
             _append_quote_quality_flag(row, "LOCKED_BOOK")
     if row.get_bid_volume() == 0 or row.get_ask_volume() == 0:
         _append_quote_quality_flag(row, "ZERO_DEPTH")
+    if valid and limit_locked is not None:
+        # Only a quote that is otherwise valid is marked as limit-locked.
+        _append_quote_quality_flag(row, f"LIMIT_LOCKED_{limit_locked}")
     return valid
 
 
@@ -1069,7 +1140,17 @@ def _ctp_field_to_dict(field):
 
 
 class CtpVolumeDeltaTracker:
-    """The single SDK authority for CTP cumulative-volume conversion."""
+    """The single SDK authority for CTP cumulative-volume conversion.
+
+    Volume accounting is a bar-only fact (D62-38, iteration 62).  A scope's
+    first row (``BASELINE``, or ``CONNECTION_OR_TRADING_DAY_RESET`` after a
+    connection, subscription or trading-day change) and a cumulative-volume
+    decrease (``VOLUME_RESET``) only make that row's volume incomplete; the row
+    stays ``continuous``.  CTP market data carries no message sequence, so the
+    tracker never knows of a lost message.  An ``OUT_OF_ORDER`` row (an ingest
+    number not after the last one of its scope) leaves the state untouched and
+    is never continuous; the market stream drops it.
+    """
 
     def __init__(self) -> None:
         self._state: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1107,7 +1188,12 @@ class CtpVolumeDeltaTracker:
                 "cum_volume": total,
                 "ingest_seq": int(row.ingest_seq or 0),
             }
-        return row.apply_volume_delta(delta, complete=complete, quality=quality)
+        return row.apply_volume_delta(
+            delta,
+            complete=complete,
+            quality=quality,
+            continuity_status="gap" if quality == "OUT_OF_ORDER" else "continuous",
+        )
 
 
 class CtpRequestData(Feed):
@@ -2549,6 +2635,9 @@ class CtpMarketStream(BaseDataStream):
         self._managed_quote_clock_source_scope: CtpQuoteClockSourceScope | None = None
         self._managed_quote_v2_subscription_failed = False
         self._volume_tracker = CtpVolumeDeltaTracker()
+        # Ticks dropped because they were not after the last tick of their
+        # scope (a count only; no values).
+        self._quote_v2_out_of_order_dropped = 0
         self._subscription_epoch = 0
         self._quote_v2_default_metadata = self._quote_v2_metadata(
             resolved_kwargs.get("quote_v2_metadata")
@@ -2827,6 +2916,13 @@ class CtpMarketStream(BaseDataStream):
     def quote_v2_service_recovery_required(self) -> bool:
         with self._md_callback_lock:
             return self._quote_v2_service_recovery_required
+
+    @property
+    def quote_v2_out_of_order_dropped(self) -> int:
+        """Ticks dropped as out of order within their scope (a count only)."""
+
+        with self._md_callback_lock:
+            return self._quote_v2_out_of_order_dropped
 
     @property
     def quote_v2_service_fail_closed(self) -> bool:
@@ -3444,9 +3540,11 @@ class CtpMarketStream(BaseDataStream):
                         return
                     self._quote_v2_service_ready = True
                     # This tick proves the new source is flowing after the
-                    # complete ACK set. Discard it; a subsequent callback is
-                    # the first observation eligible for the public queue.
-                    return
+                    # complete ACK set, and it is published like every later
+                    # one (D62-38, iteration 62). It belongs to this exact
+                    # authenticated, acknowledged session and is bound to the
+                    # scope just issued; a stale cached snapshot is refused by
+                    # the SDK freshness check, not by discarding it here.
             try:
                 client_generation = int(getattr(client, "connection_generation", 0) or 0)
             except (TypeError, ValueError):
@@ -3521,8 +3619,16 @@ class CtpMarketStream(BaseDataStream):
             row.resolve_event_time()
             if _validate_ctp_quote(row):
                 self._volume_tracker.apply(row)
+                if row.volume_quality == "OUT_OF_ORDER":
+                    # Not after the last tick of its scope: drop it rather
+                    # than publish a gap (user decision 4, iteration 62).
+                    self._quote_v2_out_of_order_dropped += 1
+                    return
             else:
-                row.apply_volume_delta(0, complete=False, quality="INVALID_QUOTE")
+                # A malformed snapshot is not usable data: it stays a gap.
+                row.apply_volume_delta(
+                    0, complete=False, quality="INVALID_QUOTE", continuity_status="gap"
+                )
             if native_managed_callback:
                 self._attach_managed_quote_v2_receipt(row)
             # Publication point (iteration 60, D60-12): every producer-side
