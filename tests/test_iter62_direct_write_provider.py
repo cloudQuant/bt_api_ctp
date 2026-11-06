@@ -238,6 +238,46 @@ def test_trade_and_error_projection():
     assert error.status is DirectOrderStatus.REJECTED and error.error_code == "31"
 
 
+def _insert_error_snapshot(source):
+    return {
+        "InstrumentID": "rb2701",
+        "ExchangeID": "SHFE",
+        "OrderRef": "000000000042",
+        "_error_code": 31,
+        "_error_message": "资金不足",
+        "_source": source,
+        "_login_front_id": 1,
+        "_login_session_id": 7,
+        "_trading_day": "20261106",
+        "_connection_generation": 3,
+    }
+
+
+def test_insert_error_response_names_the_order_by_its_session_triple():
+    """OnRspOrderInsert answers this session's request: its error carries the
+    session triple, so the host can match (and reject) its own order."""
+    error = project_ctp_execution_event(
+        "order_insert_error", _insert_error_snapshot("OnRspOrderInsert"), sequence=1
+    )
+    fields = error.identity.fields
+    assert (fields["front_id"], fields["session_id"], fields["order_ref"]) == (
+        1,
+        7,
+        "000000000042",
+    )
+    assert error.status is DirectOrderStatus.REJECTED
+
+
+def test_private_flow_insert_error_is_not_attributed_to_this_session():
+    """OnErrRtnOrderInsert comes on the private flow shared by the account's
+    sessions; without its own FrontID/SessionID it is not claimed."""
+    error = project_ctp_execution_event(
+        "order_insert_error", _insert_error_snapshot("OnErrRtnOrderInsert"), sequence=1
+    )
+    assert "front_id" not in error.identity.fields
+    assert "session_id" not in error.identity.fields
+
+
 # ------------------------------------------------------------- sessions
 
 

@@ -407,6 +407,17 @@ def project_ctp_execution_event(
     if kind in ("order_insert_error", "order_action_error"):
         error_code = snapshot.get("_error_code")
         message = _text(snapshot.get("_error_message")) or None
+        if kind == "order_insert_error" and snapshot.get("_source") == "OnRspOrderInsert":
+            # CThostFtdcInputOrderField has no FrontID/SessionID, so the error
+            # alone cannot name the order (OrderRef is unique only within one
+            # session).  OnRspOrderInsert answers this session's own request,
+            # so this session's login FrontID/SessionID complete the order key.
+            # OnErrRtnOrderInsert arrives on the private flow, which other
+            # sessions of the account share: it is left without them.
+            front_id = _int_or_none(snapshot.get("_login_front_id"))
+            session_id = _int_or_none(snapshot.get("_login_session_id"))
+            if front_id is not None and session_id is not None:
+                fields.update(front_id=front_id, session_id=session_id)
         if kind == "order_action_error":
             fields.update(
                 front_id=_int_or_none(snapshot.get("FrontID")),
