@@ -2481,6 +2481,14 @@ class CtpRequestData(Feed):
         self._ensure_connected()
         return self._trader.query_settlement_confirmation_result(**kwargs)
 
+    def query_investor_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_investor_result(**kwargs)
+
+    def query_trading_codes_result(self, **kwargs: Any) -> QueryResult[Any]:
+        self._ensure_connected()
+        return self._trader.query_trading_codes_result(**kwargs)
+
     def query_depth_market_data_result(self, **kwargs: Any) -> QueryResult[Any]:
         self._ensure_connected()
         return self._trader.query_depth_market_data_result(**kwargs)

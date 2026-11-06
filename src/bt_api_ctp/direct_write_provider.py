@@ -24,6 +24,7 @@ import hashlib
 import threading
 import time
 from collections import deque
+from collections.abc import Mapping
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -44,7 +45,14 @@ from bt_api_base.direct_write_protocol import (
     WriteOperation,
 )
 
+from bt_api_ctp import trading_permission_projection as permission_projection
 from bt_api_ctp.instrument_position_facts import InstrumentPositionFacts
+from bt_api_ctp.trading_permission_facts import UNKNOWN as PERMISSION_UNKNOWN
+from bt_api_ctp.trading_permission_facts import (
+    InstrumentPermissionFacts,
+    PermissionFact,
+    TradingPermissionFacts,
+)
 
 __all__ = (
     "CTP_DIRECT_WRITE_EXCHANGE",
@@ -213,6 +221,45 @@ def _valid_instrument_filter(value: Any) -> bool:
 def _valid_exchange_filter(value: Any) -> bool:
     # CTP ExchangeID is char[9]: SHFE, DCE, CZCE, CFFEX, INE, GFEX, ...
     return type(value) is str and 0 < len(value) <= 8 and value.isascii() and value.isalnum()
+
+
+_MAX_PERMISSION_SYMBOLS = 32
+
+
+def _permission_symbols(symbols: Any) -> tuple[str, ...]:
+    """Unique, valid instrument ids in request order (bounded)."""
+    if symbols is None or isinstance(symbols, (str, bytes, Mapping)):
+        raise DirectWriteError("ctp_trading_permissions_symbols_invalid")
+    try:
+        items = tuple(symbols)
+    except TypeError:
+        raise DirectWriteError("ctp_trading_permissions_symbols_invalid") from None
+    if not items:
+        raise DirectWriteError("ctp_trading_permissions_symbols_invalid")
+    if any(not _valid_instrument_filter(item) for item in items):
+        raise DirectWriteError("ctp_trading_permissions_symbol_invalid")
+    names = tuple(dict.fromkeys(items))
+    if len(names) > _MAX_PERMISSION_SYMBOLS:
+        raise DirectWriteError("ctp_trading_permissions_too_many_symbols")
+    return names
+
+
+def _permission_venues(exchange_ids: Any, names: tuple[str, ...]) -> dict[str, str]:
+    """Caller-given order venue per requested symbol (empty values ignored)."""
+    if exchange_ids is None:
+        return {}
+    if not isinstance(exchange_ids, Mapping):
+        raise DirectWriteError("ctp_trading_permissions_exchange_invalid")
+    venues: dict[str, str] = {}
+    for symbol, venue in exchange_ids.items():
+        if symbol not in names:
+            raise DirectWriteError("ctp_trading_permissions_exchange_invalid")
+        if venue in (None, ""):
+            continue
+        if not _valid_exchange_filter(venue):
+            raise DirectWriteError("ctp_trading_permissions_exchange_invalid")
+        venues[symbol] = venue
+    return venues
 
 
 def _query_blocker(result: Any, name: str, generation: Any) -> Optional[str]:
@@ -1071,6 +1118,162 @@ class CtpDirectWriteProvider:
             dropped_rows=dropped,
             dropped_instruments=tuple(sorted(dropped_names))[:_MAX_DROPPED_INSTRUMENTS_REPORTED],
             native_filter_verified=verified,
+        )
+
+    def trading_permission_facts(
+        self,
+        symbols: Any,
+        *,
+        exchange_ids: Optional[Mapping[str, Any]] = None,
+        include_rates: bool = True,
+        timeout: float = 5.0,
+        max_duration: Optional[float] = None,
+    ) -> TradingPermissionFacts:
+        """Trading-permission inputs of ``symbols`` in the current session (D62-25).
+
+        Native queries, all read-only and filtered (never the full catalog):
+        ``ReqQryInvestor`` once; ``ReqQryInstrument`` per instrument
+        (``InstrumentID``); ``ReqQryTradingCode`` per distinct exchange
+        (``ExchangeID``); with ``include_rates`` also
+        ``ReqQryInstrumentCommissionRate`` and ``ReqQryInstrumentMarginRate``
+        (speculation) per instrument.  ``exchange_ids`` maps a symbol to the
+        exchange its orders are sent to; otherwise the instrument row's
+        exchange is used.  ``max_duration`` bounds the whole read: queries not
+        started before it are skipped and their facts stay unknown.
+
+        The result is never a permission proof (``proves_permission`` is
+        False).  A missing, failed or stale query leaves its facts unknown; a
+        session change while reading makes every fact unknown.
+        """
+        names = _permission_symbols(symbols)
+        venues_given = _permission_venues(exchange_ids, names)
+        if type(include_rates) is not bool:
+            raise DirectWriteError("ctp_trading_permissions_option_invalid")
+        deadline: Optional[float] = None
+        if max_duration is not None:
+            limit = _float_or_none(max_duration)
+            if type(max_duration) is bool or limit is None or limit <= 0:
+                raise DirectWriteError("ctp_trading_permissions_option_invalid")
+            deadline = time.monotonic() + limit
+        trader = self._trader()
+        session = self._session_fields(trader)
+        generation = session["connection_generation"]
+        observed = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        blockers: list[str] = []
+        queries = 0
+        feed = self._feed
+
+        def run(name: str, call: Any) -> Any:
+            nonlocal queries
+            if deadline is not None and time.monotonic() >= deadline:
+                blockers.append("permissions_deadline_exceeded")
+                return None
+            queries += 1
+            try:
+                result = call()
+            except Exception as exc:
+                blockers.append(f"{name}_query_failed[{type(exc).__name__}]")
+                return None
+            blocker = _query_blocker(result, name, generation)
+            if blocker is not None:
+                blockers.append(blocker)
+                return None
+            return result
+
+        investor = permission_projection.investor_fact(
+            run("investor", lambda: feed.query_investor_result(timeout=timeout))
+        )
+        instruments: dict[str, tuple[bool, Any]] = {}
+        for symbol in names:
+            result = run(
+                "instrument",
+                lambda s=symbol: feed.query_instruments_result(instrument_id=s, timeout=timeout),
+            )
+            instruments[symbol] = (
+                result is not None,
+                permission_projection.instrument_fact(result, symbol, venues_given.get(symbol)),
+            )
+        order_venue = {
+            symbol: venues_given.get(symbol) or instruments[symbol][1][1] for symbol in names
+        }
+        codes = {
+            venue: run(
+                "trading_code",
+                lambda v=venue: feed.query_trading_codes_result(exchange_id=v, timeout=timeout),
+            )
+            for venue in sorted({venue for venue in order_venue.values() if venue})
+        }
+        rates: dict[str, tuple[Any, Any]] = {}
+        if include_rates:
+            for symbol in names:
+                venue = order_venue[symbol] or ""
+                commission = run(
+                    "commission_rate",
+                    lambda s=symbol, v=venue: feed.query_instrument_commission_rate_result(
+                        s, exchange_id=v, timeout=timeout
+                    ),
+                )
+                margin = run(
+                    "margin_rate",
+                    lambda s=symbol, v=venue: feed.query_instrument_margin_rate_result(
+                        s, exchange_id=v, timeout=timeout
+                    ),
+                )
+                rates[symbol] = (commission, margin)
+        entries = []
+        for symbol in names:
+            completed, (instrument, _row_venue, product) = instruments[symbol]
+            venue = order_venue[symbol]
+            code, kinds, code_blocker = permission_projection.trading_code_fact(
+                codes.get(venue) if venue else None, venue, venue_query_complete=completed
+            )
+            if code_blocker is not None:
+                blockers.append(code_blocker)
+            facts = [investor, instrument, code]
+            if include_rates:
+                commission, margin = rates[symbol]
+                facts.append(
+                    permission_projection.rate_fact(
+                        "commission_rate", commission, symbol, venue, product
+                    )
+                )
+                facts.append(
+                    permission_projection.rate_fact("margin_rate", margin, symbol, venue, product)
+                )
+            entries.append(
+                InstrumentPermissionFacts(
+                    symbol=symbol, venue=venue, facts=tuple(facts), trading_code_kinds=kinds
+                )
+            )
+        try:
+            after = self._session_fields(trader)
+        except DirectWriteError:
+            after = None
+        consistent = after == session and self._feed.trader_client is trader
+        if not consistent:
+            # Facts read across a reconnect or trading-day change prove
+            # nothing about the current session: every fact becomes unknown.
+            blockers.append("permissions_session_changed")
+            entries = [
+                InstrumentPermissionFacts(
+                    symbol=entry.symbol,
+                    venue=entry.venue,
+                    facts=tuple(
+                        PermissionFact(fact.name, PERMISSION_UNKNOWN, "session_changed", False)
+                        for fact in entry.facts
+                    ),
+                )
+                for entry in entries
+            ]
+        return TradingPermissionFacts(
+            exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+            trading_day=session.get("trading_day"),
+            session_generation=generation,
+            observed_at_utc=observed,
+            instruments=tuple(entries),
+            session_consistent=consistent,
+            blockers=tuple(dict.fromkeys(blockers)),
+            native_queries=queries,
         )
 
     def account_reference(self) -> Optional[str]:

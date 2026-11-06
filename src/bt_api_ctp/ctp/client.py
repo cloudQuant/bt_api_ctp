@@ -115,6 +115,7 @@ from .ctp_structs_query import (
     CThostFtdcQryInstrumentCommissionRateField,
     CThostFtdcQryInstrumentField,
     CThostFtdcQryInstrumentMarginRateField,
+    CThostFtdcQryInvestorField,
     CThostFtdcQryInvestorPositionField,
     CThostFtdcQryOptionInstrCommRateField,
     CThostFtdcQryOptionInstrTradeCostField,
@@ -123,6 +124,7 @@ from .ctp_structs_query import (
     CThostFtdcQrySettlementInfoConfirmField,
     CThostFtdcQryTradeField,
     CThostFtdcQryTradingAccountField,
+    CThostFtdcQryTradingCodeField,
 )
 from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
@@ -186,6 +188,8 @@ CTP_REQUEST_COUNT_KEYS = (
     "query_option_trade_cost",
     "query_option_commission_rate",
     "query_settlement_confirmation",
+    "query_investor",
+    "query_trading_code",
 )
 
 _QUERY_FILTER_UNSET = object()
@@ -1966,6 +1970,43 @@ def _snapshot_query_record(record: Any) -> _QueryRecordSnapshot:
     if isinstance(record, dict):
         return _QueryRecordSnapshot(record)
     return _QueryRecordSnapshot(_snapshot_ctp_field(record))
+
+
+# Query kinds whose native rows carry personal data (CThostFtdcInvestorField:
+# name, identity document, telephone, address ...) keep only these fields;
+# every other query kind keeps its full native row as before.
+_QUERY_RECORD_FIELD_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    "investor": (
+        "BrokerID",
+        "InvestorID",
+        "InvestorGroupID",
+        "IsActive",
+        "CommModelID",
+        "MarginModelID",
+        "IsOrderFreq",
+        "IsOpenVolLimit",
+    ),
+    "trading_code": (
+        "BrokerID",
+        "InvestorID",
+        "ExchangeID",
+        "ClientID",
+        "IsActive",
+        "ClientIDType",
+        "BranchID",
+        "BizType",
+        "InvestUnitID",
+    ),
+}
+
+
+def _restrict_query_record(
+    request_type: str, snapshot: _QueryRecordSnapshot
+) -> _QueryRecordSnapshot:
+    allowed = _QUERY_RECORD_FIELD_ALLOWLIST.get(request_type)
+    if allowed is None:
+        return snapshot
+    return _QueryRecordSnapshot({name: snapshot[name] for name in allowed if name in snapshot})
 
 
 def _rsp_error(rsp_info: Any) -> tuple[int | None, str]:
@@ -4215,6 +4256,8 @@ _CTP_INGRESS_SAFE_REQUEST_METHODS = frozenset(
         "ReqQryDepthMarketData",
         "ReqQrySettlementInfoConfirm",
         "ReqSettlementInfoConfirm",
+        "ReqQryInvestor",
+        "ReqQryTradingCode",
     }
 )
 
@@ -4913,6 +4956,20 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
     @_fence_trader_spi_callback
+    def OnRspQryInvestor(self, pInvestor, pRspInfo, nRequestID, bIsLast):
+        if not self._is_current():
+            return
+        self._c._handle_query_callback("investor", pInvestor, pRspInfo, nRequestID, bIsLast)
+
+    @_fence_trader_spi_callback
+    def OnRspQryTradingCode(self, pTradingCode, pRspInfo, nRequestID, bIsLast):
+        if not self._is_current():
+            return
+        self._c._handle_query_callback(
+            "trading_code", pTradingCode, pRspInfo, nRequestID, bIsLast
+        )
+
+    @_fence_trader_spi_callback
     def OnRtnOrder(self, pOrder):
         self._c._handle_order_return(pOrder, origin_api=self._native_api, origin_spi=self)
 
@@ -5024,6 +5081,8 @@ def _ctp_query_callback_name(request_type: str) -> str | None:
         "margin_rate": "OnRspQryInstrumentMarginRate",
         "commission_rate": "OnRspQryInstrumentCommissionRate",
         "settlement_confirmation": "OnRspQrySettlementInfoConfirm",
+        "investor": "OnRspQryInvestor",
+        "trading_code": "OnRspQryTradingCode",
     }.get(request_type)
 
 
@@ -10313,7 +10372,7 @@ class TraderClient:
                     accumulator.sealed = True
                     accumulator.event.set()
                     return
-                snapshot = _snapshot_query_record(record)
+                snapshot = _restrict_query_record(request_type, _snapshot_query_record(record))
                 if request_type == "instruments":
                     snapshot.update(normalize_ctp_instrument(snapshot))
                     # InstrumentField proves ExpireDate but carries neither an
@@ -11219,6 +11278,107 @@ class TraderClient:
         return self.query_instrument_commission_rate_result(
             instrument_id, exchange_id=exchange_id, timeout=timeout
         ).first
+
+    def query_investor_result(
+        self,
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> QueryResult[Any]:
+        """Read the bound investor's own row (``ReqQryInvestor``, iteration 62).
+
+        The request is filtered to the bound BrokerID/InvestorID.  Rows keep
+        only non-personal fields (see ``_QUERY_RECORD_FIELD_ALLOWLIST``).  An
+        active investor is one input of trading-permission facts, never a
+        permission proof by itself.
+        """
+        field = CThostFtdcQryInvestorField()
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+        }
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "investor",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
+        api = self._api
+        method = getattr(api, "ReqQryInvestor", None) if api is not None else None
+        return self._execute_query(
+            "investor",
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryInvestor", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
+            timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
+        )
+
+    def query_trading_codes_result(
+        self,
+        exchange_id="",
+        timeout=5,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> QueryResult[Any]:
+        """Read the bound investor's exchange trading codes (``ReqQryTradingCode``).
+
+        ``exchange_id`` is written into the native request and read back as
+        request evidence; without it every visible exchange is queried.  A
+        venue may still return rows of other exchanges, so callers must match
+        ``ExchangeID`` per row.  A trading code is one input of
+        trading-permission facts, never a permission proof by itself.
+        """
+        if type(exchange_id) is not str:
+            return self._local_query_failure(
+                "trading_code",
+                "native_trading_code_filter_invalid",
+                unsupported=True,
+                include_query_source=False,
+            )
+        field = CThostFtdcQryTradingCodeField()
+        intent_filters = {
+            "BrokerID": self._bound_broker_id,
+            "InvestorID": self._bound_user_id,
+        }
+        if exchange_id:
+            intent_filters["ExchangeID"] = exchange_id
+        try:
+            for name, value in intent_filters.items():
+                setattr(field, name, value)
+        except Exception:
+            return self._local_query_failure(
+                "trading_code",
+                "native_query_fields_unsupported",
+                unsupported=True,
+                include_query_source=False,
+            )
+        api = self._api
+        method = getattr(api, "ReqQryTradingCode", None) if api is not None else None
+        return self._execute_query(
+            "trading_code",
+            (
+                (lambda request_id: self._invoke_session_native_request(
+                    api, "ReqQryTradingCode", field, request_id
+                ))
+                if callable(method)
+                else None
+            ),
+            timeout,
+            request_filter_field=field,
+            request_intent_filters=intent_filters,
+            deadline_monotonic=deadline_monotonic,
+        )
 
     def _query_reference_result(
         self,
