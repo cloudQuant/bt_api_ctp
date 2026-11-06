@@ -471,12 +471,16 @@ def test_commission_query_native_stall_outlives_deadline_and_fences_session_work
         assert visible["counts"]["query_commission_rate"] == 1
         assert visible["native_call_refs"] == 1
 
+        # The in-flight commission Req holds the session query slot, so a second
+        # query waits within its own timeout and fails locally without a Req.
         core_result = client.query_instruments_result(
             timeout=0.5,
             deadline_monotonic=time.monotonic() + 1,
         )
         assert core_result.complete is False
-        assert core_result.error_message == "query_submit_exception:CtpExecutionGateError"
+        assert core_result.timed_out is True
+        assert core_result.error_message == "query_slot_busy"
+        assert core_result.completion_origin == "query_slot_busy"
         assert not any(call[0] == "ReqQryInstrument" for call in api.calls)
 
         binding = _binding(owner, client._callback_ingress.active_session, _request_payload())
@@ -497,6 +501,20 @@ def test_commission_query_native_stall_outlives_deadline_and_fences_session_work
         with client._query_state_lock:
             assert client._callback_ingress.native_call_refs == 0
             assert client._native_request_inflight_refs == 0
+            # The accepted Req stays outstanding at the vendor after the deadline.
+            assert client._query_native_inflight is not None
+            assert client._query_native_inflight[0] == native_request_ids[0]
+
+        # Its late terminal packet frees the slot but never reopens the result.
+        api.spi.OnRspQryInstrumentCommissionRate(
+            SimpleNamespace(InstrumentID="rb2610"), None, native_request_ids[0], True
+        )
+        with client._query_state_lock:
+            assert client._query_native_inflight is None
+        late = client.get_query_result(native_request_ids[0])
+        assert late.timed_out is True
+        assert late.records == ()
+        assert late.late_callback_count == 1
 
         def complete_instrument_query(field, request_id):
             api.calls.append(("ReqQryInstrument", field, request_id))

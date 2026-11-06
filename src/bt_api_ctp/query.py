@@ -28,6 +28,7 @@ QUERY_COMPLETION_ORIGINS = frozenset(
         "record_limit",
         "success",
         "local_preflight",
+        "query_slot_busy",
     }
 )
 

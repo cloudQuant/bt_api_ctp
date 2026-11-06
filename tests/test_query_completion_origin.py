@@ -116,6 +116,7 @@ def test_query_result_origins_are_additive_and_whitelisted():
             "record_limit",
             "success",
             "local_preflight",
+            "query_slot_busy",
         }
     )
     result = QueryResult(

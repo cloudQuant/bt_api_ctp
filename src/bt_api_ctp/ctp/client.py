@@ -228,6 +228,7 @@ _MD_NATIVE_REQUEST_NOT_STARTED = object()
 _MAX_NATIVE_JOIN_WAIT_SECONDS = 60.0
 _MAX_CTP_STOP_WAIT_SECONDS = 30.0
 _CTP_STOP_POLL_SECONDS = 0.1
+_CTP_QUERY_SLOT_POLL_SECONDS = 0.01
 _NO_EXPECTED_NATIVE_API = object()
 
 
@@ -5179,6 +5180,10 @@ class TraderClient:
         self._query_lock = threading.Lock()
         self._query_state_lock = threading.RLock()
         self._query_history: dict[int, _QueryAccumulator] = {}
+        # The vendor keeps one outstanding ReqQry* per session until its
+        # terminal packet, even after a local timeout sealed the accumulator.
+        # ``(request_id, request_type, connection_generation)`` or ``None``.
+        self._query_native_inflight: tuple[int, str, int] | None = None
         self._order_action_history: dict[tuple[int, str], CtpOrderActionEvidence] = {}
         self._order_insert_history: dict[tuple[int, str], CtpOrderInsertEvidence] = {}
         self._order_insert_identities: dict[tuple[int, str], _OrderInsertIdentity] = {}
@@ -6423,6 +6428,14 @@ class TraderClient:
                                 # this capped request are counted as late
                                 # without growing its journal or accumulator.
                                 limited_query.late_callback_count += 1
+                                if (len(args) > 3 and args[3]) or _rsp_error(
+                                    args[1] if len(args) > 1 else None
+                                )[0] not in (None, 0):
+                                    # Its terminal packet still ends the
+                                    # vendor-side request for the query slot.
+                                    self._release_query_slot_locked(
+                                        args[2], limited_query.request_type
+                                    )
                                 return _CALLBACK_INGRESS_SKIP_ORIGINAL
                             if (
                                 len(args) > 0
@@ -9187,6 +9200,8 @@ class TraderClient:
             self._settlement_proof_query_request_id = None
             self._settlement_readback_verified = False
             self._last_session_error = {"disconnect_reason": reason}
+            # The vendor session that owned an outstanding ReqQry* is gone.
+            self._query_native_inflight = None
             for accumulator in self._query_history.values():
                 if accumulator.sealed:
                     continue
@@ -10128,6 +10143,82 @@ class TraderClient:
         accumulator.event.set()
         return accumulator.result()
 
+    def _query_slot_blocking_locked(self) -> bool:
+        """Return whether this session's outstanding native ReqQry* is still pending."""
+        slot = self._query_native_inflight
+        if slot is None:
+            return False
+        if slot[2] != self._connection_generation:
+            # A new connection generation has no vendor request from the old one.
+            self._query_native_inflight = None
+            return False
+        state = self._callback_ingress
+        # A poisoned managed source rejects every Req before native code; let
+        # that gate report the failure instead of waiting for the slot.
+        return state is None or not state.poisoned
+
+    def _release_query_slot_locked(self, request_id: int, request_type: str) -> None:
+        """Clear the tracked native query once its own terminal packet is observed."""
+        slot = self._query_native_inflight
+        if (
+            slot is not None
+            and slot[0] == request_id
+            and (slot[1] == request_type or request_type == "unknown")
+        ):
+            self._query_native_inflight = None
+
+    def _wait_for_query_slot(
+        self,
+        request_type: str,
+        timeout: Any,
+        issue_deadline: float | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> QueryResult[Any] | None:
+        """Wait on the query lane for a pending native query; ``None`` means submit.
+
+        The wait is bounded by this query's own timeout and absolute deadline
+        and polls ``should_stop``. ``_query_state_lock`` is never held across
+        a sleep, so the terminal callback that clears the slot is not blocked.
+        """
+        with self._query_state_lock:
+            if not self._query_slot_blocking_locked():
+                return None
+        try:
+            budget = float(timeout)
+        except (TypeError, ValueError, OverflowError):
+            budget = 0.0
+        if not budget > 0 or getattr(self._native_callback_thread_state, "depth", 0) > 0:
+            # On the SPI callback thread the packet that frees the slot is
+            # delivered by this same thread, so waiting cannot succeed.
+            budget = 0.0
+        slot_deadline = time.monotonic() + budget
+        if issue_deadline is not None:
+            slot_deadline = min(slot_deadline, issue_deadline)
+        if not math.isfinite(slot_deadline):
+            # An unbounded wait is refused rather than invented.
+            slot_deadline = time.monotonic()
+        while True:
+            if should_stop is not None and should_stop():
+                return self._local_query_failure(
+                    request_type, "query_cancelled", completion_origin="local_cancel"
+                )
+            with self._query_state_lock:
+                if not self._query_slot_blocking_locked():
+                    break
+            remaining = slot_deadline - time.monotonic()
+            if remaining <= 0:
+                return self._local_query_failure(
+                    request_type,
+                    "query_slot_busy",
+                    timed_out=True,
+                    completion_origin="query_slot_busy",
+                )
+            time.sleep(min(_CTP_QUERY_SLOT_POLL_SECONDS, remaining))
+        if not self.is_read_only_ready:
+            # The slot may have been cleared by a disconnect or stop.
+            return self._local_query_failure(request_type, "trader_not_logged_in")
+        return None
+
     def _handle_query_callback(
         self,
         request_type: str,
@@ -10145,6 +10236,10 @@ class TraderClient:
             terminal_callback_at_utc = datetime.now(timezone.utc)
             terminal_callback_monotonic = time.monotonic()
         with self._query_state_lock:
+            if terminal_callback_monotonic is not None:
+                # A terminal packet ends the vendor request even when it is late
+                # for a locally sealed (timed-out) accumulator; rows stay late.
+                self._release_query_slot_locked(int(request_id), request_type)
             accumulator = self._query_history.get(int(request_id))
             if accumulator is None or accumulator.request_type != request_type:
                 self._orphan_query_callbacks.append(
@@ -10357,6 +10452,11 @@ class TraderClient:
                     timed_out=True,
                     completion_origin="deadline",
                 )
+            slot_failure = self._wait_for_query_slot(
+                request_type, timeout, issue_deadline, should_stop
+            )
+            if slot_failure is not None:
+                return slot_failure
             elapsed = time.monotonic() - self._last_query_submitted_at
             wait_time = self._query_interval - elapsed
             if wait_time > 0:
@@ -10441,6 +10541,14 @@ class TraderClient:
                 request_intent_parameters=dict(request_intent_parameter_items),
                 record_limit=max_records,
             )
+            with self._query_state_lock:
+                # Reserve the slot before releasing the lane so a concurrent
+                # query cannot submit between this decision and the native call.
+                self._query_native_inflight = (
+                    accumulator.request_id,
+                    request_type,
+                    accumulator.connection_generation,
+                )
             self._last_query_submitted_at = time.monotonic()
 
         # Release the query-rate lock before entering native code. A vendor
@@ -10448,6 +10556,7 @@ class TraderClient:
         # callback thread that must acquire SDK state locks.
         if should_stop is not None and should_stop():
             with self._query_state_lock:
+                self._release_query_slot_locked(accumulator.request_id, request_type)
                 if not accumulator.event.is_set() and not accumulator.is_last_seen:
                     accumulator.record_completion_origin("local_cancel")
                     accumulator.error_code = -1
@@ -10458,14 +10567,20 @@ class TraderClient:
                     accumulator.event.set()
                 return accumulator.result()
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            with self._query_state_lock:
+                self._release_query_slot_locked(accumulator.request_id, request_type)
             return self._mark_query_deadline_exceeded(accumulator)
         self._record_request(f"query_{request_type}")
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
+            with self._query_state_lock:
+                self._release_query_slot_locked(accumulator.request_id, request_type)
             return self._mark_query_deadline_exceeded(accumulator)
         try:
             ret = submit(accumulator.request_id)
         except Exception as exc:
             with self._query_state_lock:
+                # Keep liveness: a failed submit is not tracked as outstanding.
+                self._release_query_slot_locked(accumulator.request_id, request_type)
                 accumulator.record_completion_origin("submit_exception")
                 accumulator.error_code = -4
                 accumulator.error_message = f"query_submit_exception:{type(exc).__name__}"
@@ -10475,6 +10590,10 @@ class TraderClient:
                 accumulator.event.set()
                 return accumulator.result()
         accumulator.submit_code = None if ret is None else int(ret)
+        if ret not in (None, 0):
+            # A rejected Req (-1/-2/-3) never became a vendor-side request.
+            with self._query_state_lock:
+                self._release_query_slot_locked(accumulator.request_id, request_type)
         if issue_deadline is not None and time.monotonic() >= issue_deadline:
             return self._mark_query_deadline_exceeded(accumulator)
         if ret not in (None, 0):
