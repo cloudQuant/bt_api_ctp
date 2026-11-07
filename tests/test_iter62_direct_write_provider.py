@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from bt_api_base.direct_write_protocol import (
     NativeOrderIdentity,
 )
 from bt_api_base.trading_session_protocol import TradingPhase
+from bt_api_ctp import direct_write_provider as dwp
 from bt_api_ctp.direct_write_provider import (
     CtpDirectWriteProvider,
     create_ctp_direct_write_provider,
@@ -276,6 +278,92 @@ def test_private_flow_insert_error_is_not_attributed_to_this_session():
     )
     assert "front_id" not in error.identity.fields
     assert "session_id" not in error.identity.fields
+
+
+# ------------------------------------------------------------- lost returns
+
+
+def _order_snapshot(ref):
+    return {
+        "InstrumentID": "rb2701",
+        "ExchangeID": "SHFE",
+        "OrderRef": ref,
+        "FrontID": 3,
+        "SessionID": 99,
+        "OrderSubmitStatus": "3",
+        "OrderStatus": "3",
+        "TradingDay": "20261106",
+    }
+
+
+class _Unprintable:
+    def __str__(self):
+        raise RuntimeError("unprintable native field")
+
+
+def _drop_records(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.name == dwp.__name__ and r.levelno == logging.WARNING and "dropped" in r.getMessage()
+    ]
+
+
+def test_queue_overflow_drops_the_oldest_return_and_counts_it(monkeypatch, caplog):
+    monkeypatch.setattr(dwp, "_MAX_EVENTS", 2)
+    provider, _trader = _provider_with_fake_trader()
+    assert provider.dropped_events == 0
+    with caplog.at_level(logging.WARNING, logger=dwp.__name__):
+        for ref in ("41", "42", "43", "44"):
+            provider._on_native_return("order", _order_snapshot(ref))
+    assert provider.dropped_events == 2
+    assert [e.identity.client_order_id for e in provider.drain_execution_events(10)] == [
+        "43",
+        "44",
+    ]
+    (record,) = _drop_records(caplog)  # rate-limited: one line for both drops
+    assert "queue_overflow" in record.getMessage()
+
+
+def test_projection_failure_is_counted_and_logged_without_the_payload(monkeypatch, caplog):
+    clock = [1000.0]
+    monkeypatch.setattr(dwp, "_monotonic", lambda: clock[0])
+    provider, _trader = _provider_with_fake_trader()
+    snapshot = dict(
+        _order_snapshot("45"),
+        OrderSysID=_Unprintable(),
+        BrokerID="broker-test",
+        InvestorID="investor-test",
+    )
+    with caplog.at_level(logging.WARNING, logger=dwp.__name__):
+        provider._on_native_return("order", snapshot)
+        clock[0] += 10.0
+        provider._on_native_return("order", snapshot)  # inside the interval: counted only
+    assert provider.dropped_events == 2
+    assert provider.drain_execution_events(10) == ()
+    (record,) = _drop_records(caplog)
+    text = record.getMessage()
+    assert "projection_failed" in text and "RuntimeError" in text
+    for secret in ("broker-test", "investor-test", "synthetic-only", "unprintable native"):
+        assert secret not in text
+    # The next failure after the interval is logged again with the running total.
+    clock[0] += dwp._DROPPED_LOG_INTERVAL
+    with caplog.at_level(logging.WARNING, logger=dwp.__name__):
+        provider._on_native_return("trade", snapshot)
+    assert provider.dropped_events == 3
+    records = _drop_records(caplog)
+    assert len(records) == 2 and "total=3" in records[-1].getMessage()
+    # A valid return still flows.
+    provider._on_native_return("order", _order_snapshot("46"))
+    (event,) = provider.drain_execution_events(10)
+    assert event.identity.client_order_id == "46" and provider.dropped_events == 3
+
+
+def test_a_return_without_an_instrument_is_not_a_drop():
+    provider, _trader = _provider_with_fake_trader()
+    provider._on_native_return("order", {"OrderRef": "47"})
+    provider._on_native_return("unknown_kind", _order_snapshot("48"))
+    assert provider.dropped_events == 0 and provider.drain_execution_events(10) == ()
 
 
 # ------------------------------------------------------------- sessions

@@ -69,6 +69,9 @@ __all__ = (
 
 CTP_DIRECT_WRITE_EXCHANGE = "CTP___FUTURE"
 _MAX_EVENTS = 50_000
+# Seconds between WARNING lines about lost returns (the counter is exact).
+_DROPPED_LOG_INTERVAL = 60.0
+_RETURN_KINDS = frozenset({"order", "trade", "order_insert_error", "order_action_error"})
 _ORDER_REF_DIGITS = 12
 
 _logger = logging.getLogger(__name__)
@@ -492,7 +495,10 @@ class CtpDirectWriteProvider:
         self.catalog_queries = 0
         self.last_catalog_error: Optional[str] = None
         self._sequence = 0
+        # Returns lost before any poll (queue overflow, projection failure);
+        # guarded by ``_events_lock`` like the time of the last WARNING line.
         self._dropped_events = 0
+        self._dropped_logged_at: Optional[float] = None
         self._listening_trader: Any = None
         self._reservations: dict[str, DirectOrderReservation] = {}
         self._cycle_id = f"ctp-direct-{uuid4().hex}"
@@ -1108,15 +1114,46 @@ class CtpDirectWriteProvider:
             sequence = self._sequence
         try:
             event = project_ctp_execution_event(kind, payload, sequence=sequence)
-        except Exception:
-            event = None
+        except Exception as exc:
+            # A return that cannot be projected is lost like an overflowed one.
+            self._note_dropped("projection_failed", kind, type(exc).__name__)
+            return
         if event is None:
             return
+        overflow = False
         with self._events_lock:
             if len(self._events) >= _MAX_EVENTS:
                 self._events.popleft()
                 self._dropped_events += 1
+                overflow = True
             self._events.append(event)
+        if overflow:
+            self._note_dropped("queue_overflow", kind, None, counted=True)
+
+    def _note_dropped(
+        self, cause: str, kind: str, error: Optional[str], *, counted: bool = False
+    ) -> None:
+        """Count one lost return (unless ``counted``) and log at most once per interval.
+
+        The line names only the cause, the return kind and the exception type:
+        never the native payload or its message (account fields).
+        """
+        now = _monotonic()
+        with self._events_lock:
+            if not counted:
+                self._dropped_events += 1
+            total = self._dropped_events
+            last = self._dropped_logged_at
+            if last is not None and now - last < _DROPPED_LOG_INTERVAL:
+                return
+            self._dropped_logged_at = now
+        _logger.warning(
+            "ctp direct returns dropped: cause=%s kind=%s error=%s total=%d",
+            cause,
+            kind if type(kind) is str and kind in _RETURN_KINDS else "other",
+            error or "-",
+            total,
+        )
 
     def drain_execution_events(self, max_events: int) -> tuple[DirectExecutionEvent, ...]:
         limit = max(1, int(max_events))
@@ -1235,8 +1272,11 @@ class CtpDirectWriteProvider:
         """Query positions, working orders, today's trades and funds once.
 
         Each section is complete only when the native query completed without
-        error for the current session.  Rows are projected verbatim; nothing is
-        attributed to a strategy here.
+        error for the current session.  The session (connection generation,
+        trading day, native client) is read again after the last query; if it
+        changed, every section is ``None`` with the blocker
+        ``session_changed_during_query``.  Rows are projected verbatim;
+        nothing is attributed to a strategy here.
         """
         blockers: list[str] = []
         trader = self._trader()
@@ -1314,6 +1354,17 @@ class CtpDirectWriteProvider:
                 )
             elif "account_query_incomplete" not in blockers:
                 blockers.append("account_query_empty")
+        try:
+            after = self._session_fields(trader)
+        except DirectWriteError:
+            after = None
+        if after != session or self._feed.trader_client is not trader:
+            # A reconnect, trading-day change or new native client while the
+            # queries ran: the sections may come from two sessions, so none of
+            # them is a fact of one session.
+            blockers.append("session_changed_during_query")
+            position_facts = order_facts = every_order = trade_facts = None
+            balance_fact = None
         return DirectAccountFacts(
             exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
             trading_day=session.get("trading_day"),
@@ -1587,7 +1638,9 @@ class CtpDirectWriteProvider:
 
     @property
     def dropped_events(self) -> int:
-        return self._dropped_events
+        """Cumulative returns lost before any poll (queue overflow, projection failure)."""
+        with self._events_lock:
+            return self._dropped_events
 
     def close(self) -> None:
         # Stop the background readback for good (a reused provider falls back

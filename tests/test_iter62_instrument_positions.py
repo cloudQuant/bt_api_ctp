@@ -479,3 +479,94 @@ def test_account_facts_keep_the_unfiltered_whole_account_contract():
         ("ag2512", "long", 5.0),
         ("rb2701", "short", 2.0),
     ]
+
+
+# ---------------------------------------------------------------------------
+# account facts: one session from the first query to the last
+# ---------------------------------------------------------------------------
+def _order_row(ref="000000000041", status="3"):
+    return {
+        "InstrumentID": "rb2701",
+        "ExchangeID": "SHFE",
+        "OrderRef": ref,
+        "FrontID": 3,
+        "SessionID": 99,
+        "OrderSysID": "  1234",
+        "OrderSubmitStatus": "3",
+        "OrderStatus": status,
+        "Direction": "0",
+        "CombOffsetFlag": "0",
+        "VolumeTotalOriginal": 1,
+        "VolumeTraded": 0,
+        "VolumeTotal": 1,
+        "LimitPrice": 3000.0,
+        "TradingDay": "20261106",
+    }
+
+
+def _account_row():
+    return {"CurrencyID": "CNY", "Balance": 1000.0, "Available": 900.0, "CurrMargin": 100.0}
+
+
+def _full_facts_provider(change_on_last_query):
+    """Every section answers a complete result of generation 4; the last query
+    (funds) runs ``change_on_last_query(trader, feed)`` before answering."""
+
+    provider, trader, _calls = _provider(lambda kw: _result([_row("ag2512", "2", 5, 5)]))
+    feed = provider._feed
+    feed.query_orders_result = lambda **kw: _result([_order_row()])
+    feed.query_trades_result = lambda **kw: _result([])
+
+    def query_account_result(**kwargs):
+        change_on_last_query(trader, feed)
+        return _result([_account_row()], generation=4)
+
+    feed.query_account_result = query_account_result
+    return provider
+
+
+def _read_all(provider):
+    return provider.account_facts(
+        positions=True, active_orders=True, trades=True, balance=True, all_orders=True
+    )
+
+
+def test_account_facts_of_one_unchanged_session_are_complete():
+    facts = _read_all(_full_facts_provider(lambda trader, feed: None))
+    assert facts.complete is True and facts.blockers == ()
+    assert facts.session_generation == 4 and facts.trading_day == "20261106"
+    assert len(facts.positions) == 1 and len(facts.active_orders) == 1
+    assert len(facts.orders) == 1 and facts.trades == ()
+    assert facts.balance is not None and facts.balance.available == 900.0
+
+
+def _reconnect(trader, feed):
+    trader.connection_generation = 5
+
+
+def _day_switch(trader, feed):
+    trader.trading_day = "20261109"
+
+
+def _trader_replaced(trader, feed):
+    feed._trader = FakeTrader()  # same session state, another native client
+
+
+def _session_lost(trader, feed):
+    trader.connection_generation = None
+
+
+@pytest.mark.parametrize(
+    "change", [_reconnect, _day_switch, _trader_replaced, _session_lost],
+    ids=["reconnect", "trading_day", "trader_replaced", "session_lost"],
+)
+def test_account_facts_read_across_a_session_change_are_incomplete(change):
+    """Results labelled with the starting generation, but the session changed
+    before the last query ended: the sections may mix two sessions."""
+
+    facts = _read_all(_full_facts_provider(change))
+    assert facts.complete is False
+    assert "session_changed_during_query" in facts.blockers
+    assert facts.positions is None and facts.active_orders is None
+    assert facts.orders is None and facts.trades is None and facts.balance is None
+    assert facts.session_generation == 4 and facts.trading_day == "20261106"
