@@ -161,6 +161,8 @@ class FakeTrader:
     def __init__(self):
         self.connection_generation = 4
         self.trading_day = "20261106"
+        self.front_id = 3
+        self.session_id = 99
         self.listeners = []
 
     def add_execution_listener(self, listener):
@@ -171,8 +173,8 @@ class FakeTrader:
 
     def get_session_state(self):
         return {
-            "front_id": 3,
-            "session_id": 99,
+            "front_id": self.front_id,
+            "session_id": self.session_id,
             "trading_day": self.trading_day,
             "connection_generation": self.connection_generation,
         }
@@ -556,9 +558,21 @@ def _session_lost(trader, feed):
     trader.connection_generation = None
 
 
+# A real TraderClient changes FrontID/SessionID only with a new login, hence a
+# new generation (tests/test_iter62_account_facts_real_client.py); each field
+# is still compared on its own.
+def _front_changed(trader, feed):
+    trader.front_id = 4
+
+
+def _session_id_changed(trader, feed):
+    trader.session_id = 100
+
+
 @pytest.mark.parametrize(
-    "change", [_reconnect, _day_switch, _trader_replaced, _session_lost],
-    ids=["reconnect", "trading_day", "trader_replaced", "session_lost"],
+    "change",
+    [_reconnect, _day_switch, _trader_replaced, _session_lost, _front_changed, _session_id_changed],
+    ids=["reconnect", "trading_day", "trader_replaced", "session_lost", "front_id", "session_id"],
 )
 def test_account_facts_read_across_a_session_change_are_incomplete(change):
     """Results labelled with the starting generation, but the session changed
