@@ -137,9 +137,13 @@ def _expected_ctp_extension_names() -> list[str]:
 
 def _available_ctp_extension_names() -> list[str]:
     package_dir = _ctp_package_dir()
-    return sorted(
-        p.name for p in package_dir.glob("_ctp*") if p.is_file() and p.name != "_ctp_base.py"
-    )
+    try:
+        return sorted(
+            p.name for p in package_dir.glob("_ctp*") if p.is_file() and p.name != "_ctp_base.py"
+        )
+    except OSError:
+        # Diagnostics only: an unlistable directory reports no extension.
+        return []
 
 
 def _format_ctp_import_warning(import_error: Exception) -> str:
@@ -243,16 +247,16 @@ def get_ctp_native_diagnostics() -> dict[str, object]:
     available = _available_ctp_extension_names()
     matching = [name for name in available if name in expected]
     matching_paths = [package_dir / name for name in matching]
-    matching_sha256 = {
-        str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in matching_paths
-    }
+    # An unreadable file hashes to "" instead of raising (iteration 62,
+    # defect 25): diagnostics never fail on a file-system error.
+    matching_sha256 = {str(path): _sha256_file(path) for path in matching_paths}
     native_loaded = is_ctp_native_loaded()
     import_error = get_ctp_import_error()
     loaded_origin = str(getattr(_ctp, "__file__", "") or "")
     loaded_path = Path(loaded_origin).resolve() if loaded_origin else None
     loaded_sha256 = (
-        hashlib.sha256(loaded_path.read_bytes()).hexdigest()
-        if native_loaded and loaded_path is not None and loaded_path.is_file()
+        _sha256_file(loaded_path)
+        if native_loaded and loaded_path is not None
         else ""
     )
 

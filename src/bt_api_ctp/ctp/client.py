@@ -1592,27 +1592,65 @@ def _ctp_python_package_identity(
 ) -> tuple[list[dict[str, str]], str]:
     """Hash every controlled Python source under the installed CTP package."""
 
+    manifest, package_sha256, _read_status = _ctp_python_package_identity_report(package_root)
+    return manifest, package_sha256
+
+
+def _ctp_python_package_identity_report(
+    package_root: Path | None = None,
+) -> tuple[list[dict[str, str]], str, dict[str, Any]]:
+    """Package manifest, its digest and how completely the files were read.
+
+    Never raises on a file-system error (iteration 62, defect 25: an unreadable
+    package directory must not break a diagnostics caller).  A file whose
+    content cannot be read keeps its path with ``sha256 == ""``; a directory
+    or entry that cannot be listed makes the listing incomplete.  The status
+    holds ``unreadable_files``, ``listing_complete`` and ``read_error`` (the
+    first error's class name, or ``""``); never a path or an error text.
+    """
+
     if package_root is None:
         import bt_api_ctp
 
         package_root = Path(bt_api_ctp.__file__).resolve().parent
     else:
         package_root = Path(package_root).resolve()
-    paths = sorted(
-        (
-            path
-            for path in package_root.rglob("*.py")
-            if path.is_file() and "__pycache__" not in path.relative_to(package_root).parts
-        ),
-        key=lambda path: path.relative_to(package_root).as_posix(),
-    )
-    manifest = [
-        {
-            "path": path.relative_to(package_root).as_posix(),
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        }
-        for path in paths
-    ]
+    errors: list[str] = []
+    listing_complete = True
+
+    def listing_failed(exc: OSError) -> None:
+        nonlocal listing_complete
+        listing_complete = False
+        errors.append(type(exc).__name__)
+
+    paths: list[Path] = []
+    for directory, dirnames, filenames in os.walk(package_root, onerror=listing_failed):
+        dirnames[:] = [name for name in dirnames if name != "__pycache__"]
+        for name in filenames:
+            if not name.endswith(".py"):
+                continue
+            path = Path(directory) / name
+            try:
+                if path.is_file():
+                    paths.append(path)
+            except OSError as exc:
+                listing_failed(exc)
+    paths.sort(key=lambda path: path.relative_to(package_root).as_posix())
+    manifest: list[dict[str, str]] = []
+    unreadable_files = 0
+    for path in paths:
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            digest = ""
+            unreadable_files += 1
+            errors.append(type(exc).__name__)
+        manifest.append({"path": path.relative_to(package_root).as_posix(), "sha256": digest})
+    read_status = {
+        "unreadable_files": unreadable_files,
+        "listing_complete": listing_complete,
+        "read_error": errors[0] if errors else "",
+    }
     serialized = json.dumps(
         manifest,
         ensure_ascii=False,
@@ -1620,7 +1658,7 @@ def _ctp_python_package_identity(
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
-    return manifest, hashlib.sha256(serialized).hexdigest()
+    return manifest, hashlib.sha256(serialized).hexdigest(), read_status
 
 
 def _runtime_module_prefix() -> str:
@@ -1646,7 +1684,7 @@ def get_ctp_native_diagnostics() -> dict[str, Any]:
     else:
         diagnostics = {}
 
-    package_manifest, package_sha256 = _ctp_python_package_identity()
+    package_manifest, package_sha256, package_read = _ctp_python_package_identity_report()
     runtime_modules = _selected_runtime_modules()
     native_modules = {
         module_name: module_path
@@ -1685,6 +1723,11 @@ def get_ctp_native_diagnostics() -> dict[str, Any]:
         "binding_classes": binding_classes,
         "ctp_package_manifest": package_manifest,
         "ctp_package_sha256": package_sha256,
+        # An unreadable file has sha256 "" in the manifest; the package
+        # identity is then unproven (counts and an error class only).
+        "ctp_package_unreadable_files": package_read["unreadable_files"],
+        "ctp_package_listing_complete": package_read["listing_complete"],
+        "ctp_package_read_error": package_read["read_error"],
         "loaded_module_path": selected_path,
         "loaded_module_sha256": native_hashes.get(selected_path, ""),
     }
@@ -1708,10 +1751,16 @@ def _format_selected_native_diagnostics(diagnostics: dict[str, Any]) -> str:
 
 
 def _check_native_module():
-    """Raise ImportError early if the selected CTP native runtime is unavailable."""
-    diagnostics = get_ctp_native_diagnostics()
-    if diagnostics["native_loaded"]:
+    """Raise ImportError early if the selected CTP native runtime is unavailable.
+
+    Decided by the in-memory loaded-module check alone, so a start reads no
+    package file (iteration 62, defect 25: an MD replacement start failed
+    before Init while the package directory could not be read).  The full
+    diagnostics are built only to explain the failure.
+    """
+    if _is_vendored_ctp_native_loaded():
         return
+    diagnostics = get_ctp_native_diagnostics()
     raise ImportError(
         f"{_format_selected_native_diagnostics(diagnostics)}. "
         "Install a native extension matching this OS, Python ABI, and selected CTP runtime."
