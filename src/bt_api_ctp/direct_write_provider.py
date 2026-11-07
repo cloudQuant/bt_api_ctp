@@ -479,6 +479,15 @@ def project_ctp_execution_event(
 class CtpDirectWriteProvider:
     """Direct write port for one CTP route (one ``CtpRequestDataFuture``)."""
 
+    # Venue fact for the SDK direct write coordinator: CTP execution ids
+    # (OrderRef, FrontID/SessionID, OrderSysID, TradeID) are unique only within
+    # one trading day and are reused on later days, so the SDK de-duplicates
+    # returns per trading day.  A projected return names its day through the
+    # native ``TradingDay``, else the receiving session's login day (see
+    # ``project_ctp_execution_event``); one naming no day is never
+    # de-duplicated by the SDK.
+    execution_ids_trading_day_scoped = True
+
     def __init__(self, feed: Any, *, catalog_cache: Any = None) -> None:
         from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 

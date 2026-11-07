@@ -280,6 +280,65 @@ def test_private_flow_insert_error_is_not_attributed_to_this_session():
     assert "session_id" not in error.identity.fields
 
 
+# ------------------------------------------------- trading-day scoped ids
+
+
+def test_provider_declares_trading_day_scoped_execution_ids():
+    """CTP reuses OrderSysID/TradeID every trading day: the SDK coordinator
+    de-duplicates this provider's returns per trading day (review §4 item 5)."""
+    assert CtpDirectWriteProvider.execution_ids_trading_day_scoped is True
+    provider, _trader = _provider_with_fake_trader()
+    assert provider.execution_ids_trading_day_scoped is True
+
+
+@pytest.mark.parametrize(
+    "kind,snapshot",
+    [
+        (
+            "order",
+            {
+                "InstrumentID": "rb2701",
+                "ExchangeID": "SHFE",
+                "OrderRef": "41",
+                "FrontID": 3,
+                "SessionID": 99,
+                "OrderSubmitStatus": "3",
+                "OrderStatus": "3",
+                "TradingDay": "20261106",
+            },
+        ),
+        (
+            "trade",
+            {
+                "InstrumentID": "rb2701",
+                "ExchangeID": "SHFE",
+                "OrderRef": "41",
+                "OrderSysID": "1001",
+                "TradeID": "77",
+                "Direction": "0",
+                "TradingDay": "20261106",
+            },
+        ),
+        ("order_insert_error", _insert_error_snapshot("OnErrRtnOrderInsert")),
+    ],
+)
+def test_projected_returns_name_their_trading_day_with_the_login_day_as_fallback(
+    kind, snapshot
+):
+    """The day the SDK scopes de-duplication by: native ``TradingDay`` first,
+    else the receiving session's login day, in the identity and the event."""
+    native = dict(snapshot, TradingDay="20261109", _trading_day="20261106")
+    event = project_ctp_execution_event(kind, native, sequence=1)
+    assert event.trading_day == event.identity.fields["trading_day"] == "20261109"
+    fallback = {k: v for k, v in snapshot.items() if k != "TradingDay"}
+    fallback["_trading_day"] = "20261109"
+    event = project_ctp_execution_event(kind, fallback, sequence=2)
+    assert event.trading_day == event.identity.fields["trading_day"] == "20261109"
+    fallback["_trading_day"] = None
+    event = project_ctp_execution_event(kind, fallback, sequence=3)
+    assert event.trading_day is None and "trading_day" not in event.identity.fields
+
+
 # ------------------------------------------------------------- lost returns
 
 
