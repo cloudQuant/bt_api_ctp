@@ -505,6 +505,9 @@ class _MdFront:
         self.accepting = True  # a connection attempt reaches the front
         self.login_script: list[object] = []  # answers before "accept"
         self.market_open = True  # a subscription is followed by a tick
+        # When set, Release waits for it: a native connect attempt to an
+        # unreachable front holds the release of its API (defect 25).
+        self.release_gate: threading.Event | None = None
         self.apis: list[_FakeMdApi] = []
         self.lock = threading.Lock()
 
@@ -536,6 +539,9 @@ class _FakeMdApi:
             self._post(self._connected)
 
     def Release(self):
+        gate = self.front.release_gate
+        if gate is not None:
+            gate.wait(10.0)
         self.released = True
         self._events.put(None)
         thread = self._thread
@@ -669,6 +675,8 @@ def md_front(monkeypatch):
 
     monkeypatch.setattr(market_provider_module, "CtpQuoteV2MarketProvider", _ShortDeadlineProvider)
     yield front
+    if front.release_gate is not None:
+        front.release_gate.set()
     for api in front.apis:
         if not api.released:
             api.Release()
@@ -1036,4 +1044,197 @@ def test_twenty_reconnect_cycles_leave_no_thread_session_or_client_behind(md_fro
     assert len(client_module._RETIRED_CTP_NATIVE_SESSIONS) <= retained_before
     assert sum(ref() is not None for ref in lost_clients) == 0
     assert session.close() is True
+    _wait(lambda: threading.active_count() <= threads_before)
+
+
+# --------------------------------------------------------------------------
+# defect 25 (SimNow 7x24, 2026-11-07): the MD source recovery is persistent
+# --------------------------------------------------------------------------
+#
+# 12:50 the 7x24 fronts closed both links and refused every connection until
+# 15:54.  The trader recovered by itself; the MD provider made one recovery
+# attempt, whose replacement start failed before the native Init (no
+# connection attempt followed), and its recovery stayed failed for good.  The
+# vendor fires no callback for a refused reconnect (the trader's refused
+# attempts logged nothing), so the fake keeps a refused front silent.
+
+
+def _provider_messages(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "bt_api_ctp.market_provider"
+    ]
+
+
+def _channel_handle(session, binding):
+    return session._channels[binding.token].handle
+
+
+def _resync_and_tick(session, binding, api):
+    """The consumer's acknowledged resync, then the next tick of ``api``."""
+    _poll_until_restart(session)
+    assert session.channel_recovery_code(binding) == SOURCE_RESTART_RECOVERY_CODE
+    rebound = session.resync(binding, acknowledge_data_loss=True)
+    api.tick("rb2701")
+    events = _poll(session)
+    assert events and events[0].cursor.sequence == 1
+    assert events[0].source == rebound.source
+    assert rebound.source.connection_generation > binding.source.connection_generation
+    return rebound
+
+
+def test_an_outage_longer_than_the_attempt_deadline_recovers_when_the_front_returns(
+    md_front, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.05, 0.1)
+    )
+    caplog.set_level(logging.WARNING, logger="bt_api_ctp.market_provider")
+    session, bindings = _direct_session()
+    binding = bindings["rb2701"]
+    assert _poll(session)
+    provider = _provider(session)
+    handle = _channel_handle(session, binding)
+    old_api = md_front.apis[0]
+
+    # The server closes the link and refuses every reconnect; the lost API's
+    # own connect attempt holds its release for longer than the attempt
+    # deadline (2 s here), so its stop cannot be confirmed in time.
+    md_front.accepting = False
+    md_front.release_gate = threading.Event()
+    old_api.drop()
+    until = time.monotonic() + 3.0
+    while time.monotonic() < until:
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
+        assert provider.source_recovery_state(handle) == "recovering"
+        assert session.channel_recovery_code(binding) is None
+    assert provider._source_recovery.attempt >= 2
+    # Nothing was started while the lost client's stop was unconfirmed.
+    assert len(md_front.apis) == 1 and old_api.released is False
+
+    # The attempt ends with the front still refusing: the stop is confirmed
+    # and a replacement starts and waits for the front.
+    md_front.release_gate.set()
+    _pump_until(
+        session,
+        lambda: len(md_front.apis) == 2 and provider._source_recovery.state == "connecting",
+    )
+    assert old_api.released is True
+    replacement = md_front.apis[1]
+    for _ in range(3):
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
+        assert provider.source_recovery_state(handle) == "recovering"
+
+    # The front returns: the replacement's own reconnect logs in.
+    md_front.accepting = True
+    replacement.reconnect()
+    _resync_and_tick(session, binding, replacement)
+    messages = _provider_messages(caplog)
+    assert any(
+        "attempt 1 failed in state stopping (reason=stop_unconfirmed)" in message
+        for message in messages
+    )
+    assert not any("stays closed" in message for message in messages)
+    assert session.close() is True
+
+
+def test_a_replacement_start_failing_before_native_init_is_retried_until_it_recovers(
+    md_front, monkeypatch, caplog
+):
+    """The observed 7x24 sequence: the replacement start raised before Init."""
+
+    monkeypatch.setattr(
+        market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.05, 0.1, 0.2)
+    )
+    caplog.set_level(logging.WARNING, logger="bt_api_ctp.market_provider")
+    session, bindings = _direct_session()
+    binding = bindings["rb2701"]
+    assert _poll(session)
+    provider = _provider(session)
+    handle = _channel_handle(session, binding)
+    starts: list[float] = []
+
+    def start_check() -> None:
+        # MdClient.start's first step, before CreateFtdcMdApi and Init.
+        starts.append(time.monotonic())
+        if len(starts) <= 3:
+            raise PermissionError(1, "Operation not permitted", "/private/path")
+
+    monkeypatch.setattr(client_module, "_check_native_module", start_check)
+    md_front.accepting = False
+    md_front.apis[0].drop()
+    _pump_until(
+        session,
+        lambda: len(starts) >= 4 and provider._source_recovery.state == "connecting",
+        timeout=5.0,
+    )
+    # Three starts failed before any native API existed (no connection
+    # attempt), each after its backoff; the fourth started and waits.
+    assert len(md_front.apis) == 2
+    gaps = [later - earlier for earlier, later in zip(starts, starts[1:])]
+    assert gaps[0] >= 0.045 and gaps[1] >= 0.09 and gaps[2] >= 0.18
+    assert provider.source_recovery_state(handle) == "recovering"
+    replacement = md_front.apis[1]
+
+    md_front.accepting = True
+    replacement.reconnect()
+    _resync_and_tick(session, binding, replacement)
+    messages = _provider_messages(caplog)
+    retry_lines = [message for message in messages if "recovery attempt" in message]
+    # The first failure is logged with its exception class only; the next two
+    # fall inside the throttle interval.
+    assert retry_lines == [
+        "CTP market source recovery attempt 1 failed in state reconnecting "
+        "(reason=replacement_start_raised:PermissionError); retrying in 0.05 s "
+        "(0 failed attempts not logged since the last line)"
+    ]
+    assert any("restarted" in message and "attempt=4" in message for message in messages)
+    assert not any("stays closed" in message for message in messages)
+    assert not any(
+        "not permitted" in record.getMessage() or "/private/path" in record.getMessage()
+        for record in caplog.records
+    )
+    assert session.close() is True
+
+
+def test_close_during_a_retry_wait_stops_everything_and_starts_nothing_afterwards(
+    md_front, monkeypatch
+):
+    # The default backoff: the first retry waits 1 s.
+    session, bindings = _direct_session()
+    binding = bindings["rb2701"]
+    assert _poll(session)
+    threads_before = threading.active_count()  # incl. this session's own threads
+    provider = _provider(session)
+    stream = provider._stream
+    starts: list[float] = []
+
+    def start_check() -> None:
+        starts.append(time.monotonic())
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(client_module, "_check_native_module", start_check)
+    md_front.accepting = False
+    md_front.apis[0].drop()
+    _pump_until(
+        session,
+        lambda: provider._source_recovery is not None
+        and provider._source_recovery.state == "retry_wait",
+    )
+    assert provider.source_recovery_state(_channel_handle(session, binding)) == "recovering"
+    for _ in range(5):  # within the backoff nothing starts
+        with pytest.raises(MarketStreamProviderContractError):
+            session.poll(timeout_ms=10, max_events=8)
+    assert len(starts) == 1
+
+    assert session.close() is True
+    assert provider._source_recovery is None and provider._stream is None
+    assert stream._md_client is None and stream._running is False
+    assert stream.state is live_ctp_feed.ConnectionState.DISCONNECTED
+    time.sleep(1.3)  # past the backoff: no attempt after the close
+    assert len(starts) == 1
+    assert len(md_front.apis) == 1 and md_front.apis[0].released is True
     _wait(lambda: threading.active_count() <= threads_before)

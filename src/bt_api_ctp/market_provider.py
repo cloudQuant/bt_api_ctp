@@ -45,11 +45,47 @@ MAX_CTP_STOP_TIMEOUT_SECONDS = 30.0
 
 _logger = logging.getLogger(__name__)
 
-# Recovery states after the replacement client was started.  The recovery
-# deadline bounds only the native stop and start; from here the provider waits
-# for the client's own reconnect and re-login (a front can stay closed for
-# hours between sessions), and a confirmed stop of the replacement is possible.
-_RECOVERY_STARTED_STATES = frozenset({"connecting", "reset_pending"})
+# Recovery states in which the client being replaced has a confirmed stop and
+# no recovery worker runs, so a channel can be released and the provider
+# closed.  The attempt deadline bounds only the native stop and start; once a
+# replacement was started ("connecting") the provider waits for the client's
+# own reconnect and re-login (a front can stay closed for hours between
+# sessions).  "retry_wait": a failed attempt's client is stopped and retained
+# until the next attempt starts its replacement.
+_RECOVERY_SETTLED_STATES = frozenset({"connecting", "reset_pending", "retry_wait"})
+
+# Iteration 62, defect 25 (SimNow 7x24, 2026-11-07): one failed attempt made
+# the loss of the MD source permanent.  A failed attempt that is not a
+# contract violation now stops what it started and is retried after these
+# delays (seconds; the last one repeats, with no attempt limit) while the
+# provider stays open; consumers keep seeing "recovering" meanwhile.
+_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 30.0)
+# Failed attempts are logged when they start a series, then at most once per
+# interval with the count of those not logged in between.
+_SOURCE_RECOVERY_LOG_INTERVAL_SECONDS = 60.0
+
+
+def _source_recovery_retry_delay(failed_attempts: int) -> float:
+    """Backoff before the attempt that follows ``failed_attempts`` failures."""
+
+    delays = _SOURCE_RECOVERY_RETRY_DELAYS_SECONDS
+    return float(delays[min(max(int(failed_attempts), 1), len(delays)) - 1])
+
+
+class _SourceRecoveryContractError(RuntimeError):
+    """A recovery failure that no retry can fix (finite reason, no payload)."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+class _SourceRecoveryRetryableError(RuntimeError):
+    """A recovery failure the next attempt can fix (finite reason, no payload)."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 class CtpQuoteV2MarketProviderError(RuntimeError):
@@ -216,9 +252,17 @@ class _PendingStreamCleanup:
 
 @dataclass
 class _SourceRecovery:
+    """One attempt to replace a lost MD source (a retry is a new attempt).
+
+    ``old_client`` is the client this attempt stops and replaces: the lost one
+    for attempt 1, afterwards the failed replacement (or, when none was bound,
+    the previous attempt's origin).  A retry learns ``old_client_generation``
+    from that client's complete stop receipt; attempt 1 knows it beforehand.
+    """
+
     stream: CtpMarketStream
     old_client: object
-    old_client_generation: int
+    old_client_generation: int | None
     old_scope: CtpQuoteClockSourceScope
     old_stream_generation: int
     symbols: frozenset[str]
@@ -237,6 +281,16 @@ class _SourceRecovery:
     reconnect_error: BaseException | None = None
     reconnected_client: object | None = None
     reconnect_cancelled: threading.Event = dataclass_field(default_factory=threading.Event)
+    # Finite reason of a reconnect that returned False or raised.
+    reconnect_failure: str | None = None
+    # The start returned after its deadline or cancellation and was fenced.
+    reconnect_fenced: bool = False
+    attempt: int = 1
+    retry: bool = False
+    # A retry starts its replacement no earlier than this (monotonic).
+    retry_at: float = 0.0
+    failure: str | None = None
+    failed_state: str | None = None
 
 
 class CtpQuoteV2MarketProvider:
@@ -300,6 +354,9 @@ class CtpQuoteV2MarketProvider:
         self._pending_start_cleanup: list[_PendingStreamCleanup] = []
         self._invalid_events = 0
         self._source_recovery: _SourceRecovery | None = None
+        # Throttle of the failed-attempt log lines of one recovery.
+        self._recovery_retry_logged_at: float | None = None
+        self._recovery_retry_suppressed = 0
 
     @property
     def diagnostics(self) -> dict[str, int]:
@@ -468,14 +525,22 @@ class CtpQuoteV2MarketProvider:
         """The lost client's stop is confirmed and no recovery worker runs.
 
         True only after the replacement was started (``connecting``,
-        ``reset_pending``) or the recovery failed, for this exact stream.
+        ``reset_pending``), while a retry waits (``retry_wait``) or once the
+        recovery failed, for this exact stream.
         """
 
         worker = recovery.stop_worker
         reconnect_worker = recovery.reconnect_worker
+        for done, thread in (
+            (recovery.stop_done, worker),
+            (recovery.reconnect_done, reconnect_worker),
+        ):
+            # A worker that reported done is only leaving its thread.
+            if thread is not None and done.is_set() and thread.is_alive():
+                thread.join(timeout=0.5)
         receipt = recovery.stop_receipt
         return not (
-            (recovery.state != "failed" and recovery.state not in _RECOVERY_STARTED_STATES)
+            (recovery.state != "failed" and recovery.state not in _RECOVERY_SETTLED_STATES)
             or not recovery.stop_done.is_set()
             or (worker is not None and worker.is_alive())
             or (
@@ -648,6 +713,10 @@ class CtpQuoteV2MarketProvider:
         so a consumer must not keep reporting the channel as live meanwhile.
         ``None`` when no recovery is in progress, and once the replacement awaits
         its new consumer epoch (see :meth:`source_epoch_reset_required`).
+        A failed attempt that is not a contract violation is retried with a
+        bounded backoff while the provider is open (iteration 62, defect 25),
+        so this stays ``"recovering"`` through every retry; ``"failed"`` is
+        reserved for a contract violation and is final until the close.
         Owner-thread only; never raises for a foreign or inactive handle.
         """
 
@@ -709,7 +778,7 @@ class CtpQuoteV2MarketProvider:
             or (handle.last_hub_epoch is not None and epoch == handle.last_hub_epoch)
         ):
             if recovery is not None and recovery.state == "reset_pending":
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="epoch_acknowledgement_invalid")
             return False
         handle.source_epoch_reset_pending = False
         handle.source_epoch_reset_epoch = epoch
@@ -941,6 +1010,8 @@ class CtpQuoteV2MarketProvider:
             deadline=time.monotonic() + self._connect_timeout_seconds,
             state="stopping",
         )
+        self._recovery_retry_logged_at = None
+        self._recovery_retry_suppressed = 0
         _logger.warning(
             "CTP market source lost (stream_generation=%s, symbols=%d); "
             "stopping the MD session and starting a new one",
@@ -949,128 +1020,204 @@ class CtpQuoteV2MarketProvider:
         )
 
     def _drive_source_recovery(self) -> None:
+        """Advance the source recovery by one owner-thread step.
+
+        Attempt states: ``stopping`` (confirm the replaced client's stop) ->
+        [``retry_wait`` (a retry's backoff)] -> ``reconnecting`` (start the
+        replacement off-thread) -> ``connecting`` (await its login, ACK set
+        and fresh tick) -> ``reset_pending`` (await the consumer epochs).
+        ``abandoning``: a failed attempt waits for its worker to return.
+        A failure that is not a contract violation starts the next attempt
+        (:meth:`_retry_source_recovery`); a contract violation is final
+        (:meth:`_fail_source_recovery`).
+        """
+
         recovery = self._source_recovery
         if recovery is None or recovery.state == "failed":
             return
-        reconnect_worker = recovery.reconnect_worker
+        if recovery.state == "abandoning":
+            if not self._source_recovery_worker_inflight(recovery):
+                self._start_next_source_recovery_attempt(recovery)
+            return
         reconnect_inflight = (
-            recovery.state == "reconnecting"
-            and reconnect_worker is not None
-            and reconnect_worker.is_alive()
+            recovery.reconnect_worker is not None and not recovery.reconnect_done.is_set()
         )
         if (
-            recovery.state not in _RECOVERY_STARTED_STATES
+            recovery.state in ("stopping", "reconnecting")
+            and self._source_recovery_worker_inflight(recovery)
             and time.monotonic() >= recovery.deadline
         ):
-            if reconnect_inflight:
-                # CtpMarketStream.connect holds its callback lock across the
-                # synchronous vendor Create/Register/Init calls. Do not take
-                # that lock from the Gateway poll thread while startup is in
-                # flight; revoking the provider recovery state is sufficient
-                # to keep this stream from publishing, and the worker will
-                # mark the stream itself fail-closed if it eventually returns.
-                self._fail_source_recovery_without_stream_lock(recovery)
-                return
-            self._fail_source_recovery()
+            # A native stop or start still in vendor code past the attempt
+            # deadline.  CtpMarketStream.connect holds its callback lock across
+            # the synchronous vendor Create/Register/Init calls: do not take
+            # that lock from the Gateway poll thread while startup is in
+            # flight.  Revoking the provider state keeps this stream from
+            # publishing, the worker fences a late client when it returns, and
+            # the next attempt starts only after that.
+            self._retry_source_recovery(
+                recovery,
+                "stop_unconfirmed" if recovery.state == "stopping" else "replacement_start_late",
+            )
             return
         stream = recovery.stream
         current_symbols = frozenset(
             handle.key.instrument.native_symbol for handle in self._active_handles.values()
         )
         subscribed = getattr(stream, "_quote_v2_subscription_metadata", None)
-        if (
-            stream is not self._stream
-            or current_symbols != recovery.symbols
-            or type(subscribed) is not dict
-            or set(subscribed) != set(recovery.symbols)
-            or (
-                not reconnect_inflight
-                and stream.quote_v2_service_binding_matches() is not True
-            )
-            or any(
-                handle.source_scope is not recovery.old_scope
-                and handle.source_scope is not recovery.new_scope
-                for handle in self._active_handles.values()
-            )
+        violation = None
+        if stream is not self._stream:
+            violation = "stream_replaced"
+        elif current_symbols != recovery.symbols:
+            violation = "symbol_set_changed"
+        elif type(subscribed) is not dict or set(subscribed) != set(recovery.symbols):
+            violation = "subscription_changed"
+        elif not reconnect_inflight and stream.quote_v2_service_binding_matches() is not True:
+            violation = "source_binding_changed"
+        elif any(
+            handle.source_scope is not recovery.old_scope
+            and handle.source_scope is not recovery.new_scope
+            for handle in self._active_handles.values()
         ):
-            self._fail_source_recovery()
+            violation = "handle_scope_foreign"
+        if violation is not None:
+            self._fail_source_recovery(reason=violation)
             return
 
         if recovery.state == "stopping":
             if recovery.stop_worker is None:
                 if not self._start_source_recovery_stop_worker(recovery):
-                    self._fail_source_recovery()
+                    self._retry_source_recovery(recovery, "stop_worker_unavailable")
                 return
             if not recovery.stop_done.is_set():
                 return
             receipt = recovery.stop_receipt
+            stop_error = recovery.stop_error
+            if isinstance(stop_error, _SourceRecoveryContractError):
+                self._fail_source_recovery(reason=stop_error.reason)
+                return
+            if isinstance(stop_error, _SourceRecoveryRetryableError):
+                self._retry_source_recovery(recovery, stop_error.reason)
+                return
+            if stop_error is not None:
+                self._retry_source_recovery(recovery, f"stop_raised:{type(stop_error).__name__}")
+                return
+            if recovery.stop_timed_out:
+                self._retry_source_recovery(recovery, "stop_unconfirmed")
+                return
             if (
-                recovery.stop_error is not None
-                or recovery.stop_timed_out
-                or type(receipt) is not CtpNativeStopReceipt
+                type(receipt) is not CtpNativeStopReceipt
                 or receipt.complete is not True
                 or type(receipt.connection_generation) is not int
                 or type(recovery.old_client_generation) is not int
                 or receipt.connection_generation != recovery.old_client_generation
             ):
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="stop_receipt_invalid")
                 return
-            if (
-                getattr(stream, "_md_client", None) is not None
-                or stream.state is not ConnectionState.DISCONNECTED
-            ):
-                self._fail_source_recovery()
+            if recovery.retry:
+                # Detach a stopped failed replacement (or keep the retained
+                # origin) and wait for the backoff before the next start.
+                if stream.retain_quote_v2_stopped_client_for_retry(
+                    recovery.old_client, receipt
+                ) is not True:
+                    self._fail_source_recovery(reason="retry_retain_refused")
+                    return
+                recovery.state = "retry_wait"
+            else:
+                if (
+                    getattr(stream, "_md_client", None) is not None
+                    or stream.state is not ConnectionState.DISCONNECTED
+                ):
+                    self._fail_source_recovery(reason="stream_rebound")
+                    return
+                self._start_source_recovery_reconnect(recovery, receipt)
                 return
-            recovery.state = "reconnecting"
-            if not self._start_source_recovery_reconnect_worker(recovery, receipt):
-                self._fail_source_recovery()
+
+        if recovery.state == "retry_wait":
+            if time.monotonic() < recovery.retry_at:
+                return
+            receipt = recovery.stop_receipt
+            if stream.rearm_quote_v2_reconnect_after_confirmed_stop(
+                recovery.old_client, receipt
+            ) is not True:
+                self._fail_source_recovery(reason="retry_rearm_refused")
+                return
+            self._start_source_recovery_reconnect(recovery, receipt)
             return
 
         if recovery.state == "reconnecting":
             worker = recovery.reconnect_worker
             if worker is None:
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="reconnect_worker_missing")
                 return
             # Never inspect a stream property guarded by _md_callback_lock
             # while native startup is executing under that lock.
-            if worker.is_alive():
-                return
             if not recovery.reconnect_done.is_set():
-                self._fail_source_recovery()
+                if worker.is_alive():
+                    return
+                # A finished thread has set the event before exiting.
+                if not recovery.reconnect_done.is_set():
+                    self._fail_source_recovery(reason="reconnect_worker_lost")
+                    return
+            if recovery.reconnect_fenced:
+                self._retry_source_recovery(recovery, "replacement_start_late")
+                return
+            if recovery.reconnect_error is not None or recovery.reconnect_succeeded is not True:
+                failure = recovery.reconnect_failure
+                if failure == "precondition":
+                    # The stream refused a start the provider had just proven
+                    # safe: its state changed under the recovery.
+                    self._fail_source_recovery(reason="reconnect_refused")
+                    return
+                self._retry_source_recovery(
+                    recovery, f"replacement_{failure or 'start_unconfirmed'}"
+                )
                 return
             new_client = recovery.reconnected_client
             if (
-                recovery.reconnect_error is not None
-                or recovery.reconnect_succeeded is not True
-                or new_client is None
+                new_client is None
                 or new_client is recovery.old_client
                 or getattr(stream, "_md_client", None) is not new_client
                 or type(getattr(stream, "_connection_generation", None)) is not int
                 or stream._connection_generation <= recovery.old_stream_generation
-                or stream.state
-                not in (ConnectionState.CONNECTING, ConnectionState.AUTHENTICATED)
-                or stream.quote_v2_service_fail_closed is True
                 or stream.quote_v2_service_binding_matches() is not True
                 or frozenset(getattr(stream, "_quote_v2_subscription_metadata", {}))
                 != recovery.symbols
             ):
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="replacement_inconsistent")
+                return
+            fail_closed, state = self._replacement_status(stream)
+            if fail_closed:
+                # Refused by the venue or a protocol check (a final login
+                # refusal, another account, a subscription anomaly).
+                self._fail_source_recovery(reason="replacement_refused")
+                return
+            if state not in (ConnectionState.CONNECTING, ConnectionState.AUTHENTICATED):
+                if state is ConnectionState.ERROR:
+                    self._retry_source_recovery(recovery, "replacement_lost")
+                else:
+                    self._fail_source_recovery(reason="replacement_inconsistent")
                 return
             self._native_client = new_client
             recovery.state = "connecting"
             return
 
         if recovery.state == "connecting":
-            if stream.quote_v2_service_fail_closed is True:
-                self._fail_source_recovery()
+            if self._replacement_status(stream)[0]:
+                self._fail_source_recovery(reason="replacement_refused")
                 return
             new_scope = self._current_source_scope(stream)
             if new_scope is None:
-                if stream.state is ConnectionState.ERROR:
-                    self._fail_source_recovery()
+                # Both read under one lock: a final refusal sets them together.
+                fail_closed, state = self._replacement_status(stream)
+                if fail_closed:
+                    self._fail_source_recovery(reason="replacement_refused")
+                elif state is ConnectionState.ERROR:
+                    # Lost before its scope was confirmed (no final refusal):
+                    # stop it and start another one.
+                    self._retry_source_recovery(recovery, "replacement_lost")
                 return
             if not self._valid_reconnected_scope(recovery, new_scope):
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="replacement_scope_invalid")
                 return
             recovery.new_scope = new_scope
             recovery.state = "reset_pending"
@@ -1080,9 +1227,10 @@ class CtpQuoteV2MarketProvider:
                 handle.source_epoch_reset_epoch = None
             _logger.warning(
                 "CTP market source restarted on a new MD session "
-                "(stream_generation=%s, symbols=%d); awaiting a new consumer epoch",
+                "(stream_generation=%s, symbols=%d, attempt=%d); awaiting a new consumer epoch",
                 new_scope.connection_generation,
                 len(recovery.symbols),
+                recovery.attempt,
             )
             return
 
@@ -1091,7 +1239,7 @@ class CtpQuoteV2MarketProvider:
                 handle.source_scope is not recovery.new_scope
                 for handle in self._active_handles.values()
             ):
-                self._fail_source_recovery()
+                self._fail_source_recovery(reason="replacement_scope_changed")
                 return
             if (
                 stream.quote_v2_service_recovery_required is True
@@ -1115,29 +1263,46 @@ class CtpQuoteV2MarketProvider:
         only inspect that same MdClient's retained native session. A worker that
         blocks in vendor code remains strongly referenced by ``recovery`` and
         can never authorize a replacement client by itself.
+
+        A retry does not know the stopped client's generation beforehand (the
+        client may have reconnected natively until its stop): it takes the
+        generation of the exact client's complete receipt, which that stop
+        froze.  A first attempt whose receipt names another generation is
+        retried the same way.
         """
 
         try:
             stop_and_wait = getattr(recovery.old_client, "stop_and_wait", None)
             if not callable(stop_and_wait):
-                recovery.stop_error = RuntimeError("ctp_native_stop_unavailable")
+                recovery.stop_error = _SourceRecoveryContractError("stop_unavailable")
                 return
             while time.monotonic() < recovery.deadline:
                 recovery.stop_receipt_attempts += 1
                 receipt = stop_and_wait(timeout=0.0)
                 if (
                     type(receipt) is not CtpNativeStopReceipt
-                    or type(recovery.old_client_generation) is not int
                     or type(receipt.connection_generation) is not int
-                    or receipt.connection_generation != recovery.old_client_generation
+                    or receipt.connection_generation < 0
                 ):
-                    recovery.stop_error = RuntimeError("ctp_native_stop_receipt_invalid")
+                    recovery.stop_error = _SourceRecoveryContractError("stop_receipt_invalid")
                     return
-                recovery.stop_receipt = receipt
-                if receipt.complete is True:
+                expected_generation = recovery.old_client_generation
+                if expected_generation is None:
+                    if receipt.complete is True:
+                        recovery.old_client_generation = receipt.connection_generation
+                        recovery.stop_receipt = receipt
+                        return
+                elif receipt.connection_generation != expected_generation:
+                    recovery.stop_error = _SourceRecoveryRetryableError(
+                        "stop_generation_changed"
+                    )
                     return
+                else:
+                    recovery.stop_receipt = receipt
+                    if receipt.complete is True:
+                        return
                 if receipt.complete is not False:
-                    recovery.stop_error = RuntimeError("ctp_native_stop_receipt_invalid")
+                    recovery.stop_error = _SourceRecoveryContractError("stop_receipt_invalid")
                     return
                 remaining = recovery.deadline - time.monotonic()
                 if remaining > 0:
@@ -1189,9 +1354,20 @@ class CtpQuoteV2MarketProvider:
             recovery.reconnect_succeeded = result is True
             if result is not True:
                 recovery.reconnect_error = RuntimeError("ctp_md_reconnect_unconfirmed")
+                try:
+                    failure = stream.quote_v2_service_reconnect_failure
+                except Exception:
+                    failure = None
+                # "precondition" or "start_raised:<exception class>" only.
+                recovery.reconnect_failure = (
+                    failure
+                    if type(failure) is str and failure.isprintable() and len(failure) <= 96
+                    else "start_unconfirmed"
+                )
         except BaseException as exc:
             recovery.reconnected_client = getattr(stream, "_md_client", None)
             recovery.reconnect_error = exc
+            recovery.reconnect_failure = f"start_worker_raised:{type(exc).__name__}"
         finally:
             if (
                 recovery.reconnect_cancelled.is_set()
@@ -1204,6 +1380,7 @@ class CtpQuoteV2MarketProvider:
                     stream._quote_v2_service_ready = False
                     stream._quote_v2_service_fail_closed = True
                     stream.state = ConnectionState.ERROR
+                recovery.reconnect_fenced = True
             recovery.reconnect_done.set()
 
     @staticmethod
@@ -1274,17 +1451,183 @@ class CtpQuoteV2MarketProvider:
             == recovery.symbols
         )
 
-    def _fail_source_recovery(self, stream: CtpMarketStream | None = None) -> None:
+    def _start_source_recovery_reconnect(
+        self, recovery: _SourceRecovery, receipt: CtpNativeStopReceipt
+    ) -> None:
+        """Start this attempt's replacement; its own deadline starts now."""
+
+        recovery.state = "reconnecting"
+        recovery.deadline = time.monotonic() + self._connect_timeout_seconds
+        if not self._start_source_recovery_reconnect_worker(recovery, receipt):
+            self._retry_source_recovery(recovery, "start_worker_unavailable")
+
+    @staticmethod
+    def _replacement_status(stream: CtpMarketStream) -> tuple[bool, ConnectionState]:
+        """``(fail_closed, state)`` of the stream, read atomically.
+
+        Only while no recovery worker is in native startup (it holds the lock).
+        """
+
+        with stream._md_callback_lock:
+            return stream._quote_v2_service_fail_closed is True, stream.state
+
+    @staticmethod
+    def _source_recovery_worker_inflight(recovery: _SourceRecovery) -> bool:
+        """A stop or start worker of this attempt has not returned yet."""
+
+        return bool(
+            (recovery.stop_worker is not None and not recovery.stop_done.is_set())
+            or (
+                recovery.reconnect_worker is not None
+                and not recovery.reconnect_done.is_set()
+            )
+        )
+
+    def _fence_source_recovery_publication(self) -> None:
+        self._source_scope = None
+        for handle in self._active_handles.values():
+            handle.queue.clear()
+            handle.source_epoch_reset_pending = False
+            handle.source_epoch_reset_epoch = None
+
+    def _retry_source_recovery(self, recovery: _SourceRecovery, reason: str) -> None:
+        """Retry a failed attempt that is not a contract violation (defect 25).
+
+        Publication stays revoked.  A worker still in native code is cancelled
+        (a late replacement is fenced when it returns) and the next attempt
+        starts once it has returned.
+        """
+
+        recovery.failure = reason
+        recovery.failed_state = recovery.state
+        self._fence_source_recovery_publication()
+        if self._source_recovery_worker_inflight(recovery):
+            recovery.reconnect_cancelled.set()
+            recovery.state = "abandoning"
+            return
+        self._start_next_source_recovery_attempt(recovery)
+
+    def _start_next_source_recovery_attempt(self, previous: _SourceRecovery) -> None:
+        """Begin the attempt after ``previous`` failed (no worker of it runs).
+
+        Its origin is the client bound to the stream (the failed replacement,
+        stopped first) or, with none bound, the previous origin: its confirmed
+        stop is reused, otherwise observed again.  The replacement starts
+        after the backoff (:func:`_source_recovery_retry_delay`).
+        """
+
+        stream = previous.stream
+        reason = previous.failure or "unknown"
+        bound = getattr(stream, "_md_client", None)
+        if (
+            bound is not None
+            and bound is not previous.old_client
+            and bound is not previous.reconnected_client
+        ):
+            self._fail_source_recovery(reason="foreign_client_bound")
+            return
+        receipt = previous.stop_receipt
+        reuse_stop = bool(
+            bound is None
+            and previous.stop_done.is_set()
+            and previous.stop_error is None
+            and not previous.stop_timed_out
+            and type(receipt) is CtpNativeStopReceipt
+            and receipt.complete is True
+            and type(previous.old_client_generation) is int
+            and receipt.connection_generation == previous.old_client_generation
+        )
+        if reuse_stop:
+            if stream.retain_quote_v2_stopped_client_for_retry(
+                previous.old_client, receipt
+            ) is not True:
+                self._fail_source_recovery(reason="retry_retain_refused")
+                return
+            origin = previous.old_client
+        else:
+            origin = bound if bound is not None else previous.old_client
+            # No worker runs: the stream lock is free.  The bound client's
+            # callbacks can publish nothing until the next attempt detaches it.
+            with stream._md_callback_lock:
+                stream._managed_quote_clock_source_scope = None
+                stream._quote_v2_service_ready = False
+                stream._quote_v2_service_fail_closed = True
+                stream.state = ConnectionState.ERROR
+        stream_generation = getattr(stream, "_connection_generation", None)
+        if type(stream_generation) is not int:
+            self._fail_source_recovery(reason="stream_generation_invalid")
+            return
+        now = time.monotonic()
+        delay = _source_recovery_retry_delay(previous.attempt)
+        recovery = _SourceRecovery(
+            stream=stream,
+            old_client=origin,
+            old_client_generation=previous.old_client_generation if reuse_stop else None,
+            old_scope=previous.old_scope,
+            old_stream_generation=stream_generation,
+            symbols=previous.symbols,
+            deadline=now + self._connect_timeout_seconds,
+            state="retry_wait" if reuse_stop else "stopping",
+            attempt=previous.attempt + 1,
+            retry=True,
+            retry_at=now + delay,
+        )
+        if reuse_stop:
+            recovery.stop_receipt = receipt
+            recovery.stop_done.set()
+        self._native_client = origin
+        self._source_recovery = recovery
+        self._log_source_recovery_retry(previous, reason, delay)
+
+    def _log_source_recovery_retry(
+        self, failed: _SourceRecovery, reason: str, delay: float
+    ) -> None:
+        now = time.monotonic()
+        last = self._recovery_retry_logged_at
+        if last is not None and now - last < _SOURCE_RECOVERY_LOG_INTERVAL_SECONDS:
+            self._recovery_retry_suppressed += 1
+            return
+        suppressed = self._recovery_retry_suppressed
+        self._recovery_retry_logged_at = now
+        self._recovery_retry_suppressed = 0
+        _logger.warning(
+            "CTP market source recovery attempt %d failed in state %s (reason=%s); "
+            "retrying in %g s (%d failed attempts not logged since the last line)",
+            failed.attempt,
+            failed.failed_state or failed.state,
+            reason,
+            delay,
+            suppressed,
+        )
+
+    def _fail_source_recovery(
+        self,
+        stream: CtpMarketStream | None = None,
+        *,
+        reason: str = "contract_violation",
+    ) -> None:
+        """Fail the recovery for good: a contract violation (defect 25 list).
+
+        Closed until the provider is closed: the source binding or symbol set
+        changed under it, an invalid stop receipt or a stream refusing a
+        proven-safe step, an inconsistent replacement, a replacement refused
+        by the venue or a protocol check, or an invalid new scope or epoch.
+        """
+
         recovery = self._source_recovery
         if recovery is not None:
             if recovery.state != "failed":
                 _logger.error(
-                    "CTP market source recovery failed in state %s; the MD session "
-                    "stays closed until the provider is closed",
+                    "CTP market source recovery failed in state %s (reason=%s, attempt=%d); "
+                    "the MD session stays closed until the provider is closed",
                     recovery.state,
+                    reason,
+                    recovery.attempt,
                 )
-            worker = recovery.reconnect_worker
-            if worker is not None and worker.is_alive():
+            if (
+                recovery.reconnect_worker is not None
+                and not recovery.reconnect_done.is_set()
+            ):
                 self._fail_source_recovery_without_stream_lock(recovery)
                 return
             stream = recovery.stream

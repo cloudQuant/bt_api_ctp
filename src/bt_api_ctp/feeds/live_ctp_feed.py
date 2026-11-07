@@ -2688,6 +2688,10 @@ class CtpMarketStream(BaseDataStream):
         self._quote_v2_service_fail_closed = False
         self._quote_v2_service_recovery_required = False
         self._quote_v2_service_reconnect_authorized = False
+        # Why the last recovery reconnect returned False: "precondition" or
+        # "start_raised:<exception class>" (iteration 62, defect 25).  A
+        # finite token only: never the exception text, a front or an account.
+        self._quote_v2_service_reconnect_failure: str | None = None
         self._quote_v2_service_recovery_stopped_client: Any = None
         self._quote_v2_service_recovery_stopped_generation: int | None = None
         self._quote_v2_service_login_generation: int | None = None
@@ -3056,6 +3060,7 @@ class CtpMarketStream(BaseDataStream):
 
         receipt_type = getattr(ctp_client, "CtpNativeStopReceipt", None)
         with self._md_callback_lock:
+            self._quote_v2_service_reconnect_failure = "precondition"
             old_generation = self._quote_v2_service_recovery_stopped_generation
             if (
                 receipt_type is None
@@ -3078,10 +3083,12 @@ class CtpMarketStream(BaseDataStream):
                 return False
             self._quote_v2_service_recovery_required = False
             self._quote_v2_service_reconnect_authorized = True
+            self._quote_v2_service_reconnect_failure = None
         try:
             self.connect()
-        except Exception:
+        except Exception as exc:
             with self._md_callback_lock:
+                self._quote_v2_service_reconnect_failure = f"start_raised:{type(exc).__name__}"
                 self._quote_v2_service_reconnect_authorized = False
                 if self._md_client is None:
                     # MdClient construction failed before a replacement was
@@ -3148,6 +3155,125 @@ class CtpMarketStream(BaseDataStream):
                 and self._md_client is None
                 and self._running is False
             )
+
+    @property
+    def quote_v2_service_reconnect_failure(self) -> str | None:
+        """Finite reason of the last refused or failed recovery reconnect."""
+
+        with self._md_callback_lock:
+            return self._quote_v2_service_reconnect_failure
+
+    @staticmethod
+    def _confirmed_native_stop_receipt(receipt: Any) -> bool:
+        receipt_type = getattr(ctp_client, "CtpNativeStopReceipt", None)
+        return bool(
+            receipt_type is not None
+            and type(receipt) is receipt_type
+            and receipt.complete is True
+            and receipt.native_released is True
+            and receipt.thread_alive is False
+            and receipt.timed_out is False
+            and (not receipt.join_required or receipt.join_completed is True)
+            and type(receipt.connection_generation) is int
+            and receipt.connection_generation >= 0
+        )
+
+    def retain_quote_v2_stopped_client_for_retry(self, expected_client: Any, receipt: Any) -> bool:
+        """Hold one confirmed-stopped client as the origin of a recovery retry.
+
+        Iteration 62, defect 25: a failed recovery attempt is retried from the
+        exact client whose own stop ``receipt`` confirms.  A failed replacement
+        still bound here is detached only now, after its stop, so the
+        generation retained is the one that stop froze; a client already
+        detached (the lost one, or the origin of a replacement whose start
+        failed before binding) must be the retained stop identity.  The
+        stream is then fenced exactly like a failed replacement construction
+        (no client, the stop identity retained, recovery still required,
+        nothing published) until :meth:`rearm_quote_v2_reconnect_after_confirmed_stop`
+        or a close (:meth:`normalize_quote_v2_reconnect_construction_failure`).
+        """
+
+        with self._md_callback_lock:
+            if (
+                not self._quote_v2_service_readiness_enabled
+                or expected_client is None
+                or not self._confirmed_native_stop_receipt(receipt)
+            ):
+                return False
+            generation = receipt.connection_generation
+            try:
+                client_generation = getattr(expected_client, "connection_generation", None)
+            except Exception:
+                return False
+            if type(client_generation) is not int or client_generation != generation:
+                return False
+            if self._md_client is None:
+                previous = self._quote_v2_service_recovery_stopped_generation
+                if (
+                    self._quote_v2_service_recovery_stopped_client is not expected_client
+                    or type(previous) is not int
+                    or generation < previous
+                ):
+                    return False
+            elif self._md_client is not expected_client:
+                return False
+            self._md_client_token += 1
+            self._managed_quote_v2_callback_capability = None
+            self._managed_quote_clock_source_scope = None
+            self._md_client = None
+            self._observed_client_generation = None
+            self._quote_v2_service_ready = False
+            self._quote_v2_service_scope_issued = False
+            self._quote_v2_service_login_generation = None
+            self._quote_v2_service_required_symbols = set(
+                self._quote_v2_subscription_metadata
+            )
+            self._quote_v2_service_acknowledged_symbols.clear()
+            self._quote_v2_service_symbol_request_ids.clear()
+            self._quote_v2_service_completed_request_ids.clear()
+            self._quote_v2_service_pending_addition_symbols.clear()
+            self._quote_v2_service_pending_addition_request_ids.clear()
+            self._quote_v2_service_recovery_stopped_client = expected_client
+            self._quote_v2_service_recovery_stopped_generation = generation
+            self._quote_v2_service_recovery_required = True
+            self._quote_v2_service_reconnect_authorized = False
+            self._quote_v2_service_fail_closed = True
+            self.state = ConnectionState.ERROR
+            return True
+
+    def rearm_quote_v2_reconnect_after_confirmed_stop(
+        self, expected_client: Any, receipt: Any
+    ) -> bool:
+        """Reopen a retained, fenced stream for one more recovery reconnect.
+
+        Valid only in the state :meth:`retain_quote_v2_stopped_client_for_retry`
+        (or a failed replacement construction) leaves, for the exact retained
+        client and its receipt, with the configured source binding unchanged.
+        It starts nothing itself; :meth:`reconnect_quote_v2_after_confirmed_stop`
+        follows.
+        """
+
+        with self._md_callback_lock:
+            stopped_generation = self._quote_v2_service_recovery_stopped_generation
+            if (
+                not self._confirmed_native_stop_receipt(receipt)
+                or type(stopped_generation) is not int
+                or receipt.connection_generation != stopped_generation
+                or expected_client is None
+                or self._quote_v2_service_recovery_stopped_client is not expected_client
+                or self._quote_v2_service_recovery_required is not True
+                or self._quote_v2_service_reconnect_authorized is not False
+                or self._quote_v2_service_fail_closed is not True
+                or self._quote_v2_service_ready is not False
+                or self._managed_quote_v2_subscription_failed
+                or self._md_client is not None
+                or self.state not in (ConnectionState.ERROR, ConnectionState.DISCONNECTED)
+                or not self.quote_v2_service_binding_matches()
+            ):
+                return False
+            self._quote_v2_service_fail_closed = False
+            self.state = ConnectionState.DISCONNECTED
+            return True
 
     def _is_current_md_callback(self, client: Any, client_token: int | None) -> bool:
         """Return whether a callback still belongs to the active MD client."""

@@ -1440,7 +1440,11 @@ def test_ctp_market_provider_reconnect_startup_worker_times_out_fail_closed(
         started = time.monotonic()
         assert provider.poll(handle, limit=1) == ()
         assert time.monotonic() - started < 0.25
-        assert recovery.state == "failed"
+        # Iteration 62, defect 25: a start past its deadline is not final.  The
+        # attempt is abandoned (cancelled, publication revoked) and the next
+        # one begins only after this worker has returned.
+        assert recovery.state == "abandoning"
+        assert provider.source_recovery_state(handle) == "recovering"
         assert recovery.reconnect_cancelled.is_set() is True
         assert provider.source_epoch_reset_required(handle) is False
         started = time.monotonic()
@@ -1455,10 +1459,22 @@ def test_ctp_market_provider_reconnect_startup_worker_times_out_fail_closed(
         assert recovery.reconnect_succeeded is True
         assert recovery.reconnect_error is None
         assert recovery.reconnected_client is new_client
+        assert recovery.reconnect_fenced is True
         assert handle.stream.quote_v2_service_fail_closed is True
         assert handle.stream.get_quote_v2_service_ready_scope() is None
         assert provider.source_epoch_reset_required(handle) is False
+        # The late client stays fenced; the next attempt stops it first.
         assert provider.poll(handle, limit=1) == ()
+        retry = provider._source_recovery
+        assert retry is not recovery and retry.attempt == 2
+        assert retry.old_client is new_client and retry.state == "stopping"
+        assert provider.poll(handle, limit=1) == ()  # starts the stop observer
+        assert retry.stop_done.wait(timeout=1.0) is True
+        assert provider.poll(handle, limit=1) == ()
+        assert retry.state == "retry_wait"
+        assert handle.stream._md_client is None
+        assert new_client.stop_wait_calls >= 1
+        assert len(created) == 2
         assert provider.close() is True
     finally:
         allow_startup.set()
@@ -1533,7 +1549,13 @@ def test_ctp_market_provider_closes_constructor_failed_reconnect_from_exact_old_
     assert old_client.stop_wait_calls == 1
 
     assert provider.poll(handle, limit=1) == ()
-    assert recovery.state == "failed"
+    # Iteration 62, defect 25: a replacement that could not be constructed is
+    # retried from the same confirmed old-client stop (not observed again).
+    retry = provider._source_recovery
+    assert retry is not recovery and retry.attempt == 2
+    assert retry.state == "retry_wait" and retry.old_client is old_client
+    assert retry.stop_receipt is exact_receipt
+    assert provider.source_recovery_state(handle) == "recovering"
     assert provider.close() is True
     assert stream.state is live_ctp_feed.ConnectionState.DISCONNECTED
     assert stream._running is False
@@ -2193,4 +2215,207 @@ def test_sdk_qualification_trades_the_fresh_first_tick_but_never_a_gap(
     assert after_loss.data.continuity_status == "gap"
     assert after_loss.data.execution_eligible is False
     assert next_tick.data.execution_eligible is True
+    assert provider.close() is True
+
+
+# --------------------------------------------------------------------------
+# iteration 62, defect 25: a failed source recovery attempt is retried
+# --------------------------------------------------------------------------
+
+
+def _instrument_key(symbol: str) -> MarketSubscriptionKey:
+    return _key(
+        instrument=MarketInstrumentKey(
+            provider="ctp",
+            venue="CFFEX",
+            environment="simnow",
+            product_type="future",
+            instrument_id=symbol,
+            native_symbol=symbol,
+        )
+    )
+
+
+def _failing_construction_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[CtpQuoteV2MarketProvider, list[_SyntheticMdClient], list[float], list[bool]]:
+    """A provider whose replacement clients fail construction while ``fail[0]``."""
+
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+    created: list[_SyntheticMdClient] = []
+    constructions: list[float] = []
+    fail = [False]
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        constructions.append(time.monotonic())
+        if fail[0]:
+            raise OSError("synthetic replacement construction failure")
+        client = _SyntheticMdClient(*args)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    return provider, created, constructions, fail
+
+
+def _drive_until(provider: CtpQuoteV2MarketProvider, predicate, timeout: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        provider.maintain()
+        if predicate():
+            return
+        time.sleep(0.002)
+    raise AssertionError("condition not reached")
+
+
+def test_source_recovery_backoff_is_bounded_and_repeats_its_last_delay() -> None:
+    delays = [market_provider_module._source_recovery_retry_delay(n) for n in range(1, 9)]
+    assert delays == [1.0, 2.0, 5.0, 10.0, 30.0, 30.0, 30.0, 30.0]
+    assert market_provider_module._source_recovery_retry_delay(10_000) == 30.0
+
+
+def test_failed_recovery_attempts_are_retried_without_limit_and_logged_throttled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.01, 0.02, 0.03)
+    )
+    caplog.set_level("WARNING", logger="bt_api_ctp.market_provider")
+    provider, created, constructions, fail = _failing_construction_provider(monkeypatch)
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    fail[0] = True
+    created[0].emit_disconnect()
+    _drive_until(
+        provider,
+        lambda: provider._source_recovery is not None and provider._source_recovery.attempt >= 8,
+    )
+    assert provider.source_recovery_state(handle) == "recovering"
+    retry_lines = [r.getMessage() for r in caplog.records if "recovery attempt" in r.getMessage()]
+    # Within the interval only the first failed attempt is logged.
+    assert retry_lines == [
+        "CTP market source recovery attempt 1 failed in state reconnecting "
+        "(reason=replacement_start_raised:OSError); retrying in 0.01 s "
+        "(0 failed attempts not logged since the last line)"
+    ]
+    # Each replacement start waited for its delay; the last delay repeats.
+    gaps = [later - earlier for earlier, later in zip(constructions[1:], constructions[2:])]
+    assert len(gaps) >= 6
+    assert gaps[0] >= 0.009 and gaps[1] >= 0.018
+    assert all(0.027 <= gap < 0.5 for gap in gaps[2:6])
+
+    # Once the interval passed, the next failure is logged with the count of
+    # those not logged in between.
+    monkeypatch.setattr(market_provider_module, "_SOURCE_RECOVERY_LOG_INTERVAL_SECONDS", 0.05)
+    time.sleep(0.06)
+    attempt = provider._source_recovery.attempt
+    _drive_until(provider, lambda: provider._source_recovery.attempt > attempt)
+    retry_lines = [r.getMessage() for r in caplog.records if "recovery attempt" in r.getMessage()]
+    assert len(retry_lines) == 2
+    assert "retrying in 0.03 s" in retry_lines[1]
+    assert "(0 failed attempts" not in retry_lines[1]
+    assert not any("stays closed" in r.getMessage() for r in caplog.records)
+    assert provider.close() is True
+
+
+def test_symbols_change_during_a_retry_wait_release_allowed_addition_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defined behavior while a lost source is being recovered (defect 25).
+
+    Adding a symbol is refused (``CTP_MARKET_RECOVERY_IN_PROGRESS``; retry
+    after the restart).  Releasing one is allowed whenever no native stop or
+    start is in flight; the next attempt subscribes only the remaining set.
+    """
+
+    monkeypatch.setattr(market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.05,))
+    provider, created, _constructions, fail = _failing_construction_provider(monkeypatch)
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    second_handle = provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-r1")
+    fail[0] = True
+    created[0].emit_disconnect()
+    _drive_until(
+        provider,
+        lambda: provider._source_recovery is not None
+        and provider._source_recovery.state == "retry_wait",
+    )
+    with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+        provider.subscribe(_instrument_key("IC2612"), generation="hub-generation-r1")
+    assert refused.value.code == "CTP_MARKET_RECOVERY_IN_PROGRESS"
+    assert provider.unsubscribe(second_handle) is True
+    assert second_handle.active is False
+    assert provider._source_recovery.symbols == frozenset({"IF2612"})
+
+    fail[0] = False
+    _drive_until(provider, lambda: provider.source_epoch_reset_required(handle) is True)
+    new_client = created[-1]
+    assert new_client is not created[0]
+    assert new_client.subscribed == ["IF2612"]
+    assert provider.acknowledge_source_epoch_reset(handle, epoch="hub-epoch-r2") is True
+    assert provider._source_recovery is None
+    _emit_synthetic_tick(new_client, "IF2612", 5)
+    events = provider.poll(handle, limit=4)  # the readiness tick, then this one
+    assert [event.data["last_price"] for event in events][-1] == 4_006.0
+    assert {event.data["provider_connection_generation"] for event in events} == {
+        handle.source_scope.connection_generation
+    }
+    assert provider.close() is True
+
+
+def test_a_final_refusal_racing_the_connecting_check_stays_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A final refusal is a contract violation even when it lands mid-check.
+
+    The replacement's refusal sets ``fail_closed`` and ``ERROR`` together; the
+    provider must read them together, never as a lost replacement to retry.
+    """
+
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+    created: list[_SyntheticMdClient] = []
+
+    def make_client(*args: object) -> _SyntheticMdClient:
+        client = _SyntheticMdClient(*args)
+        if created:  # the replacement logs in but is not ready yet
+            client.emit_startup_acks = False
+            client.emit_startup_readiness_tick = False
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", make_client)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+    )
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    created[0].emit_disconnect()
+    _drive_until(
+        provider,
+        lambda: provider._source_recovery is not None
+        and provider._source_recovery.state == "connecting",
+    )
+    stream = handle.stream
+
+    def refused_during_the_check(checked: CtpMarketStream) -> None:
+        checked._on_error(
+            SimpleNamespace(), client=checked._md_client, client_token=checked._md_client_token
+        )
+        return None
+
+    monkeypatch.setattr(provider, "_current_source_scope", refused_during_the_check)
+    provider.maintain()
+    monkeypatch.undo()
+    assert provider._source_recovery.state == "failed"
+    assert provider.source_recovery_state(handle) == "failed"
+    assert stream.quote_v2_service_fail_closed is True
+    assert len(created) == 2
     assert provider.close() is True
