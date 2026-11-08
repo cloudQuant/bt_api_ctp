@@ -430,3 +430,25 @@ diagnostics keep their separate temporary lifetime. These directories do not
 provide an account lock, writer fencing or proof of account identity.
 Gateway daily settlement confirmation is an SDK-controlled workflow; enabling
 the old native auto_settlement_confirm option remains unsupported.
+
+### Iteration 63 source-bound settlement observations
+
+The direct provider declares `settlement_required = True`. Each observation
+is bound to the exact sealed query result, Trader/API/SPI, account, trading day,
+session generation, PID and expiry. A newer observation or settlement-state
+change invalidates the previous ticket. Copies and reconstructed DTOs are not
+accepted as provider-issued observations.
+
+SDK direct/Gateway confirmation requires that original UNCONFIRMED observation
+and its exact SDK grant binding. Final native entry rechecks identity and consumes
+the authorization once. The native account fingerprint uses the same `acct_`
+format on every path, and the query-state lock is released before native I/O.
+Forked provider instances reject access before acquiring inherited locks. The
+non-SDK typed managed/core path retains its separately controlled authorization;
+this does not claim migration of every historical path to the new DTO.
+
+Only fresh source-bound readback for the same account/day can confirm success.
+The existing policy treating a trusted empty result or earlier ConfirmDate as
+UNCONFIRMED is unchanged; its actual venue date and query-coverage semantics
+remain unverified. Native auto_settlement_confirm remains disabled. Tests using
+a real Python TraderClient and fake native API are not real-account evidence.

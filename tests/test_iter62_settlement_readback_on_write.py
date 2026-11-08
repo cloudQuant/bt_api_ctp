@@ -36,6 +36,7 @@ from bt_api_base.direct_write_protocol import (
     DirectWriteError,
     NativeOrderIdentity,
     SettlementStatus,
+    SettlementWriteBinding,
     WriteOperation,
 )
 from bt_api_ctp import direct_write_provider as provider_module
@@ -133,7 +134,7 @@ class Verifier:
     def __init__(self):
         self.consumed = []
 
-    def consume(self, grant, *, exchange_name, operation, session_generation):
+    def consume(self, grant, *, exchange_name, operation, session_generation, settlement_binding=None):
         assert exchange_name == "CTP___FUTURE"
         assert session_generation == grant.session_generation
         self.consumed.append((operation, session_generation))
@@ -141,6 +142,15 @@ class Verifier:
 
 def _grant(generation, operation=WriteOperation.PLACE):
     return SimpleNamespace(session_generation=generation, operation=operation)
+
+
+def _settlement_grant(observation):
+    return SimpleNamespace(
+        exchange_name="CTP___FUTURE",
+        session_generation=observation.session_generation,
+        operation=WriteOperation.SETTLEMENT_CONFIRM,
+        settlement_binding=SettlementWriteBinding(observation, "synthetic-marker"),
+    )
 
 
 def _feed():
@@ -740,14 +750,10 @@ def test_explicit_confirmation_also_marks_the_day_verified():
     provider, trader, sent = _scripted(verified=False)
     trader.relogin()
     assert provider.settlement_status() is SettlementStatus.UNKNOWN
-    assert provider.confirm_settlement(_grant(trader.generation), Verifier()) is (
-        SettlementStatus.CONFIRMED
-    )
-    assert trader.confirm_calls == 1  # the explicit SDK step only
-    trader.relogin()
-    assert _place(provider).sent is True
-    assert trader.confirm_calls == 1
-    assert len(trader.verify_timeouts) == 1
+    with pytest.raises(TypeError):
+        provider.confirm_settlement(_grant(trader.generation), Verifier())
+    assert trader.confirm_calls == 0
+    assert trader.verify_timeouts == []
 
 
 def test_session_change_during_the_readback_refuses_the_place():
@@ -1088,6 +1094,12 @@ def test_r05_session_change_during_query_returns_unknown(monkeypatch, change):
 def test_r05_conflicting_day_fields_never_promote_legacy_readback(monkeypatch, path):
     provider, client, native = _real_setup()
     _login(client, native, session_id=20)
+    observation = None
+    if path == "sdk_confirm":
+        native.confirmation_day = "20261105"
+        observation = provider.observe_settlement()
+        assert observation is not None and observation.status is SettlementStatus.UNCONFIRMED
+        native.calls.clear()
 
     def query(_field, request_id):
         native.calls.append("query_settlement")
@@ -1107,7 +1119,7 @@ def test_r05_conflicting_day_fields_never_promote_legacy_readback(monkeypatch, p
         monkeypatch.setattr(client, "_direct_sim_admission_is_current_locked", lambda: True)
         monkeypatch.setattr(client, "_issue_settlement_authorization_for_core", lambda *_a, **_k: object())
         monkeypatch.setattr(client, "confirm_settlement", lambda *_a, **_k: True)
-        assert provider.confirm_settlement(_grant(client.connection_generation, WriteOperation.SETTLEMENT_CONFIRM), Verifier()) is SettlementStatus.UNKNOWN
+        assert provider.confirm_settlement(_settlement_grant(observation), Verifier(), observation=observation) is SettlementStatus.UNKNOWN
     assert not client.is_trading_ready
     assert native.calls == ["query_settlement"]
     assert client.get_request_counts()["settlement_confirm"] == 0
@@ -1116,6 +1128,11 @@ def test_r05_conflicting_day_fields_never_promote_legacy_readback(monkeypatch, p
 def test_r05_sdk_confirm_rejects_unsealed_same_day_query(monkeypatch):
     provider, client, native = _real_setup()
     _login(client, native, session_id=20)
+    native.confirmation_day = "20261105"
+    observation = provider.observe_settlement()
+    assert observation is not None and observation.status is SettlementStatus.UNCONFIRMED
+    native.confirmation_day = TODAY
+    native.calls.clear()
     original = client.query_settlement_confirmation_result
 
     def unsealed(**kwargs):
@@ -1127,7 +1144,7 @@ def test_r05_sdk_confirm_rejects_unsealed_same_day_query(monkeypatch):
     monkeypatch.setattr(client, "_direct_sim_admission_is_current_locked", lambda: True)
     monkeypatch.setattr(client, "_issue_settlement_authorization_for_core", lambda *_a, **_k: object())
     monkeypatch.setattr(client, "confirm_settlement", lambda *_a, **_k: True)
-    assert provider.confirm_settlement(_grant(client.connection_generation, WriteOperation.SETTLEMENT_CONFIRM), Verifier()) is SettlementStatus.UNKNOWN
+    assert provider.confirm_settlement(_settlement_grant(observation), Verifier(), observation=observation) is SettlementStatus.UNKNOWN
     assert not client.is_trading_ready
     assert client.get_session_state()["settlement_readback_verified"] is False
     assert native.calls == ["query_settlement"]

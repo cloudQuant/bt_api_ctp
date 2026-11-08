@@ -1365,6 +1365,11 @@ class _CtpSettlementAuthorization:
         "_scope",
         "_budget",
         "_used",
+        "_native_api",
+        "_native_spi",
+        "_native_entered",
+        "_observation_check",
+        "_observation_consume",
     )
 
     def __init__(
@@ -1378,6 +1383,8 @@ class _CtpSettlementAuthorization:
         environment_profile: str,
         scope: str,
         budget: int,
+        observation_check: Callable[[], None] | None = None,
+        observation_consume: Callable[[], None] | None = None,
     ) -> None:
         self._seal = _CTP_EXECUTION_AUTHORIZATION_SEAL
         self._client_ref = weakref.ref(client)
@@ -1389,6 +1396,11 @@ class _CtpSettlementAuthorization:
         self._scope = scope
         self._budget = budget
         self._used = False
+        self._native_api = client._api
+        self._native_spi = client._spi
+        self._native_entered = False
+        self._observation_check = observation_check
+        self._observation_consume = observation_consume
 
 
 class _ManagedTraderApiView:
@@ -5089,6 +5101,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
                 return
             if not self._c._accept_settlement_callback(nRequestID, pSettlementInfoConfirm):
                 return
+            self._c._settlement_observation_epoch += 1
             error_id, _ = _rsp_error(pRspInfo)
             if error_id in (None, 0):
                 self._c._settlement_state = "confirmed"
@@ -5432,6 +5445,7 @@ class TraderClient:
         self._authentication_state = "disconnected"
         self._login_state = "disconnected"
         self._settlement_state = "unknown"
+        self._settlement_observation_epoch = 0
         self._trading_day = ""
         self._last_session_error: dict[str, Any] = {}
         self._connection_generation = 0
@@ -6051,6 +6065,34 @@ class TraderClient:
                 raise CtpExecutionGateError(
                     "ctp_execution_gate_direct_write_authorization_scope_mismatch"
                 )
+            if method_name == "ReqSettlementInfoConfirm":
+                authorization = settlement_authorization
+                if (
+                    type(authorization) is not _CtpSettlementAuthorization
+                    or authorization._seal is not _CTP_EXECUTION_AUTHORIZATION_SEAL
+                    or authorization._client_ref() is not self
+                    or authorization._used is not True
+                    or authorization._native_entered is not False
+                    or authorization._native_api is not api
+                    or authorization._native_spi is not self._spi
+                    or self._session_native_api is not api
+                    or authorization._account_fingerprint != f"acct_{self._account_fingerprint}"
+                    or authorization._trading_day != self._trading_day
+                    or authorization._connection_generation != self._connection_generation
+                    or self._settlement_state != "confirming"
+                    or len(args) != 2
+                    or type(args[1]) is not int
+                    or args[1] != self._settlement_request_id
+                    or getattr(args[0], "BrokerID", None) != self._bound_broker_id
+                    or getattr(args[0], "InvestorID", None) != self._bound_user_id
+                ):
+                    raise CtpExecutionGateError("ctp_settlement_authorization_required")
+                if authorization._observation_consume is not None:
+                    authorization._observation_consume()
+                authorization._native_entered = True
+                self._settlement_observation_epoch += 1
+            elif settlement_authorization is not None:
+                raise CtpExecutionGateError("ctp_settlement_authorization_required")
             if state is not None:
                 if state.poisoned or state.phase not in {"PRE_LOGIN", "ACTIVE"}:
                     raise CtpExecutionGateError("ctp_callback_ingress_owner_poisoned")
@@ -6069,21 +6111,6 @@ class TraderClient:
                 ):
                     raise CtpExecutionGateError("ctp_native_request_inflight")
                 if method_name == "ReqSettlementInfoConfirm":
-                    if (
-                        type(settlement_authorization) is not _CtpSettlementAuthorization
-                        or settlement_authorization._seal is not _CTP_EXECUTION_AUTHORIZATION_SEAL
-                        or settlement_authorization._client_ref() is not self
-                        or settlement_authorization._used is not True
-                        or settlement_authorization._account_fingerprint
-                        != self._account_fingerprint
-                        or settlement_authorization._trading_day != self._trading_day
-                        or settlement_authorization._connection_generation
-                        != self._connection_generation
-                        or len(args) < 2
-                        or type(args[1]) is not int
-                        or args[1] != self._settlement_request_id
-                    ):
-                        raise CtpExecutionGateError("ctp_settlement_authorization_required")
                     if state.command_lease is not None:
                         raise CtpExecutionGateError("ctp_native_request_inflight")
                     state.command_lease = settlement_authorization
@@ -7899,6 +7926,8 @@ class TraderClient:
         environment_verified: bool,
         scope: str = "settlement_confirmation",
         budget: int = 1,
+        observation_check: Callable[[], None] | None = None,
+        observation_consume: Callable[[], None] | None = None,
     ) -> object:
         """Create one independent, account/day/generation-bound write grant."""
 
@@ -7924,8 +7953,14 @@ class TraderClient:
                 or scope != "settlement_confirmation"
                 or type(budget) is not int
                 or budget != 1
+                or ((observation_check is None) != (observation_consume is None))
+                or (profile == SDK_ADMITTED_PROFILE and observation_check is None)
+                or (observation_check is not None and not callable(observation_check))
+                or (observation_consume is not None and not callable(observation_consume))
             ):
                 raise CtpExecutionGateError("ctp_settlement_authorization_context_mismatch")
+            if observation_check is not None:
+                observation_check()
             return _CtpSettlementAuthorization(
                 client=self,
                 capability=capability,
@@ -7935,6 +7970,8 @@ class TraderClient:
                 environment_profile=profile,
                 scope=scope,
                 budget=budget,
+                observation_check=observation_check,
+                observation_consume=observation_consume,
             )
 
     def _issue_execution_authorization_for_test(
@@ -8459,7 +8496,8 @@ class TraderClient:
             }
 
     def confirm_settlement_for_sdk_admission(
-        self, capability: object, *, timeout: float = 15.0
+        self, capability: object, *, observation_check: Callable[[], None],
+        observation_consume: Callable[[], None], timeout: float = 15.0
     ) -> bool:
         """Confirm today's settlement after SDK admission (D62-20).
 
@@ -8471,11 +8509,22 @@ class TraderClient:
         with self._query_state_lock:
             if not self._direct_sim_admission_is_current_locked():
                 raise CtpExecutionGateError("ctp_execution_gate_environment_unverified")
+            if not callable(observation_check) or not callable(observation_consume):
+                raise CtpExecutionGateError("ctp_settlement_authorization_required")
+            observation_check()
+            original_scope = (
+                self._connection_generation, self._account_fingerprint, self._trading_day,
+                self._api, self._spi,
+            )
             settlement_authorization = self._issue_settlement_authorization_for_core(
                 capability,
                 environment_profile=SDK_ADMITTED_PROFILE,
                 environment_verified=True,
+                observation_check=observation_check,
+                observation_consume=observation_consume,
             )
+            if self._settlement_state == "confirmed" and not self._has_current_settlement_readback_locked():
+                self._settlement_state = "not_requested"
         confirmed = self.confirm_settlement(
             max(float(timeout), 0.0),
             _execution_capability=capability,
@@ -8484,7 +8533,24 @@ class TraderClient:
             _settlement_environment_verified=True,
         )
         if confirmed:
-            return self._read_direct_settlement_status(timeout=max(float(timeout), 0.0)) == "confirmed"
+            with self._query_state_lock:
+                if (
+                    (self._connection_generation, self._account_fingerprint, self._trading_day)
+                    != original_scope[:3]
+                    or self._api is not original_scope[3]
+                    or self._spi is not original_scope[4]
+                ):
+                    return False
+            readback = self._read_direct_settlement_status(timeout=max(float(timeout), 0.0))
+            with self._query_state_lock:
+                return bool(
+                    readback == "confirmed"
+                    and (self._connection_generation, self._account_fingerprint, self._trading_day)
+                    == original_scope[:3]
+                    and self._api is original_scope[3]
+                    and self._spi is original_scope[4]
+                    and self.is_trading_ready
+                )
         return False
 
     def arm_execution_for_sdk_admission(
@@ -9446,6 +9512,7 @@ class TraderClient:
     ) -> None:
         """Invalidate server-readback proof and revoke any native write grant."""
 
+        self._settlement_observation_epoch += 1
         self._ready = False
         self._settlement_readback_verified = False
         self._settlement_proof_source = "none"
@@ -9504,6 +9571,7 @@ class TraderClient:
         self, reason: Any, *, query_completion_origin: str = "front_disconnected"
     ) -> None:
         with self._query_state_lock:
+            self._settlement_observation_epoch += 1
             # The link is gone: a pending same-connection retry is void; the
             # native API reconnects by itself and authenticates again.
             self._cancel_session_retry_locked()
@@ -9785,6 +9853,13 @@ class TraderClient:
             raise CtpExecutionGateError("ctp_execution_gate_session_not_read_only_ready")
         if self._api is None or self._api is not self._session_native_api:
             raise CtpExecutionGateError("ctp_execution_gate_native_api_mismatch")
+        if (
+            self._api is not settlement_authorization._native_api
+            or self._spi is not settlement_authorization._native_spi
+        ):
+            raise CtpExecutionGateError("ctp_settlement_authorization_required")
+        if settlement_authorization._observation_check is not None:
+            settlement_authorization._observation_check()
         return settlement_authorization
 
     def _request_settlement_confirmation(
@@ -9855,6 +9930,7 @@ class TraderClient:
                     and self._settlement_connection_generation == generation
                     and self._connection_generation == generation
                 ):
+                    self._settlement_observation_epoch += 1
                     self._settlement_state = "failed"
                     self._last_session_error = {
                         "error": "settlement_confirm_submit_failed",
@@ -9869,6 +9945,7 @@ class TraderClient:
                     and self._settlement_connection_generation == generation
                     and self._connection_generation == generation
                 ):
+                    self._settlement_observation_epoch += 1
                     self._settlement_state = "failed"
                     self._last_session_error = {
                         "error": "settlement_confirm_submit_rejected",
@@ -9943,6 +10020,7 @@ class TraderClient:
                 if self._settlement_state == "confirmed":
                     return True
                 if self._settlement_state == "confirming":
+                    self._settlement_observation_epoch += 1
                     self._settlement_state = "failed"
                     self._ready = False
                     self._last_session_error = {"error": "settlement_confirm_timeout"}
@@ -12080,6 +12158,7 @@ class TraderClient:
             expected_api = self._api
             expected_spi = self._spi
             self._clear_settlement_readback_locked("ctp_execution_gate_settlement_readback_refresh")
+            expected_epoch = self._settlement_observation_epoch
         try:
             binding = capture_query_session(self, environment=None)
         except Exception:
@@ -12142,6 +12221,7 @@ class TraderClient:
                 or self._trading_day != expected_trading_day
                 or self._api is not expected_api
                 or self._spi is not expected_spi
+                or self._settlement_observation_epoch != expected_epoch
             ):
                 failure_reason = "ctp_execution_gate_settlement_readback_stale_generation"
             if not failure_reason and not self.is_read_only_ready:
@@ -12153,6 +12233,7 @@ class TraderClient:
                     and self._trading_day == expected_trading_day
                     and self._api is expected_api
                     and self._spi is expected_spi
+                    and self._settlement_observation_epoch == expected_epoch
                 ):
                     self._clear_settlement_readback_locked(
                         failure_reason,
@@ -12170,7 +12251,9 @@ class TraderClient:
                 self._last_session_error = {}
         return result
 
-    def _read_direct_settlement_status(self, timeout: float = 5.0) -> str:
+    def _read_direct_settlement_status(
+        self, timeout: float = 5.0, *, _include_evidence: bool = False
+    ) -> Any:
         """Read a source-bound current-account settlement status without writes.
 
         Preserve the existing policy: a complete account-filtered empty
@@ -12182,7 +12265,12 @@ class TraderClient:
         from bt_api_ctp.registered_sim_session import capture_query_session, validate_query_session
         from bt_api_ctp.store_account_session import _valid_settlement_result
 
+        def project(status: str, evidence: Any = None) -> Any:
+            return (status, evidence) if _include_evidence else status
+
         with self._query_state_lock:
+            self._settlement_observation_epoch += 1
+            readback_epoch = self._settlement_observation_epoch
             initial_scope = (
                 self._connection_generation, self._account_fingerprint, self._trading_day,
                 self._api, self._spi,
@@ -12230,28 +12318,31 @@ class TraderClient:
                     not validate_query_session(self, binding, now_monotonic=time.monotonic())
                     or self._api is not expected_api
                     or self._spi is not expected_spi
+                    or self._settlement_observation_epoch != readback_epoch
                 ):
                     if (
                         (self._connection_generation, self._account_fingerprint, self._trading_day)
                         == initial_scope[:3]
                         and self._api is initial_scope[3]
                         and self._spi is initial_scope[4]
+                        and self._settlement_observation_epoch == readback_epoch
                     ):
                         self._clear_settlement_readback_locked(
                             "ctp_execution_gate_settlement_readback_untrusted"
                         )
-                    return "unknown"
+                    return project("unknown")
                 if not source_valid:
                     self._clear_settlement_readback_locked(
                         "ctp_execution_gate_settlement_readback_untrusted"
                     )
-                    return "unknown"
+                    return project("unknown")
                 if "current" not in states:
                     self._clear_settlement_readback_locked(
                         "ctp_execution_gate_settlement_readback_unconfirmed",
                         request_id=result.request_id,
                     )
-                    return "unconfirmed"
+                    evidence = (binding, result, expected_api, expected_spi, self._settlement_observation_epoch)
+                    return project("unconfirmed", evidence)
                 self._settlement_state = "confirmed"
                 self._settlement_trading_day = binding.trading_day
                 self._settlement_connection_generation = binding.connection_generation
@@ -12261,7 +12352,10 @@ class TraderClient:
                 self._settlement_readback_verified = True
                 self._ready = True
                 self._last_session_error = {}
-                return "confirmed" if self.is_trading_ready else "unknown"
+                if not self.is_trading_ready:
+                    return project("unknown")
+                evidence = (binding, result, expected_api, expected_spi, self._settlement_observation_epoch)
+                return project("confirmed", evidence)
         except Exception:
             with self._query_state_lock:
                 if (
@@ -12269,11 +12363,12 @@ class TraderClient:
                     == initial_scope[:3]
                     and self._api is initial_scope[3]
                     and self._spi is initial_scope[4]
+                    and self._settlement_observation_epoch == readback_epoch
                 ):
                     self._clear_settlement_readback_locked(
                         "ctp_execution_gate_settlement_readback_untrusted"
                     )
-            return "unknown"
+            return project("unknown")
 
     def next_order_ref(self) -> str:
         """Return the next monotonic CTP OrderRef.
