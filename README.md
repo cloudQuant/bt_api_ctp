@@ -512,3 +512,30 @@ it does not merge an evolving native identity or provide cancellation authority.
 The reader still supplies no proven cost basis or average price for nonzero
 positions and does not guess currency. Real venue/date/coverage validation
 remains separate.
+
+
+## Iteration 63 source-sealed return queries and projection
+
+`CtpGatewayReturnQueryReader` borrows an already logged-in `TraderClient` on
+its owner thread. Each order/trade query retains native scalar rows after
+checking the sealed query source, exact session, unfiltered request/readback,
+successful terminal callback, row digest and expiry. The existing query
+accumulator is capped at 8192 rows; exceeding the cap fails the observation.
+The latest immutable batch has a local identity ticket; `assert_current`
+checks its current session and expiry without repeatedly scanning all rows.
+No connection, account bootstrap or atomic multi-query snapshot is implied.
+
+`project_gateway_return` converts a previously source-checked native row to
+`GatewayReturnFact` plus separately classified binding and venue identities.
+It never fills a trading day or order session from the receiving login.
+Native integer volumes remain exact; decimal prices reflect the received CTP
+double and cannot restore precision lost before it was received. An unknown
+order status paired with explicit insert rejection is rejected; cancel or
+modify rejection does not itself reject the original order. The SDK owns
+strong-key encoding and ledger composition.
+
+The trade callback fence covers replacement or relogin after entry to the
+Python callback fence. It does not prove the provenance of a delayed event
+before that entry. These interfaces have only local synthetic validation;
+the trading-owner maintenance and live callback ledger path remain separate
+integration work.

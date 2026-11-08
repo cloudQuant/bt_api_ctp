@@ -4328,12 +4328,15 @@ class OneShotMdDiagnosticClient(MdClient):
 
 
 def _fence_trader_spi_callback(callback):
+    is_trade_return = callback.__name__ == "OnRtnTrade"
+
     @wraps(callback)
     def guarded(self, *args, **kwargs):
         client = self._c
         with client._query_state_lock:
             client._callback_inflight_refs += 1
             current = self._is_current_locked()
+            trade_scope = client._trade_callback_scope_locked() if current and is_trade_return else None
         callback_state = client._native_callback_thread_state
         previous_depth = getattr(callback_state, "depth", 0)
         if current:
@@ -4343,6 +4346,8 @@ def _fence_trader_spi_callback(callback):
                 return None
             # Callback bodies take the state lock only while mutating SDK
             # state. User callbacks may synchronously start a typed query.
+            if is_trade_return:
+                kwargs["_callback_scope"] = trade_scope
             return callback(self, *args, **kwargs)
         finally:
             if current:
@@ -5258,10 +5263,10 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
     @_fence_trader_spi_callback
-    def OnRtnTrade(self, pTrade):
-        if not self._is_current():
-            return
-        self._c._push_trade_event(pTrade)
+    def OnRtnTrade(self, pTrade, *, _callback_scope):
+        self._c._push_trade_event(
+            pTrade, origin_api=self._native_api, origin_spi=self, callback_scope=_callback_scope
+        )
 
     @_fence_trader_spi_callback
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
@@ -11507,6 +11512,7 @@ class TraderClient:
         timeout=5,
         *,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryOrderField()
         try:
@@ -11539,6 +11545,7 @@ class TraderClient:
             request_filter_field=field,
             request_intent_filters=intent_filters,
             deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
         )
 
     def query_orders(self, instrument_id="", exchange_id="", order_sys_id="", timeout=5):
@@ -11560,6 +11567,7 @@ class TraderClient:
         timeout=5,
         *,
         deadline_monotonic: float | None = None,
+        max_records: int | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryTradeField()
         intent_filters = {
@@ -11596,6 +11604,7 @@ class TraderClient:
             request_filter_field=field,
             request_intent_filters=intent_filters,
             deadline_monotonic=deadline_monotonic,
+            max_records=max_records,
         )
 
     def query_trades(self, **kwargs: Any) -> list[Any]:
@@ -12714,20 +12723,58 @@ class TraderClient:
         if self.on_order:
             self.on_order(order_field)
 
-    def _push_trade_event(self, trade_field) -> None:
-        snapshot = _snapshot_ctp_field(trade_field)
+    def _trade_callback_scope_locked(self) -> tuple[Any, ...]:
+        """Session facts captured at callback admission and used under the lock."""
+        return (
+            self._connection_generation, self._trading_day, self._front_id, self._session_id,
+            self._session_native_api, self._session_native_front,
+        )
+
+    def _trade_callback_scope_matches_locked(self, captured: object) -> bool:
+        if type(captured) is not tuple or len(captured) != 6:
+            return False
+        current = self._trade_callback_scope_locked()
+        if captured[4] is not current[4]:
+            return False
+        return all(
+            type(captured[index]) in (int, str, type(None))
+            and type(captured[index]) is type(current[index])
+            and captured[index] == current[index]
+            for index in (0, 1, 2, 3, 5)
+        )
+
+    def _push_trade_event(
+        self, trade_field, *, origin_api=None, origin_spi=None, callback_scope=None
+    ) -> None:
+        """Capture a fenced SPI trade; origin-free use is a synthetic legacy helper."""
         listeners: list[Any] = []
         payload: dict[str, Any] = {}
-        if snapshot:
-            self._trade_events.put(snapshot)
-            with self._query_state_lock:
+        callback = None
+        with self._query_state_lock:
+            if origin_spi is not None and (
+                origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+                or not self._trade_callback_scope_matches_locked(callback_scope)
+            ):
+                return
+            snapshot = _snapshot_ctp_field(trade_field)
+            # Native getters may re-enter Python while the RLock is held.
+            if origin_spi is not None and (
+                origin_spi._native_api is not origin_api
+                or not origin_spi._is_current_locked()
+                or not self._trade_callback_scope_matches_locked(callback_scope)
+            ):
+                return
+            if snapshot:
+                self._trade_events.put(snapshot)
                 if self._execution_listeners:
                     listeners = list(self._execution_listeners)
                     payload = self._execution_listener_payload_locked(snapshot)
+            callback = self.on_trade
         if listeners:
             self._emit_execution_listeners(listeners, "trade", payload)
-        if self.on_trade:
-            self.on_trade(trade_field)
+        if callback:
+            callback(trade_field)
 
     def _push_error_event(self, event_type, rsp_info=None, field=None, request_id=None) -> None:
         payload = {
