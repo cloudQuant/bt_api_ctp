@@ -537,5 +537,28 @@ strong-key encoding and ledger composition.
 The trade callback fence covers replacement or relogin after entry to the
 Python callback fence. It does not prove the provenance of a delayed event
 before that entry. These interfaces have only local synthetic validation;
-the trading-owner maintenance and live callback ledger path remain separate
-integration work.
+account and complete recovery acceptance remain separate.
+
+## Iteration 63 bounded callback capture
+
+`CtpGatewaySession` installs its `CtpGatewayReturnBuffer` on the same request
+Trader before native start. Order/trade and insert/action error capture checks
+the exact API/SPI and admitted session before and after reading native fields.
+Native trading day and receiving session are distinct. Ordinary direct callback
+delivery retains its existing behavior; this capture does not certify a delayed
+event's origin before entry into Python.
+
+The volatile buffer has record and logical-payload-byte limits, immutable rows,
+one outstanding non-destructive offer, and whole-prefix ACK. Overflow or invalid
+source marks a sticky gap without evicting retained rows. ACK does not clear a
+gap, and this buffer does not promise crash persistence or prove source by itself.
+Session closure retains the buffer's unacknowledged data in the session object.
+
+The session exposes a checked query-reader factory and validates exact offered
+records against its current source. Reader session validation is independent of
+query completion. A separate same-native check permits login changes only while
+the original Trader/API/SPI objects remain identical; a new reader must still
+validate the new login. These local checks do not grant trading permission.
+`rebind_same_native()` performs the old-object check, replacement reader
+construction and final source checks under the same Trader lock. Current-session
+checks also retain login front/session identity, not just a generation number.

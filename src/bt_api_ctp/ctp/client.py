@@ -4329,6 +4329,16 @@ class OneShotMdDiagnosticClient(MdClient):
 
 def _fence_trader_spi_callback(callback):
     is_trade_return = callback.__name__ == "OnRtnTrade"
+    return_callbacks = {
+        "OnRtnOrder": ("order", ("pOrder",)),
+        "OnRtnTrade": ("trade", ("pTrade",)),
+        "OnRspOrderInsert": ("insert_response", ("pInputOrder", "pRspInfo", "nRequestID", "bIsLast")),
+        "OnErrRtnOrderInsert": ("insert_error", ("pInputOrder", "pRspInfo")),
+        "OnRspOrderAction": ("action_response", ("pInputOrderAction", "pRspInfo", "nRequestID", "bIsLast")),
+        "OnErrRtnOrderAction": ("action_error", ("pOrderAction", "pRspInfo")),
+    }
+    return_spec = return_callbacks.get(callback.__name__)
+    return_kind = return_spec[0] if return_spec else None
 
     @wraps(callback)
     def guarded(self, *args, **kwargs):
@@ -4336,7 +4346,20 @@ def _fence_trader_spi_callback(callback):
         with client._query_state_lock:
             client._callback_inflight_refs += 1
             current = self._is_current_locked()
-            trade_scope = client._trade_callback_scope_locked() if current and is_trade_return else None
+            trade_scope = client._trade_callback_scope_locked() if current and return_kind else None
+            if return_kind and client._gateway_return_buffer is not None:
+                names = return_spec[1]
+                try:
+                    if (len(args) > len(names) or any(name not in names for name in kwargs)
+                            or any(name in kwargs for name in names[:len(args)])):
+                        raise ValueError("callback_arguments")
+                    normalized = args + tuple(kwargs[name] for name in names[len(args):])
+                except (KeyError, ValueError):
+                    client._gateway_return_buffer._mark_gap("source_failure")
+                else:
+                    client._capture_gateway_return_locked(
+                        self, return_kind, normalized, trade_scope, current
+                    )
         callback_state = client._native_callback_thread_state
         previous_depth = getattr(callback_state, "depth", 0)
         if current:
@@ -5521,6 +5544,8 @@ class TraderClient:
         self._last_commission_rate = None
         self._query_lock = threading.Lock()
         self._query_state_lock = threading.RLock()
+        self._gateway_return_buffer = None
+        self._gateway_return_environment = None
         self._query_history: dict[int, _QueryAccumulator] = {}
         # The vendor keeps one outstanding ReqQry* per session until its
         # terminal packet, even after a local timeout sealed the accumulator.
@@ -12722,6 +12747,84 @@ class TraderClient:
             self._order_events.put(snapshot)
         if self.on_order:
             self.on_order(order_field)
+
+    def _install_gateway_return_buffer(self, buffer, *, environment):
+        """Install the provider-owned return sink before starting the native API."""
+        from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer
+        with self._query_state_lock:
+            if (type(buffer) is not CtpGatewayReturnBuffer or type(environment) is not str
+                    or not environment or buffer._broker_id != self._bound_broker_id
+                    or buffer._investor_id != self._bound_user_id
+                    or self._gateway_return_buffer is not None
+                    or self._api is not None or self._spi is not None
+                    or self._connection_generation != 0):
+                raise ValueError("ctp_gateway_return_binding_invalid")
+            self._gateway_return_buffer = buffer
+            self._gateway_return_environment = environment
+
+    def _capture_gateway_return_locked(self, spi, kind, args, admission_scope, current):
+        """Snapshot a native callback with the exact query-session provenance."""
+        from bt_api_ctp.registered_sim_session import capture_query_session
+        buffer = self._gateway_return_buffer
+        try:
+            def check():
+                if (not current or spi._native_api is None or spi._native_api is not self._api
+                        or self._spi is not spi or self._session_native_api is not self._api
+                        or not spi._is_current_locked()
+                        or not self._trade_callback_scope_matches_locked(admission_scope)):
+                    raise ValueError("source")
+                binding = capture_query_session(self, environment=self._gateway_return_environment)
+                if (binding.broker_id != self._bound_broker_id
+                        or binding.investor_id != self._bound_user_id):
+                    raise ValueError("account")
+                return binding
+
+            before = check()
+            request_id = is_last = error_code = None
+            if kind not in {"order", "trade"}:
+                info = args[1]
+                if info is None:
+                    if kind.endswith("error"):
+                        raise ValueError("error")
+                    check()
+                    return
+                error_code = getattr(info, "ErrorID")
+                if type(error_code) is not int or (kind.endswith("error") and error_code == 0):
+                    raise ValueError("error")
+                if kind.endswith("response"):
+                    request_id, is_last = args[2], _native_callback_flag(args[3])
+                    if type(request_id) is not int or is_last is None:
+                        raise ValueError("response")
+            # Successful responses do not represent an error return. The
+            # native field may be absent on those callbacks.
+            if error_code == 0:
+                check()
+                return
+            field = args[0]
+            if field is None:
+                raise ValueError("field")
+            row = {}
+            for name in dir(field):
+                if name.startswith("_") or name in {"this", "thisown"}:
+                    continue
+                value = getattr(field, name)
+                if not callable(value):
+                    row[name] = value
+            for name, expected in (("BrokerID", self._bound_broker_id),
+                                   ("InvestorID", self._bound_user_id)):
+                if name in row and row[name] not in ("", expected):
+                    raise ValueError("account")
+            after = check()
+            if (before._issuer is not after._issuer or before._source_tags != after._source_tags
+                    or before.source_ref != after.source_ref or before.generation != after.generation):
+                raise ValueError("source")
+            buffer._append(kind=kind, row=row, source_ref=before.source_ref,
+                source_tags=before._source_tags, connection_generation=before.connection_generation,
+                reception_trading_day=before.trading_day, front_id=admission_scope[2],
+                session_id=admission_scope[3], request_id=request_id, is_last=is_last,
+                error_code=error_code)
+        except Exception:
+            buffer._mark_gap("source_failure")
 
     def _trade_callback_scope_locked(self) -> tuple[Any, ...]:
         """Session facts captured at callback admission and used under the lock."""

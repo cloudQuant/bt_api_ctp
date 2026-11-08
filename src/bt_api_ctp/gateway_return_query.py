@@ -161,26 +161,35 @@ class CtpGatewayReturnQueryReader:
         self._pid = os.getpid()
         self._thread = threading.current_thread()
         self._trader = trader
+        self._native_owner_trader = trader
         self._environment = environment
         try:
             with trader._query_state_lock:
-                binding = capture_query_session(trader, environment=environment)
+                scope = trader._trade_callback_scope_locked()
                 api, spi = trader._api, trader._spi
+                binding = capture_query_session(trader, environment=environment)
                 if (
                     api is None
                     or type(spi) is not _TraderSpi
                     or spi._native_api is not api
+                    or trader._api is not api or trader._spi is not spi
                     or trader._session_native_api is not api
+                    or not spi._is_current_locked()
                     or binding.broker_id != broker_id
                     or binding.investor_id != investor_id
                     or any(len(value.encode("utf-8")) > 256 for value in binding._source_tags[:4])
                     or not validate_query_session(trader, binding, now_monotonic=time.monotonic())
+                    or trader._api is not api or trader._spi is not spi
+                    or spi._native_api is not api or trader._session_native_api is not api
+                    or not spi._is_current_locked()
+                    or not trader._trade_callback_scope_matches_locked(scope)
                 ):
                     raise ValueError
+                self._binding, self._api, self._spi = binding, api, spi
+                self._callback_scope = scope
+                self._ticket: CtpGatewayReturnQueryBatch | None = None
         except Exception:
             raise CtpGatewayReturnQueryError("SESSION_UNTRUSTED") from None
-        self._binding, self._api, self._spi = binding, api, spi
-        self._ticket: CtpGatewayReturnQueryBatch | None = None
 
     def _check_owner(self) -> None:
         if os.getpid() != self._pid or threading.current_thread() is not self._thread:
@@ -204,10 +213,13 @@ class CtpGatewayReturnQueryReader:
     def _capture_locked(self) -> CtpQuerySessionBinding:
         trader = self._trader
         if (
-            trader._api is not self._api
+            trader is not self._native_owner_trader
+            or trader._api is not self._api
             or trader._spi is not self._spi
             or self._spi._native_api is not self._api
             or trader._session_native_api is not self._api
+            or not self._spi._is_current_locked()
+            or not trader._trade_callback_scope_matches_locked(self._callback_scope)
         ):
             raise CtpGatewayReturnQueryError("SESSION_CHANGED")
         try:
@@ -224,11 +236,52 @@ class CtpGatewayReturnQueryReader:
                 or current.trading_day != self._binding.trading_day
                 or current.broker_id != self._binding.broker_id
                 or current.investor_id != self._binding.investor_id
+                or self._trader is not trader or self._native_owner_trader is not trader
+                or trader._api is not self._api or trader._spi is not self._spi
+                or self._spi._native_api is not self._api
+                or trader._session_native_api is not self._api
+                or not self._spi._is_current_locked()
+                or not trader._trade_callback_scope_matches_locked(self._callback_scope)
             ):
                 raise ValueError
             return current
         except Exception:
             raise CtpGatewayReturnQueryError("SESSION_CHANGED") from None
+
+    def _assert_same_native_locked(self) -> None:
+        trader = self._native_owner_trader
+        if (self._trader is not trader or trader._api is not self._api
+                or trader._spi is not self._spi or self._spi._native_api is not self._api
+                or trader._session_native_api is not self._api
+                or not self._spi._is_current_locked()):
+            raise CtpGatewayReturnQueryError("SESSION_CHANGED")
+
+    def assert_same_native(self) -> None:
+        """Check exact native objects only; a changed login remains unverified."""
+        self._check_owner()
+        with self._native_owner_trader._query_state_lock:
+            self._assert_same_native_locked()
+
+    def rebind_same_native(self) -> CtpGatewayReturnQueryReader:
+        """Bind the current login atomically to this reader's exact native owner."""
+        self._check_owner()
+        trader = self._native_owner_trader
+        with trader._query_state_lock:
+            self._assert_same_native_locked()
+            rebound = CtpGatewayReturnQueryReader(
+                trader, environment=self._environment, broker_id=self._binding.broker_id,
+                investor_id=self._binding.investor_id,
+            )
+            self._assert_same_native_locked()
+            rebound._capture_locked()
+            self._assert_same_native_locked()
+            return rebound
+
+    def assert_session_current(self) -> None:
+        """Recheck the captured login and source without issuing a query or ticket."""
+        self._check_owner()
+        with self._trader._query_state_lock:
+            self._capture_locked()
 
     @staticmethod
     def _validate_result(

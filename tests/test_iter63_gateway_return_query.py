@@ -466,3 +466,194 @@ def test_real_typed_ctp_return_fields_survive_sealed_query(kind):
     batch = reader.read(kind=kind, timeout=1)
     assert batch.rows[0]["BrokerID"] == "9999" and batch.rows[0]["TradingDay"] == TODAY
     reader.assert_current(batch)
+
+
+def test_assert_session_current_does_not_query_or_change_ticket():
+    reader, _, native = _setup()
+    reader.assert_session_current()
+    assert native.request_count == 0 and reader._ticket is None
+    batch = reader.read(kind="orders", timeout=1)
+    reader.assert_session_current()
+    assert native.request_count == 1 and reader._ticket is batch
+    reader.assert_current(batch)
+
+
+@pytest.mark.parametrize("change", ["api", "spi", "relogin", "source_tags"])
+def test_assert_session_current_rejects_changed_source(change):
+    from bt_api_ctp.ctp.client import _TraderSpi
+    reader, client, native = _setup()
+    if change == "api":
+        client._api = object()
+    elif change == "spi":
+        client._spi = _TraderSpi(client, native)
+    elif change == "relogin":
+        _login(client, native, session_id=20)
+    else:
+        client._spi._native_spi_source_id = "replacement-source"
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_session_current()
+    assert native.request_count == 0 and reader._ticket is None
+
+
+def test_assert_session_current_rejects_nonowner_before_lock():
+    reader, client, _ = _setup()
+    errors = []
+    def outsider():
+        try:
+            reader.assert_session_current()
+        except CtpGatewayReturnQueryError as exc:
+            errors.append(exc.code)
+    with client._query_state_lock:
+        worker = threading.Thread(target=outsider)
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+    assert errors == ["OWNER_REQUIRED"]
+
+
+def test_assert_same_native_allows_same_api_spi_new_login(monkeypatch):
+    import test_iter62_settlement_readback_on_write as helpers
+    reader, client, native = _setup()
+    original_spi = client._spi
+    monkeypatch.setattr(helpers, "_TraderSpi", lambda _client, _native: original_spi)
+    _login(client, native, session_id=20, trading_day="20261109")
+    assert client._spi is original_spi and client._api is native
+    reader.assert_same_native()
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_session_current()
+    assert native.request_count == 0 and reader._ticket is None
+
+
+@pytest.mark.parametrize("change", ["trader", "api", "spi", "spi_api", "session_api"])
+def test_assert_same_native_rejects_changed_objects(change):
+    from bt_api_ctp.ctp.client import _TraderSpi
+    reader, client, native = _setup()
+    if change == "trader":
+        reader._trader = TraderClient(TD_FRONT, "9999", "account", "synthetic-only")
+    elif change == "api":
+        client._api = object()
+    elif change == "spi":
+        client._spi = _TraderSpi(client, native)
+    elif change == "spi_api":
+        client._spi._native_api = object()
+    else:
+        client._session_native_api = object()
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_same_native()
+    assert native.request_count == 0 and reader._ticket is None
+
+
+def test_assert_same_native_rejects_wrong_thread_and_pid_before_lock(monkeypatch):
+    import bt_api_ctp.gateway_return_query as module
+    reader, client, _ = _setup()
+    errors = []
+    def outsider():
+        try:
+            reader.assert_same_native()
+        except CtpGatewayReturnQueryError as exc:
+            errors.append(exc.code)
+    with client._query_state_lock:
+        worker = threading.Thread(target=outsider)
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+    assert errors == ["OWNER_REQUIRED"]
+    monkeypatch.setattr(module.os, "getpid", lambda: reader._pid + 1)
+    with pytest.raises(CtpGatewayReturnQueryError, match="OWNER_REQUIRED"):
+        reader.assert_same_native()
+
+
+@pytest.mark.parametrize("field", ["_front_id", "_session_id"])
+def test_session_scope_rejects_login_id_change_without_generation(field):
+    reader, client, _ = _setup()
+    generation = client._connection_generation
+    setattr(client, field, getattr(client, field) + 1)
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_session_current()
+    assert client._connection_generation == generation
+
+
+def test_reader_construction_rejects_reentrant_login_scope_change(monkeypatch):
+    import bt_api_ctp.gateway_return_query as module
+    _, client, _ = _setup()
+    original = module.capture_query_session
+    def change_scope(*args, **kwargs):
+        binding = original(*args, **kwargs)
+        client._session_id += 1
+        return binding
+    monkeypatch.setattr(module, "capture_query_session", change_scope)
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_UNTRUSTED"):
+        CtpGatewayReturnQueryReader(
+            client, environment="simnow", broker_id="9999", investor_id="account"
+        )
+
+
+def test_session_current_rechecks_scope_after_source_capture(monkeypatch):
+    import bt_api_ctp.gateway_return_query as module
+    reader, client, _ = _setup()
+    original = module.capture_query_session
+    def change_scope(*args, **kwargs):
+        binding = original(*args, **kwargs)
+        client._front_id += 1
+        return binding
+    monkeypatch.setattr(module, "capture_query_session", change_scope)
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_session_current()
+
+
+def test_rebind_same_native_accepts_new_login_and_preserves_old_ticket(monkeypatch):
+    import test_iter62_settlement_readback_on_write as helpers
+    reader, client, native = _setup()
+    ticket = reader.read(kind="orders", timeout=1)
+    original_spi = client._spi
+    monkeypatch.setattr(helpers, "_TraderSpi", lambda _client, _native: original_spi)
+    _login(client, native, session_id=20, trading_day="20261109")
+    rebound = reader.rebind_same_native()
+    assert rebound is not reader and rebound._trader is client
+    assert rebound._api is native and rebound._spi is original_spi
+    assert reader._ticket is ticket and rebound._ticket is None and native.request_count == 1
+    rebound.assert_session_current()
+    with pytest.raises(CtpGatewayReturnQueryError, match="SESSION_CHANGED"):
+        reader.assert_session_current()
+
+
+@pytest.mark.parametrize("change", ["api", "spi"])
+@pytest.mark.parametrize("check_number", [1, 2])
+def test_rebind_rejects_reentrant_replacement_between_check_and_construction(monkeypatch, change, check_number):
+    from bt_api_ctp.ctp.client import _TraderSpi
+    reader, client, native = _setup()
+    original = reader._assert_same_native_locked
+    checks = 0
+    def replace_after_check():
+        nonlocal checks
+        original()
+        checks += 1
+        if checks == check_number:
+            if change == "api":
+                client._api = object()
+            else:
+                client._spi = _TraderSpi(client, native)
+    monkeypatch.setattr(reader, "_assert_same_native_locked", replace_after_check)
+    with pytest.raises(CtpGatewayReturnQueryError):
+        reader.rebind_same_native()
+    assert reader._ticket is None and native.request_count == 0
+
+
+def test_rebind_rejects_wrong_owner_before_lock(monkeypatch):
+    import bt_api_ctp.gateway_return_query as module
+    reader, client, _ = _setup()
+    errors = []
+    def outsider():
+        try:
+            reader.rebind_same_native()
+        except CtpGatewayReturnQueryError as exc:
+            errors.append(exc.code)
+    with client._query_state_lock:
+        worker = threading.Thread(target=outsider)
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+    assert errors == ["OWNER_REQUIRED"]
+    monkeypatch.setattr(module.os, "getpid", lambda: reader._pid + 1)
+    with pytest.raises(CtpGatewayReturnQueryError, match="OWNER_REQUIRED"):
+        reader.rebind_same_native()

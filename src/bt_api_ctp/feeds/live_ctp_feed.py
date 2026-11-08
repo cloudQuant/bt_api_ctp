@@ -1248,6 +1248,7 @@ class CtpRequestData(Feed):
         self.request_logger = get_logger("ctp_feed")
         self._trader = None
         self._connect_lock = threading.Lock()
+        self._gateway_return_buffer = None
         self._connected = False
         self._connect_timeout = resolved_kwargs.get("connect_timeout", 15)
         self._execution_gate_capability: object | None = None
@@ -1268,6 +1269,18 @@ class CtpRequestData(Feed):
         ).strip().lower()
         if self.private_topic_mode not in ("quick", "restart", "resume"):
             raise ValueError("private_topic_mode must be quick, restart or resume")
+
+    def _install_gateway_return_buffer(self, buffer):
+        """Bind one exact provider buffer to a fresh request feed."""
+        from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer
+        with self._connect_lock:
+            if (type(buffer) is not CtpGatewayReturnBuffer or self._trader is not None
+                    or buffer._broker_id != self._execution_bound_broker_id
+                    or buffer._investor_id != self._execution_bound_user_id
+                    or self._connected is not False or self._managed_runtime_binding is not None
+                    or self._gateway_return_buffer is not None):
+                raise ValueError("ctp_gateway_return_binding_invalid")
+            self._gateway_return_buffer = buffer
 
     def _sdk_admission_binding_current(self) -> bool:
         return (
@@ -1801,6 +1814,10 @@ class CtpRequestData(Feed):
                 # connection, and a "not ready" refusal is retried on the same
                 # link with bounded backoff (iteration 62, continuity-7).
                 trader.session_retry_enabled = True
+                if self._gateway_return_buffer is not None:
+                    trader._install_gateway_return_buffer(
+                        self._gateway_return_buffer, environment=self._execution_bound_environment
+                    )
                 self._trader = trader
                 # No Join observer: the vendor Join() returns only after
                 # Release(), so an observed generation's stop could never be

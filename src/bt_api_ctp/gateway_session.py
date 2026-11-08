@@ -21,6 +21,9 @@ from bt_api_ctp.ctp.client import TraderClient
 from bt_api_ctp.direct_write_provider import CtpDirectWriteProvider
 from bt_api_ctp.feeds.live_ctp_feed import ConnectionState, CtpMarketStream, CtpRequestDataFuture
 from bt_api_ctp.market_provider import CtpQuoteV2MarketProvider
+from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer, CtpGatewayReturnRecord
+from bt_api_ctp.registered_sim_session import capture_query_session
+from bt_api_ctp.gateway_return_query import CtpGatewayReturnQueryReader
 from bt_api_ctp.trusted_flow import flow_binding, trusted_flow
 
 
@@ -52,7 +55,8 @@ class CtpGatewaySession:
                  stream_factory: Callable[[Any, Any], object], *, trusted_flow_root: object,
                  flow_account_scope: str, source_ref: str, entitlement_ref: str,
                  connect_timeout_seconds: float = 30.0, stop_timeout_seconds: float = 3.0,
-                 queue_capacity: int = 1024, observation_issuer: object | None = None,
+                 queue_capacity: int = 1024, return_buffer_capacity: int = 1024,
+                 observation_issuer: object | None = None,
                  observation_instruments: tuple[MarketInstrumentKey, ...] | None = None) -> None:
         if (type(account_key) is not AccountKey or account_key.provider != "ctp"
                 or account_key.venue != "simnow" or account_key.environment != "simnow"
@@ -69,6 +73,10 @@ class CtpGatewaySession:
         self._owner_pid = os.getpid()
         self._owner_thread = threading.current_thread()
         self._account_key = account_key
+        self._return_buffer = CtpGatewayReturnBuffer(
+            broker_id=account_key.subaccount_id, investor_id=account_key.account_id,
+            capacity=return_buffer_capacity,
+        )
         self._flow = trusted_flow(trusted_flow_root, flow_account_scope)
         if self._flow is None:
             raise CtpGatewaySessionError("INVALID_CONFIGURATION")
@@ -112,6 +120,7 @@ class CtpGatewaySession:
         feed = self._feed_factory()
         if (type(feed) is not CtpRequestDataFuture or feed._trader is not None
                 or feed._connected is not False or feed._managed_runtime_binding is not None
+                or feed._gateway_return_buffer is not None
                 or feed._execution_gate_capability is not None or feed.auto_settlement_confirm is not False
                 or flow_binding(feed._trusted_flow) != flow_binding(self._flow)
                 or feed._execution_bound_broker_id != self._account_key.subaccount_id
@@ -126,6 +135,7 @@ class CtpGatewaySession:
                 or not feed._execution_bound_td_front or not feed._execution_bound_md_front):
             raise CtpGatewaySessionError("FEED_BINDING_INVALID")
         feed._trusted_flow.verify_root()
+        feed._install_gateway_return_buffer(self._return_buffer)
         feed._connect_timeout = min(self._connect_timeout, self._requested_timeout)
         self._feed = feed
         return feed
@@ -177,6 +187,45 @@ class CtpGatewaySession:
         except BaseException:
             self._state = "failed"
             raise
+
+    @property
+    def return_buffer(self) -> CtpGatewayReturnBuffer:
+        self._check_owner()
+        return self._return_buffer
+
+    def create_return_query_reader(self) -> CtpGatewayReturnQueryReader:
+        self._require_connected()
+        return CtpGatewayReturnQueryReader(
+            self._trader, environment=self._account_key.environment,
+            broker_id=self._account_key.subaccount_id, investor_id=self._account_key.account_id,
+        )
+
+    def assert_return_record_current(self, record: CtpGatewayReturnRecord) -> None:
+        """Validate an offered record against the exact current native session."""
+        self._require_connected()
+        try:
+            with self._trader._query_state_lock:
+                trader = self._trader
+                api, spi = trader._api, trader._spi
+                if (not self._return_buffer._contains_record(record)
+                        or api is None or spi is None or spi._native_api is not api
+                        or not spi._is_current_locked() or trader._session_native_api is not api):
+                    raise ValueError
+                binding = capture_query_session(trader, environment=self._account_key.environment)
+                if (binding.broker_id != self._account_key.subaccount_id
+                        or binding.investor_id != self._account_key.account_id
+                        or record.source_ref != binding.source_ref
+                        or record.source_tags != binding._source_tags
+                        or record.connection_generation != binding.connection_generation
+                        or record.reception_trading_day != binding.trading_day
+                        or record.front_id != trader._front_id
+                        or record.session_id != trader._session_id
+                        or trader._api is not api or trader._spi is not spi
+                        or trader._session_native_api is not api
+                        or not self._return_buffer._contains_record(record)):
+                    raise ValueError
+        except Exception:
+            raise CtpGatewaySessionError("RETURN_SOURCE_UNTRUSTED") from None
 
     @property
     def direct_provider(self) -> CtpDirectWriteProvider:
