@@ -49,6 +49,7 @@ class CtpGatewayReturnRecord:
     request_id: int | None
     is_last: bool | None
     error_code: int | None
+    login_request_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,7 @@ def _freeze_record_data(
     request_id: object,
     is_last: object,
     error_code: object,
+    login_request_id: object,
 ) -> tuple[Mapping[str, str | int | float], int]:
     if type(kind) is not str or kind not in _KINDS:
         raise ValueError
@@ -115,10 +117,14 @@ def _freeze_record_data(
         raise ValueError
     if error_code is not None and not _integer(error_code):
         raise ValueError
+    if login_request_id is not None and (
+        not _integer(login_request_id) or login_request_id <= 0
+    ):
+        raise ValueError
     if is_last is not None and type(is_last) is not bool:
         raise ValueError
     # Account for all retained fixed-width scalar slots, including sequence.
-    total += 8 * 8 + 1
+    total += 8 * 9 + 1
     if type(row) is not dict or not 1 <= len(row) <= 256:
         raise ValueError
     copied: dict[str, str | int | float] = {}
@@ -207,6 +213,7 @@ class CtpGatewayReturnBuffer:
         request_id: int | None = None,
         is_last: bool | None = None,
         error_code: int | None = None,
+        login_request_id: int | None = None,
     ) -> bool:
         if os.getpid() != self._pid:
             raise CtpGatewayReturnBufferError("OWNER_REQUIRED")
@@ -224,6 +231,7 @@ class CtpGatewayReturnBuffer:
                     request_id=request_id,
                     is_last=is_last,
                     error_code=error_code,
+                    login_request_id=login_request_id,
                 )
             except Exception:
                 self._set_gap_locked("invalid_record")
@@ -248,6 +256,7 @@ class CtpGatewayReturnBuffer:
                 request_id,
                 is_last,
                 error_code,
+                login_request_id,
             )
             self._rows.append((record, size))
             self._byte_count += size

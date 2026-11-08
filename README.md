@@ -576,3 +576,8 @@ Native calls release the Trader state lock. Provider and SDK coordinator seriali
 ### Iteration 63 R16: cancellation readiness without I/O
 
 `CtpDirectWriteProvider.assert_cancel_ready(expected_account_binding=...)` checks the already existing Trader/login under the provider and Trader locks and optionally compares a caller-pinned account binding. It does not connect, query, confirm settlement or grant write permission. Gateway composition uses the startup binding; prepared cancellation and the final native gate still verify source and `CANCEL` authorization. This source-level capability and synthetic checks do not establish account acceptance or asynchronous cancellation-error attribution.
+
+
+### Iteration 63 R17: cancellation callback attribution
+
+New prepared cancels bind the registered Python source, source-tag digest and sealed login request to their dispatch scope before native entry. Positive action-response/action-error callbacks are projected only after exact account, request, action, target and source checks. Old preparations without source binding cannot be attributed by backfilling reception values. These checks describe Python reception and current session identity, not the vendor's internal callback enqueue context; actual field echo behavior still needs separately authorized account evidence. Successful action responses do not establish an order cancellation, and insert-error handling and cross-day cancellation remain separate gaps.

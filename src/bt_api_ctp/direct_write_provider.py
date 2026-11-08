@@ -24,7 +24,6 @@ path serves simulation and production accounts (D62-01/02).
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import threading
@@ -1207,6 +1206,7 @@ class CtpDirectWriteProvider:
         from bt_api_base.gateway_direct_protocol import validate_gateway_native_identity
 
         from bt_api_ctp.ctp.client import canonical_ctp_instrument
+        from bt_api_ctp.gateway_cancel_source import cancel_attempt_key, capture_cancel_source_locked
 
         try:
             validate_gateway_native_identity(target)
@@ -1272,6 +1272,7 @@ class CtpDirectWriteProvider:
                 raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
             with lock:
                 scope = self._cancel_session_locked(trader)
+                original_api, original_spi = trader._api, trader._spi
                 if original_day != scope[3]:
                     raise DirectWriteError("ctp_prepared_cancel_cross_day_unproven")
                 if len(self._cancel_reservations) >= 8192:
@@ -1282,6 +1283,15 @@ class CtpDirectWriteProvider:
                 broker, investor, fingerprint, day, generation, dispatch_front, dispatch_session = (
                     scope[:7]
                 )
+                try:
+                    source_binding = capture_cancel_source_locked(
+                        trader, environment=trader._gateway_return_environment
+                    )
+                    if (self._cancel_session_locked(trader) != scope
+                            or trader._api is not original_api or trader._spi is not original_spi):
+                        raise ValueError
+                except Exception:
+                    raise DirectWriteError("ctp_prepared_cancel_source_unavailable") from None
                 action = {
                     "BrokerID": broker,
                     "InvestorID": investor,
@@ -1309,25 +1319,14 @@ class CtpDirectWriteProvider:
                     "DispatchFrontID": dispatch_front,
                     "DispatchSessionID": dispatch_session,
                 }
-                key_material = json.dumps(
-                    [
-                        "ctp-cancel-v1",
-                        broker,
-                        investor,
-                        day,
-                        dispatch_front,
-                        dispatch_session,
-                        request_id,
-                        request_id,
-                    ],
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                )
-                request_key = (
-                    "ctp-cancel-v1:" + hashlib.sha256(key_material.encode("ascii")).hexdigest()
+                request_key = cancel_attempt_key(
+                    broker=broker, investor=investor, day=day, front=dispatch_front,
+                    session=dispatch_session, request_id=request_id, action_ref=request_id,
+                    source_binding=source_binding,
                 )
                 prepared = PreparedCancelRequest(
-                    uuid4().hex, target, symbol, day, generation, action, (request_key,)
+                    uuid4().hex, target, symbol, day, generation, action, (request_key,),
+                    source_binding=source_binding,
                 )
                 ticket = _PreparedCancelTicket(
                     prepared,
@@ -1372,6 +1371,7 @@ class CtpDirectWriteProvider:
         self._prepared_cancel_access()
         from bt_api_ctp.ctp import client as ctp_client
         from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcInputOrderActionField
+        from bt_api_ctp.gateway_cancel_source import capture_cancel_source_locked
 
         with self._lock:
             ticket = self._cancel_ticket(prepared)
@@ -1409,6 +1409,9 @@ class CtpDirectWriteProvider:
                         or trader._spi is not ticket.spi
                         or trader.is_trading_ready is not True
                         or prepared.digest() != ticket.digest
+                        or capture_cancel_source_locked(
+                            trader, environment=trader._gateway_return_environment
+                        ) != dict(prepared.source_binding or {})
                     ):
                         raise DirectWriteError("ctp_prepared_cancel_session_changed")
                     for name, expected in native_fields.items():

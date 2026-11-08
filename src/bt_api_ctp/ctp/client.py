@@ -12788,13 +12788,19 @@ class TraderClient:
                         or not spi._is_current_locked()
                         or not self._trade_callback_scope_matches_locked(admission_scope)):
                     raise ValueError("source")
+                login = self._current_login_identity_locked()
+                if login is None:
+                    raise ValueError("account")
                 binding = capture_query_session(self, environment=self._gateway_return_environment)
                 if (binding.broker_id != self._bound_broker_id
-                        or binding.investor_id != self._bound_user_id):
+                        or binding.investor_id != self._bound_user_id
+                        or login is not self._current_login_identity_locked()
+                        or type(login.request_id) is not int or login.request_id <= 0
+                        or not self._trade_callback_scope_matches_locked(admission_scope)):
                     raise ValueError("account")
-                return binding
+                return binding, login
 
-            before = check()
+            before, login_before = check()
             request_id = is_last = error_code = None
             if kind not in {"order", "trade"}:
                 info = args[1]
@@ -12829,15 +12835,17 @@ class TraderClient:
                                    ("InvestorID", self._bound_user_id)):
                 if name in row and row[name] not in ("", expected):
                     raise ValueError("account")
-            after = check()
+            after, login_after = check()
             if (before._issuer is not after._issuer or before._source_tags != after._source_tags
-                    or before.source_ref != after.source_ref or before.generation != after.generation):
+                    or before.source_ref != after.source_ref or before.generation != after.generation
+                    or login_before is not login_after
+                    or login_before.request_id != login_after.request_id):
                 raise ValueError("source")
             buffer._append(kind=kind, row=row, source_ref=before.source_ref,
                 source_tags=before._source_tags, connection_generation=before.connection_generation,
                 reception_trading_day=before.trading_day, front_id=admission_scope[2],
                 session_id=admission_scope[3], request_id=request_id, is_last=is_last,
-                error_code=error_code)
+                error_code=error_code, login_request_id=login_before.request_id)
         except Exception:
             buffer._mark_gap("source_failure")
 

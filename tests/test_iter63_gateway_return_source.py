@@ -242,3 +242,42 @@ def test_invalid_callback_arguments_mark_gap_and_retain_python_error(prepared, a
     assert session.return_buffer.status().gap_reason == "source_failure"
     assert session.return_buffer.status().record_count == 0
     assert session.close() is True
+
+
+def test_action_capture_binds_sealed_login_and_rejects_login_replacement(prepared):
+    from dataclasses import replace
+    from bt_api_ctp.gateway_session import CtpGatewaySessionError
+    create, _, _, feeds, _, _, _, _ = prepared
+    session = create()
+    session.connect(generation="service", timeout=1)
+    trader = feeds[0].trader_client
+    trader._spi.OnRspOrderAction(row(), SimpleNamespace(ErrorID=42), 124, False)
+    record = session.return_buffer.offer().records[0]
+    assert record.login_request_id == trader._current_login_identity_locked().request_id
+    session.assert_return_record_current(record)
+    trader._login_identity_observation = replace(
+        trader._login_identity_observation,
+        request_id=trader._login_identity_observation.request_id + 1,
+    )
+    with pytest.raises(CtpGatewaySessionError, match="RETURN_SOURCE_UNTRUSTED"):
+        session.assert_return_record_current(record)
+    assert session.close() is True
+
+
+def test_action_capture_rejects_login_mutation_during_native_field_read(prepared):
+    from dataclasses import replace
+    create, _, _, feeds, _, _, _, _ = prepared
+    session = create()
+    session.connect(generation="service", timeout=1)
+    trader = feeds[0].trader_client
+    class ChangedLogin:
+        @property
+        def BrokerID(self):
+            login = trader._login_identity_observation
+            trader._login_identity_observation = replace(login, request_id=login.request_id + 1)
+            return "9999"
+        InvestorID = "account"
+    trader._spi.OnRspOrderAction(ChangedLogin(), SimpleNamespace(ErrorID=42), 124, True)
+    assert session.return_buffer.status().gap
+    assert session.return_buffer.status().record_count == 0
+    assert session.close() is True

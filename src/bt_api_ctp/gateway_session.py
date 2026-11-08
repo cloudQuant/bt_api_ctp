@@ -211,6 +211,7 @@ class CtpGatewaySession:
                         or api is None or spi is None or spi._native_api is not api
                         or not spi._is_current_locked() or trader._session_native_api is not api):
                     raise ValueError
+                login = trader._current_login_identity_locked()
                 binding = capture_query_session(trader, environment=self._account_key.environment)
                 if (binding.broker_id != self._account_key.subaccount_id
                         or binding.investor_id != self._account_key.account_id
@@ -222,6 +223,10 @@ class CtpGatewaySession:
                         or record.session_id != trader._session_id
                         or trader._api is not api or trader._spi is not spi
                         or trader._session_native_api is not api
+                        or (record.kind in {"action_response", "action_error"} and (
+                            login is None or login is not trader._current_login_identity_locked()
+                            or type(record.login_request_id) is not int
+                            or record.login_request_id != login.request_id))
                         or not self._return_buffer._contains_record(record)):
                     raise ValueError
         except Exception:
