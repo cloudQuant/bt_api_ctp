@@ -1093,6 +1093,47 @@ class CtpDirectWriteProvider:
         if threading.current_thread() is not self._owner_thread:
             raise DirectWriteError("ctp_direct_wrong_owner")
 
+    def assert_cancel_ready(self, *, expected_account_binding: str | None = None) -> None:
+        """Check an existing login, optionally against a caller-pinned account binding.
+
+        The expected value is a caller-established consistency check; neither
+        it nor a successful observation grants cancellation authority.
+        """
+        self._prepared_cancel_access()
+        if expected_account_binding is not None:
+            try:
+                if (
+                    type(expected_account_binding) is not str
+                    or not expected_account_binding
+                    or len(expected_account_binding) > 256
+                    or expected_account_binding != expected_account_binding.strip()
+                    or not expected_account_binding.isprintable()
+                    or len(expected_account_binding.encode("utf-8", errors="strict")) > 256
+                ):
+                    raise ValueError
+            except (ValueError, UnicodeError):
+                raise DirectWriteError("ctp_prepared_cancel_session_unavailable") from None
+        with self._lock:
+            self._prepared_cancel_access()
+            if self._owner_closing or self._owner_closed or self._monitor_closed:
+                raise DirectWriteError("ctp_direct_provider_closed")
+            trader = self._feed.trader_client
+            if trader is None or getattr(trader, "_query_state_lock", None) is None:
+                raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+            try:
+                with trader._query_state_lock:
+                    if self._owner_closing or self._owner_closed or self._monitor_closed:
+                        raise DirectWriteError("ctp_direct_provider_closed")
+                    scope = self._cancel_session_locked(trader)
+                    if self._owner_closing or self._owner_closed or self._monitor_closed:
+                        raise DirectWriteError("ctp_direct_provider_closed")
+                    if expected_account_binding is not None and scope[2] != expected_account_binding:
+                        raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+            except DirectWriteError:
+                raise
+            except Exception:
+                raise DirectWriteError("ctp_prepared_cancel_session_unavailable") from None
+
     def _cancel_session_locked(self, trader: Any) -> tuple[Any, ...]:
         """Capture the exact current login without connecting or issuing requests."""
         feed = self._feed

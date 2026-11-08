@@ -571,3 +571,8 @@ The explicit `CtpDirectWriteProvider.prepare_cancel_order`, `submit_prepared_can
 CTP preparation currently requires the target's original trading day to equal the current dispatch day. An old-day OrderRef or OrderSysID does not prove that the old order is still the same active target: without authoritative continuity evidence, preparation rejects with `ctp_prepared_cancel_cross_day_unproven` before allocating a request number. The neutral DTO's ability to represent different days does not establish cross-day CTP cancellation support.
 
 Native calls release the Trader state lock. Provider and SDK coordinator serialization locks still exist; synthetic tests of the built-in SPI listener path do not establish deadlock safety for arbitrary third-party callbacks. A zero native return only acknowledges request submission; cancellation completion and cancel-error attribution require separate authoritative returns. No account acceptance is implied by this source API.
+
+
+### Iteration 63 R16: cancellation readiness without I/O
+
+`CtpDirectWriteProvider.assert_cancel_ready(expected_account_binding=...)` checks the already existing Trader/login under the provider and Trader locks and optionally compares a caller-pinned account binding. It does not connect, query, confirm settlement or grant write permission. Gateway composition uses the startup binding; prepared cancellation and the final native gate still verify source and `CANCEL` authorization. This source-level capability and synthetic checks do not establish account acceptance or asynchronous cancellation-error attribution.
