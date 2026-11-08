@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import threading
 import time
@@ -36,6 +37,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from bt_api_base.direct_cancel_protocol import PreparedCancelRequest
+from bt_api_base.direct_place_protocol import PreparedPlaceRequest
 from bt_api_base.direct_write_protocol import (
     DirectAccountFacts,
     DirectBalanceFact,
@@ -128,6 +130,18 @@ class _SettlementObservationTicket:
 @dataclass(repr=False)
 class _PreparedCancelTicket:
     prepared: PreparedCancelRequest
+    digest: str
+    trader: Any
+    api: Any
+    spi: Any
+    session: tuple[Any, ...]
+    owner_thread: threading.Thread
+    pid: int
+
+
+@dataclass(repr=False)
+class _PreparedPlaceTicket:
+    prepared: PreparedPlaceRequest
     digest: str
     trader: Any
     api: Any
@@ -570,6 +584,7 @@ class CtpDirectWriteProvider:
         self._listening_trader: Any = None
         self._reservations: dict[str, DirectOrderReservation] = {}
         self._cancel_reservations: dict[str, _PreparedCancelTicket] = {}
+        self._place_reservations: dict[str, _PreparedPlaceTicket] = {}
         self._settlement_ticket: _SettlementObservationTicket | None = None
         self._cycle_id = f"ctp-direct-{uuid4().hex}"
         self._strategy_identity_sha256 = hashlib.sha256(
@@ -1086,6 +1101,309 @@ class CtpDirectWriteProvider:
                 identity=reservation.identity,
                 error_code="ctp_native_insert_returned_nonzero",
             )
+
+    def prepare_order(self, request: Any) -> PreparedPlaceRequest:
+        """Reserve exact CTP place identity and fields without network or query I/O."""
+        self._prepared_cancel_access()
+        from bt_api_ctp.ctp.client import canonical_ctp_instrument
+        from bt_api_ctp.execution_instrument import canonical_ctp_bundle_wire_instrument
+        from bt_api_ctp.feeds.live_ctp_feed import (
+            CTP_DIRECTION_FLAG,
+            CTP_OFFSET_FLAG,
+            _positive_ctp_price,
+            _positive_int_lot,
+        )
+        from bt_api_ctp.gateway_place_source import capture_place_source_locked, place_attempt_key
+        from bt_api_ctp.order_request_mapping import map_order_request
+
+        try:
+            exchange = getattr(request, "exchange_id", None)
+            symbol = getattr(request, "symbol", None)
+            hedge_flag = getattr(request, "hedge_flag", None)
+            hedge_class = getattr(request, "hedge_class", None)
+            quantity_unit = getattr(request, "quantity_unit", None)
+            if (
+                type(exchange) is not str
+                or not exchange
+                or exchange != exchange.strip()
+                or type(symbol) is not str
+                or not symbol
+                or symbol != symbol.strip()
+                or not canonical_ctp_instrument(symbol, exchange)
+                or not canonical_ctp_bundle_wire_instrument(symbol, exchange)
+                or (hedge_flag is not None and (type(hedge_flag) is not str or hedge_flag != "1"))
+                or (
+                    hedge_class is not None
+                    and (type(hedge_class) is not str or hedge_class != "speculation")
+                )
+                or type(quantity_unit) is not str
+                or quantity_unit not in {"contracts", "lots", "native"}
+            ):
+                raise ValueError
+            mapped = map_order_request(request)
+            side, order_kind = mapped["order_type"].split("-", 1)
+            if (
+                order_kind != "limit"
+                or side not in CTP_DIRECTION_FLAG
+                or mapped["offset"] not in CTP_OFFSET_FLAG
+            ):
+                raise ValueError
+            quantity = _positive_int_lot(mapped["vol"], "volume")
+            if not 0 < quantity < 2**31:
+                raise ValueError
+            price = _positive_ctp_price(mapped["price"])
+            if type(price) is not float or not math.isfinite(price) or price <= 0:
+                raise ValueError
+            price_hex = price.hex()
+            if float.fromhex(price_hex).hex() != price_hex:
+                raise ValueError
+        except Exception:
+            raise DirectWriteError("ctp_prepared_place_request_invalid") from None
+        with self._lock:
+            if self._owner_closing or self._owner_closed or self._monitor_closed:
+                raise DirectWriteError("ctp_direct_provider_closed")
+            trader = self._feed.trader_client
+            if trader is None or getattr(trader, "_query_state_lock", None) is None:
+                raise DirectWriteError("ctp_prepared_place_session_unavailable")
+            with trader._query_state_lock:
+                try:
+                    scope = self._cancel_session_locked(trader)
+                    api, spi = trader._api, trader._spi
+                    source = capture_place_source_locked(
+                        trader, environment=trader._gateway_return_environment
+                    )
+                    if (
+                        self._cancel_session_locked(trader) != scope
+                        or trader._api is not api
+                        or trader._spi is not spi
+                    ):
+                        raise ValueError
+                    if len(self._place_reservations) >= 8192:
+                        raise DirectWriteError("ctp_prepared_place_capacity")
+                    broker, investor = scope[:2]
+                    if (
+                        any(
+                            len(value.encode("utf-8", errors="strict")) > 256
+                            for value in (broker, investor)
+                        )
+                        or type(trader._max_order_ref) is not int
+                        or not 0 <= trader._max_order_ref < 999_999_999_999
+                        or type(trader._req_id) is not int
+                        or not 0 <= trader._req_id < 2**31 - 1
+                    ):
+                        raise ValueError
+                    raw_ref = trader.next_order_ref()
+                    if type(raw_ref) is not str or not raw_ref.isascii() or not raw_ref.isdigit():
+                        raise ValueError
+                    order_ref = f"{int(raw_ref):012d}"
+                    request_id = trader._next_request_id()
+                    if (
+                        len(order_ref) != 12
+                        or type(request_id) is not int
+                        or not 0 < request_id < 2**31
+                    ):
+                        raise ValueError
+                    if (
+                        self._cancel_session_locked(trader) != scope
+                        or trader._api is not api
+                        or trader._spi is not spi
+                        or capture_place_source_locked(
+                            trader, environment=trader._gateway_return_environment
+                        )
+                        != source
+                    ):
+                        raise ValueError
+                except DirectWriteError:
+                    raise
+                except Exception:
+                    raise DirectWriteError("ctp_prepared_place_session_unavailable") from None
+                broker, investor, _, day, generation, front, session = scope[:7]
+                identity = NativeOrderIdentity(
+                    CTP_DIRECT_WRITE_EXCHANGE,
+                    order_ref,
+                    {
+                        "order_ref": order_ref,
+                        "front_id": front,
+                        "session_id": session,
+                        "trading_day": day,
+                        "exchange_id": exchange,
+                    },
+                    generation,
+                )
+                fields = {
+                    "BrokerID": broker,
+                    "InvestorID": investor,
+                    "UserID": investor,
+                    "InstrumentID": symbol,
+                    "ExchangeID": exchange,
+                    "Direction": CTP_DIRECTION_FLAG[side],
+                    "CombOffsetFlag": CTP_OFFSET_FLAG[mapped["offset"]],
+                    "CombHedgeFlag": "1",
+                    "VolumeTotalOriginal": quantity,
+                    "MinVolume": 1,
+                    "ForceCloseReason": "0",
+                    "IsAutoSuspend": 0,
+                    "UserForceClose": 0,
+                    "ContingentCondition": "1",
+                    "OrderPriceType": "2",
+                    "TimeCondition": "3",
+                    "VolumeCondition": "1",
+                    "LimitPrice": price_hex,
+                    "OrderRef": order_ref,
+                    "RequestID": request_id,
+                }
+                key = place_attempt_key(
+                    broker=broker,
+                    investor=investor,
+                    day=day,
+                    front=front,
+                    session=session,
+                    request_id=request_id,
+                    order_ref=order_ref,
+                    source_binding=source,
+                )
+                prepared = PreparedPlaceRequest(
+                    uuid4().hex, identity, symbol, day, generation, fields, (key,), source
+                )
+                self._place_reservations[prepared.reservation_id] = _PreparedPlaceTicket(
+                    prepared,
+                    prepared.digest(),
+                    trader,
+                    api,
+                    spi,
+                    scope,
+                    threading.current_thread(),
+                    os.getpid(),
+                )
+                return prepared
+
+    def _place_ticket(self, prepared: PreparedPlaceRequest) -> _PreparedPlaceTicket:
+        if type(prepared) is not PreparedPlaceRequest:
+            raise DirectWriteError("ctp_prepared_place_unknown")
+        ticket = self._place_reservations.get(prepared.reservation_id)
+        try:
+            valid = (
+                ticket is not None
+                and ticket.prepared is prepared
+                and ticket.pid == os.getpid()
+                and ticket.owner_thread is threading.current_thread()
+                and prepared.digest() == ticket.digest
+            )
+        except Exception:
+            valid = False
+        if not valid:
+            raise DirectWriteError("ctp_prepared_place_unknown")
+        return ticket
+
+    def release_prepared_order(self, prepared: PreparedPlaceRequest) -> None:
+        self._prepared_cancel_access()
+        with self._lock:
+            self._place_ticket(prepared)
+            del self._place_reservations[prepared.reservation_id]
+
+    def submit_prepared_order(
+        self, prepared: PreparedPlaceRequest, grant: WriteGrant, verifier: WriteGrantVerifier
+    ) -> DirectSubmitResult:
+        self._prepared_cancel_access()
+        from bt_api_ctp.ctp import client as ctp_client
+        from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcInputOrderField
+        from bt_api_ctp.gateway_place_source import capture_place_source_locked
+
+        with self._lock:
+            ticket = self._place_ticket(prepared)
+            del self._place_reservations[prepared.reservation_id]
+        trader = ticket.trader
+        outcome = ctp_client._CtpNativeRequestDispatchOutcome()
+        try:
+            with trader._query_state_lock:
+                if (
+                    self._cancel_session_locked(trader) != ticket.session
+                    or trader._api is not ticket.api
+                    or trader._spi is not ticket.spi
+                    or trader.is_trading_ready is not True
+                    or self._owner_closing
+                    or self._owner_closed
+                    or self._monitor_closed
+                ):
+                    raise ValueError
+            capability = self._admitted_capability(trader)
+            self._ensure_armed(
+                trader, capability, prepared.symbol, prepared.request_fields["ExchangeID"]
+            )
+            field = CThostFtdcInputOrderField()
+            native_fields = dict(prepared.request_fields)
+            price_hex = native_fields["LimitPrice"]
+            price = float.fromhex(price_hex)
+            if (
+                type(price_hex) is not str
+                or not math.isfinite(price)
+                or price <= 0
+                or price.hex() != price_hex
+            ):
+                raise ValueError
+            for name, value in native_fields.items():
+                setattr(field, name, price if name == "LimitPrice" else value)
+
+            def check_source_and_fields() -> None:
+                if (
+                    os.getpid() != ticket.pid
+                    or threading.current_thread() is not ticket.owner_thread
+                    or self._owner_closing
+                    or self._owner_closed
+                    or self._monitor_closed
+                    or self._cancel_session_locked(trader) != ticket.session
+                    or trader._api is not ticket.api
+                    or trader._spi is not ticket.spi
+                    or trader.is_trading_ready is not True
+                    or prepared.digest() != ticket.digest
+                    or capture_place_source_locked(
+                        trader, environment=trader._gateway_return_environment
+                    )
+                    != dict(prepared.source_binding)
+                ):
+                    raise ValueError
+                for name, expected in native_fields.items():
+                    actual = getattr(field, name)
+                    if name == "LimitPrice":
+                        if (
+                            type(actual) is not float
+                            or not math.isfinite(actual)
+                            or actual.hex() != expected
+                        ):
+                            raise ValueError
+                    elif type(actual) is not type(expected) or actual != expected:
+                        raise ValueError
+
+            def final_check() -> None:
+                check_source_and_fields()
+                verifier.consume(
+                    grant,
+                    exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+                    operation=WriteOperation.PLACE,
+                    session_generation=prepared.session_generation,
+                )
+                check_source_and_fields()
+
+            ret = trader.submit_order_insert(
+                field,
+                native_fields["RequestID"],
+                execution_capability=capability,
+                _prepared_place_pre_dispatch=final_check,
+                _prepared_place_dispatch_outcome=outcome,
+            )
+        except Exception:
+            return DirectSubmitResult(
+                None if outcome.native_call_started else False,
+                prepared.identity,
+                "ctp_prepared_place_outcome_unknown"
+                if outcome.native_call_started
+                else "ctp_prepared_place_not_sent",
+            )
+        if type(ret) is not int:
+            return DirectSubmitResult(None, prepared.identity, "ctp_prepared_place_outcome_unknown")
+        return DirectSubmitResult(
+            ret == 0, prepared.identity, None if ret == 0 else "ctp_native_insert_returned_nonzero"
+        )
 
     def _prepared_cancel_access(self) -> None:
         self._check_access()
@@ -2284,6 +2602,7 @@ class CtpDirectWriteProvider:
             thread.join(_READBACK_MONITOR_JOIN_TIMEOUT)
         with self._lock:
             self._cancel_reservations.clear()
+            self._place_reservations.clear()
         trader = self._listening_trader
         if trader is not None:
             try:

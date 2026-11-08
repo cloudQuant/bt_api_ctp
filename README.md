@@ -581,3 +581,12 @@ Native calls release the Trader state lock. Provider and SDK coordinator seriali
 ### Iteration 63 R17: cancellation callback attribution
 
 New prepared cancels bind the registered Python source, source-tag digest and sealed login request to their dispatch scope before native entry. Positive action-response/action-error callbacks are projected only after exact account, request, action, target and source checks. Old preparations without source binding cannot be attributed by backfilling reception values. These checks describe Python reception and current session identity, not the vendor's internal callback enqueue context; actual field echo behavior still needs separately authorized account evidence. Successful action responses do not establish an order cancellation, and insert-error handling and cross-day cancellation remain separate gaps.
+
+
+### Iteration 63 R19 prepared placement
+
+`prepare_order`, `submit_prepared_order`, and `release_prepared_order` support explicitly selected Gateway placement. Preparation uses the existing Trader and sealed login without network/query I/O, allocates OrderRef and RequestID before the durable marker, and returns a single-use provider ticket. Native entry rechecks the exact source and complete outgoing fields and consumes the grant in the existing final hook while preserving insert history/evidence; the native call remains outside the state lock.
+
+Preparation requires an explicit exchange, positive whole `contracts`/`lots`/`native` quantities, and speculative hedge settings. `base` quantities and unsupported hedge choices are rejected before allocation. The persisted LimitPrice is the canonical `float.hex()` of the actual finite positive native double; callback comparison uses the same representation. The ordinary direct mapping is unchanged.
+
+`gateway_place_return_projection` requires a positive insert error, exact request ID, full echoed request fields and matching persisted source/day/generation. Missing RequestID or historical preparation is not guessed. Its result is a request-error observation, not an order terminal state or proof of venue callback enqueue time. Account/native acceptance remains separate from synthetic Python tests.

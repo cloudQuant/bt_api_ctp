@@ -223,7 +223,7 @@ class CtpGatewaySession:
                         or record.session_id != trader._session_id
                         or trader._api is not api or trader._spi is not spi
                         or trader._session_native_api is not api
-                        or (record.kind in {"action_response", "action_error"} and (
+                        or (record.kind in {"action_response", "action_error", "insert_response", "insert_error"} and (
                             login is None or login is not trader._current_login_identity_locked()
                             or type(record.login_request_id) is not int
                             or record.login_request_id != login.request_id))

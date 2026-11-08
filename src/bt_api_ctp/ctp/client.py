@@ -8735,8 +8735,19 @@ class TraderClient:
         execution_capability: object | None = None,
         runtime_order_id: str | None = None,
         managed_intent_id: str | None = None,
+        _prepared_place_pre_dispatch: Callable[[], None] | None = None,
+        _prepared_place_dispatch_outcome: _CtpNativeRequestDispatchOutcome | None = None,
     ) -> Any:
         """Submit one order and retain its exact native callback evidence."""
+
+        if (_prepared_place_pre_dispatch is None) != (_prepared_place_dispatch_outcome is None):
+            raise CtpExecutionGateError("ctp_prepared_place_hook_invalid")
+        if _prepared_place_pre_dispatch is not None and (
+            not callable(_prepared_place_pre_dispatch)
+            or type(_prepared_place_dispatch_outcome) is not _CtpNativeRequestDispatchOutcome
+            or _prepared_place_dispatch_outcome.native_call_started is not False
+        ):
+            raise CtpExecutionGateError("ctp_prepared_place_hook_invalid")
 
         with self._query_state_lock:
             if self._callback_ingress is not None:
@@ -8805,7 +8816,11 @@ class TraderClient:
                     user_id=native_field_user_id,
                 )
             )
-        dispatch_outcome = _CtpNativeRequestDispatchOutcome()
+        dispatch_outcome = (
+            _CtpNativeRequestDispatchOutcome()
+            if _prepared_place_dispatch_outcome is None
+            else _prepared_place_dispatch_outcome
+        )
         attempt_evidence: CtpOrderInsertEvidence | None = None
         attempt_count_recorded = False
 
@@ -8817,6 +8832,8 @@ class TraderClient:
                 known_request_id == request_id for known_request_id, _ in self._order_insert_history
             ):
                 raise CtpExecutionGateError("ctp_execution_gate_order_insert_request_id_reused")
+            if _prepared_place_pre_dispatch is not None:
+                _prepared_place_pre_dispatch()
             evidence = CtpOrderInsertEvidence(
                 request_id=request_id,
                 order_ref=identity.order_ref,
