@@ -54,6 +54,7 @@ from bt_api_ctp.instrument import (
     ctp_query_bundle_errors,
 )
 from bt_api_ctp.query import QueryResult
+from bt_api_ctp.trusted_flow import flow_binding, flow_options, trusted_flow
 
 _CTP_MONOTONIC_NS = time.monotonic_ns
 _CTP_MONOTONIC_CLOCK_SOURCE = time.get_clock_info("monotonic").implementation
@@ -1217,6 +1218,9 @@ class CtpRequestData(Feed):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         super().__init__(data_queue)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self._trusted_flow = trusted_flow(
+            resolved_kwargs.get("trusted_flow_root"), resolved_kwargs.get("flow_account_scope")
+        )
         self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
         self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.ctp_environment = resolved_kwargs.get("ctp_environment", "custom")
@@ -1732,10 +1736,16 @@ class CtpRequestData(Feed):
                     raise ctp_client.CtpExecutionGateError(
                         "ctp_runtime_feed_client_unavailable"
                     )
+                if getattr(trader, "trusted_flow_binding", None) != flow_binding(self._trusted_flow):
+                    raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
                 self._trader = trader
                 self._connected = True
                 return
             trader = self._trader
+            if trader is not None and getattr(trader, "trusted_flow_binding", None) != flow_binding(
+                self._trusted_flow
+            ):
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             if trader is None:
                 trader = ctp_client.TraderClient(
                     self._execution_bound_td_front,
@@ -1755,7 +1765,10 @@ class CtpRequestData(Feed):
                         if self._execution_bound_profile == "config_front_pair"
                         else None
                     ),
+                    **flow_options(self._trusted_flow),
                 )
+                if getattr(trader, "trusted_flow_binding", None) != flow_binding(self._trusted_flow):
+                    raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
                 if self._execution_gate_capability is not None:
                     trader.configure_execution_gate(self._execution_gate_capability)
                 trader.private_topic_resume_type = _PRIVATE_TOPIC_RESUME_TYPES[
@@ -2605,6 +2618,9 @@ class CtpMarketStream(BaseDataStream):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self._trusted_flow = trusted_flow(
+            resolved_kwargs.get("trusted_flow_root"), resolved_kwargs.get("flow_account_scope")
+        )
         self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
         self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.md_front = resolved_kwargs.get("md_front", "")
@@ -3358,9 +3374,12 @@ class CtpMarketStream(BaseDataStream):
                 if self._allow_zero_md_login_response
                 else {}
             )
+            md_client_options.update(flow_options(self._trusted_flow))
             client = ctp_client.MdClient(
                 self.md_front, self.broker_id, self.user_id, self.password, **md_client_options
             )
+            if getattr(client, "trusted_flow_binding", None) != flow_binding(self._trusted_flow):
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             self._md_client = client
             # Bind the callback to this concrete client and its lifecycle
             # token.  A late callback from a stopped/replaced client cannot be
@@ -4006,6 +4025,9 @@ class CtpTradeStream(BaseDataStream):
         self._request_feed = kwargs.pop("request_feed", None)
         super().__init__(data_queue, **kwargs)
         resolved_kwargs, self.ctp_env_name = _resolve_ctp_runtime_kwargs(kwargs)
+        self._trusted_flow = trusted_flow(
+            resolved_kwargs.get("trusted_flow_root"), resolved_kwargs.get("flow_account_scope")
+        )
         self.ctp_env_profile = resolved_kwargs.get("ctp_env_profile", self.ctp_env_name)
         self.ctp_env_readiness = resolved_kwargs.get("ctp_env_readiness", "unknown")
         self.td_front = resolved_kwargs.get("td_front", "")
@@ -4029,6 +4051,9 @@ class CtpTradeStream(BaseDataStream):
                 "ctp_execution_gate_auto_settlement_confirm_enabled"
             )
         if self._request_feed is not None:
+            if flow_binding(getattr(self._request_feed, "_trusted_flow", None)) != flow_binding(self._trusted_flow):
+                self.state = ConnectionState.ERROR
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             request_profile = getattr(self._request_feed, "_execution_bound_profile", None)
             if request_profile == "config_front_pair" and (
                 self.ctp_env_profile != request_profile
@@ -4039,12 +4064,21 @@ class CtpTradeStream(BaseDataStream):
             ):
                 self.state = ConnectionState.ERROR
                 raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
+            existing_trader = self._request_feed.trader_client
+            if existing_trader is not None and getattr(
+                existing_trader, "trusted_flow_binding", None
+            ) != flow_binding(self._trusted_flow):
+                self.state = ConnectionState.ERROR
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             self._request_feed.connect()
             self._trader = self._request_feed.trader_client
             self._owns_trader = False
             if self._trader is None:
                 self.state = ConnectionState.ERROR
                 raise BtConnectionError("CTP", "shared request feed has no TraderClient")
+            if getattr(self._trader, "trusted_flow_binding", None) != flow_binding(self._trusted_flow):
+                self.state = ConnectionState.ERROR
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             if getattr(self._trader, "auto_settlement_confirm", None) is not False:
                 raise ctp_client.CtpExecutionGateError(
                     "ctp_execution_gate_auto_settlement_confirm_enabled"
@@ -4069,7 +4103,10 @@ class CtpTradeStream(BaseDataStream):
                 ctp_env_profile=(
                     self.ctp_env_profile if self.ctp_env_profile == "config_front_pair" else None
                 ),
+                **flow_options(self._trusted_flow),
             )
+            if getattr(self._trader, "trusted_flow_binding", None) != flow_binding(self._trusted_flow):
+                raise ctp_client.CtpExecutionGateError("ctp_trusted_flow_binding_mismatch")
             self._owns_trader = True
         self._trader.on_order = self._on_order
         self._trader.on_trade = self._on_trade

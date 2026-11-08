@@ -413,3 +413,20 @@ MIT 许可证 - 详见 [LICENSE](LICENSE)。
 
 - 通过 [GitHub Issues](https://github.com/cloudQuant/bt_api_ctp/issues) 反馈问题
 - 邮箱: yunjinqi@gmail.com
+
+### Iteration 63 opt-in persistent flow directories
+
+`TraderClient`, `MdClient` and the CTP request/market/trade stream constructors
+accept paired `trusted_flow_root` and `flow_account_scope` options. The existing
+absolute root is bound at construction; SHA256 account directories contain
+separate `td` and `md` flow directories. POSIX directories must be 0700, so this
+slice supports one OS user. Shared-group/ACL deployments and Windows ACL
+validation remain unverified. Directory identities are checked before native
+creation; the final native string-path open still relies on trusted permissions.
+
+Without these options, direct clients keep their existing temporary path.
+Borrowed Trader clients must match the configured binding. One-shot MD
+diagnostics keep their separate temporary lifetime. These directories do not
+provide an account lock, writer fencing or proof of account identity.
+Gateway daily settlement confirmation is an SDK-controlled workflow; enabling
+the old native auto_settlement_confirm option remains unsupported.

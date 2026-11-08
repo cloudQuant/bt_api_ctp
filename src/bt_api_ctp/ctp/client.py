@@ -92,6 +92,8 @@ from bt_api_ctp.query import (
     _QuerySessionScope,
 )
 
+from bt_api_ctp.trusted_flow import flow_binding, trusted_flow
+
 from . import _ctp_base
 from ._ctp_base import (
     CtpNativeAbiError,
@@ -2700,9 +2702,13 @@ class MdClient:
             非空账号字段必须匹配。默认严格匹配请求编号和账号字段。
     """
 
-    def __init__(self, front, broker_id, user_id, password, *, allow_zero_login_response=False):
+    def __init__(
+        self, front, broker_id, user_id, password, *, allow_zero_login_response=False,
+        trusted_flow_root=None, flow_account_scope=None,
+    ):
         if type(allow_zero_login_response) is not bool:
             raise ValueError("allow_zero_login_response must be an exact bool")
+        self._trusted_flow = trusted_flow(trusted_flow_root, flow_account_scope)
         self.front = front
         self.broker_id = broker_id
         self.user_id = user_id
@@ -3561,8 +3567,8 @@ class MdClient:
             raise ValueError("join_observer=False cannot be combined with block=True")
         _check_native_module()
         generation = self._reserve_start_generation()
-        flow = self._native_flow_dir()
         try:
+            flow = self._native_flow_dir()
             api = CThostFtdcMdApi.CreateFtdcMdApi(flow)
             _register_ctp_native_api(api)
             with self._state_lock:
@@ -3675,7 +3681,13 @@ class MdClient:
     def _create_md_spi(self, api: Any) -> _MdSpi:
         return _MdSpi(self, api)
 
+    @property
+    def trusted_flow_binding(self):
+        return flow_binding(self._trusted_flow)
+
     def _native_flow_dir(self) -> str:
+        if self._trusted_flow is not None:
+            return self._trusted_flow.native_path("md")
         return _flow_dir(f"md_{self._bound_broker_id}_{self._bound_user_id}")
 
     def wait_ready(self, timeout=15, *, should_stop: Callable[[], bool] | None = None):
@@ -5357,6 +5369,10 @@ class TraderClient:
         auth_code: 认证码
     """
 
+    @property
+    def trusted_flow_binding(self):
+        return flow_binding(self._trusted_flow)
+
     def __init__(
         self,
         front,
@@ -5369,7 +5385,10 @@ class TraderClient:
         *,
         md_front: str | None = None,
         ctp_env_profile: str | None = None,
+        trusted_flow_root=None,
+        flow_account_scope=None,
     ):
+        self._trusted_flow = trusted_flow(trusted_flow_root, flow_account_scope)
         if (md_front is None) != (ctp_env_profile is None):
             raise ValueError("explicit CTP front pair and profile must be supplied together")
         if ctp_env_profile is not None:
@@ -10364,9 +10383,16 @@ class TraderClient:
             self._last_stop_join_required = False
             self._last_stop_join_thread = None
             self._last_stop_join_tracker = None
-        with self._query_state_lock:
-            self._require_bound_identity_locked(require_active_front=False)
-        flow = _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
+        try:
+            with self._query_state_lock:
+                self._require_bound_identity_locked(require_active_front=False)
+            flow = (
+                self._trusted_flow.native_path("td") if self._trusted_flow is not None
+                else _flow_dir(f"td_{self._bound_broker_id}_{self._bound_user_id}")
+            )
+        except BaseException:
+            self._clear_start_reservation(generation)
+            raise
         api = None
         api_attempt_id = uuid.uuid4().hex
         with self._query_state_lock:
