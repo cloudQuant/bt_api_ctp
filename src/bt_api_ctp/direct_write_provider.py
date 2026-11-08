@@ -24,6 +24,7 @@ path serves simulation and production accounts (D62-01/02).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -35,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
+from bt_api_base.direct_cancel_protocol import PreparedCancelRequest
 from bt_api_base.direct_write_protocol import (
     DirectAccountFacts,
     DirectBalanceFact,
@@ -122,6 +124,18 @@ class _SettlementObservationTicket:
     pid: int
     expires_at: float
     consumed: bool = False
+
+
+@dataclass(repr=False)
+class _PreparedCancelTicket:
+    prepared: PreparedCancelRequest
+    digest: str
+    trader: Any
+    api: Any
+    spi: Any
+    session: tuple[Any, ...]
+    owner_thread: threading.Thread
+    pid: int
 
 _DIRECTION = {"0": "buy", "1": "sell"}
 _OFFSET = {
@@ -556,6 +570,7 @@ class CtpDirectWriteProvider:
         self._dropped_logged_at: Optional[float] = None
         self._listening_trader: Any = None
         self._reservations: dict[str, DirectOrderReservation] = {}
+        self._cancel_reservations: dict[str, _PreparedCancelTicket] = {}
         self._settlement_ticket: _SettlementObservationTicket | None = None
         self._cycle_id = f"ctp-direct-{uuid4().hex}"
         self._strategy_identity_sha256 = hashlib.sha256(
@@ -1071,6 +1086,331 @@ class CtpDirectWriteProvider:
                 sent=False,
                 identity=reservation.identity,
                 error_code="ctp_native_insert_returned_nonzero",
+            )
+
+    def _prepared_cancel_access(self) -> None:
+        self._check_access()
+        if threading.current_thread() is not self._owner_thread:
+            raise DirectWriteError("ctp_direct_wrong_owner")
+
+    def _cancel_session_locked(self, trader: Any) -> tuple[Any, ...]:
+        """Capture the exact current login without connecting or issuing requests."""
+        feed = self._feed
+        api, spi = getattr(trader, "_api", None), getattr(trader, "_spi", None)
+        broker, investor = (
+            getattr(trader, "_bound_broker_id", None),
+            getattr(trader, "_bound_user_id", None),
+        )
+        fingerprint = getattr(trader, "_account_fingerprint", None)
+        if (
+            feed.trader_client is not trader
+            or (not self._allow_implicit_connect and self._bound_gateway_trader is not trader)
+            or api is None
+            or spi is None
+            or getattr(trader, "_session_native_api", None) is not api
+            or getattr(spi, "_native_api", None) is not api
+            or type(broker) is not str
+            or not broker
+            or broker != feed.broker_id
+            or type(investor) is not str
+            or not investor
+            or investor != feed.user_id
+            or type(fingerprint) is not str
+            or fingerprint
+            != hashlib.sha256((broker + ":" + investor).encode("utf-8")).hexdigest()[:16]
+            or trader.is_read_only_ready is not True
+        ):
+            raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+        state = trader.get_session_state()
+        if type(state) is not dict:
+            raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+        front, session = state.get("front_id"), state.get("session_id")
+        generation, day = state.get("connection_generation"), state.get("trading_day")
+        if (
+            type(front) is not int
+            or not 0 < front < 2**31
+            or type(session) is not int
+            or not 0 < session < 2**31
+            or type(generation) is not int
+            or not 0 < generation < 2**63
+            or type(day) is not str
+            or len(day) != 8
+            or not day.isascii()
+            or not day.isdigit()
+            or state.get("account_fingerprint") != fingerprint
+            or getattr(trader, "_session_native_front", None)
+            != getattr(trader, "_bound_front", None)
+            or type(getattr(trader, "_native_api_generation", None)) is not int
+            or type(getattr(trader, "_native_api_source_id", None)) is not str
+        ):
+            raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+        return (
+            broker,
+            investor,
+            fingerprint,
+            day,
+            generation,
+            front,
+            session,
+            trader._native_api_generation,
+            trader._native_api_source_id,
+            trader._session_native_front,
+            trader._login_request_id,
+        )
+
+    def prepare_cancel_order(
+        self, target: NativeOrderIdentity, symbol: str
+    ) -> PreparedCancelRequest:
+        """Prepare one source-bound action without invoking a native request."""
+        self._prepared_cancel_access()
+        from bt_api_base.gateway_direct_protocol import validate_gateway_native_identity
+
+        from bt_api_ctp.ctp.client import canonical_ctp_instrument
+
+        try:
+            validate_gateway_native_identity(target)
+            if (
+                target.exchange_name != CTP_DIRECT_WRITE_EXCHANGE
+                or type(symbol) is not str
+                or not symbol
+                or symbol != symbol.strip()
+            ):
+                raise ValueError
+            fields = target.fields
+            original_day = fields.get("trading_day")
+            if (
+                type(original_day) is not str
+                or len(original_day) != 8
+                or not original_day.isascii()
+                or not original_day.isdigit()
+            ):
+                raise ValueError
+            exchange = fields.get("exchange_id", "")
+            if (
+                type(exchange) is not str
+                or not exchange
+                or exchange != exchange.strip()
+                or not canonical_ctp_instrument(symbol, exchange)
+            ):
+                raise ValueError
+            ref = fields.get("order_ref") or target.client_order_id
+            front, session = fields.get("front_id"), fields.get("session_id")
+            native_id, raw_id = fields.get("order_sys_id"), fields.get("order_sys_id_raw")
+            if ref is not None and (type(ref) is not str or not ref or ref != ref.strip()):
+                raise ValueError
+            if (
+                fields.get("order_ref")
+                and target.client_order_id
+                and fields["order_ref"] != target.client_order_id
+            ):
+                raise ValueError
+            ref_target = bool(
+                ref
+                and type(front) is int
+                and 0 < front < 2**31
+                and type(session) is int
+                and 0 < session < 2**31
+            )
+            venue_target = bool(
+                type(native_id) is str and native_id and native_id == native_id.strip()
+            )
+            if raw_id is not None and (
+                type(raw_id) is not str or not venue_target or raw_id.strip() != native_id
+            ):
+                raise ValueError
+            if not ref_target and not venue_target:
+                raise ValueError
+        except Exception:
+            raise DirectWriteError("ctp_prepared_cancel_target_invalid") from None
+        with self._lock:
+            trader = self._feed.trader_client
+            if trader is None:
+                raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+            lock = getattr(trader, "_query_state_lock", None)
+            if lock is None:
+                raise DirectWriteError("ctp_prepared_cancel_session_unavailable")
+            with lock:
+                scope = self._cancel_session_locked(trader)
+                if original_day != scope[3]:
+                    raise DirectWriteError("ctp_prepared_cancel_cross_day_unproven")
+                if len(self._cancel_reservations) >= 8192:
+                    raise DirectWriteError("ctp_prepared_cancel_capacity")
+                request_id = trader._next_request_id()
+                if type(request_id) is not int or not 0 < request_id < 2**31:
+                    raise DirectWriteError("ctp_prepared_cancel_request_id_invalid")
+                broker, investor, fingerprint, day, generation, dispatch_front, dispatch_session = (
+                    scope[:7]
+                )
+                action = {
+                    "BrokerID": broker,
+                    "InvestorID": investor,
+                    "UserID": investor,
+                    "InstrumentID": symbol,
+                    "ExchangeID": exchange,
+                    "ActionFlag": "0",
+                    "RequestID": request_id,
+                    "OrderActionRef": request_id,
+                    "OrderRef": ref if ref_target else "",
+                    "FrontID": front if ref_target else 0,
+                    "SessionID": session if ref_target else 0,
+                    "OrderSysID": ""
+                    if ref_target
+                    else (raw_id if raw_id is not None else native_id),
+                    "LimitPrice": "0",
+                    "VolumeChange": 0,
+                    "reserve1": "",
+                    "InvestUnitID": "",
+                    "reserve2": "",
+                    "MacAddress": "",
+                    "IPAddress": "",
+                    "OrderMemo": "",
+                    "SessionReqSeq": 0,
+                    "DispatchFrontID": dispatch_front,
+                    "DispatchSessionID": dispatch_session,
+                }
+                key_material = json.dumps(
+                    [
+                        "ctp-cancel-v1",
+                        broker,
+                        investor,
+                        day,
+                        dispatch_front,
+                        dispatch_session,
+                        request_id,
+                        request_id,
+                    ],
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+                request_key = (
+                    "ctp-cancel-v1:" + hashlib.sha256(key_material.encode("ascii")).hexdigest()
+                )
+                prepared = PreparedCancelRequest(
+                    uuid4().hex, target, symbol, day, generation, action, (request_key,)
+                )
+                ticket = _PreparedCancelTicket(
+                    prepared,
+                    prepared.digest(),
+                    trader,
+                    trader._api,
+                    trader._spi,
+                    scope,
+                    threading.current_thread(),
+                    os.getpid(),
+                )
+                self._cancel_reservations[prepared.reservation_id] = ticket
+                return prepared
+
+    def _cancel_ticket(self, prepared: PreparedCancelRequest) -> _PreparedCancelTicket:
+        if type(prepared) is not PreparedCancelRequest:
+            raise DirectWriteError("ctp_prepared_cancel_unknown")
+        ticket = self._cancel_reservations.get(prepared.reservation_id)
+        try:
+            valid = (
+                ticket is not None
+                and ticket.prepared is prepared
+                and ticket.pid == os.getpid()
+                and ticket.owner_thread is threading.current_thread()
+                and prepared.digest() == ticket.digest
+            )
+        except Exception:
+            valid = False
+        if not valid:
+            raise DirectWriteError("ctp_prepared_cancel_unknown")
+        return ticket
+
+    def release_cancel_reservation(self, prepared: PreparedCancelRequest) -> None:
+        self._prepared_cancel_access()
+        with self._lock:
+            self._cancel_ticket(prepared)
+            del self._cancel_reservations[prepared.reservation_id]
+
+    def submit_prepared_cancel(
+        self, prepared: PreparedCancelRequest, grant: WriteGrant, verifier: WriteGrantVerifier
+    ) -> DirectSubmitResult:
+        self._prepared_cancel_access()
+        from bt_api_ctp.ctp import client as ctp_client
+        from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcInputOrderActionField
+
+        with self._lock:
+            ticket = self._cancel_ticket(prepared)
+            del self._cancel_reservations[prepared.reservation_id]
+            trader = ticket.trader
+            outcome = ctp_client._CtpNativeRequestDispatchOutcome()
+            try:
+                with trader._query_state_lock:
+                    if (
+                        self._cancel_session_locked(trader) != ticket.session
+                        or trader._api is not ticket.api
+                        or trader._spi is not ticket.spi
+                    ):
+                        raise DirectWriteError("ctp_prepared_cancel_session_changed")
+                self._settlement_readback_for_write(trader)
+                capability = self._admitted_capability(trader)
+                self._ensure_armed(
+                    trader, capability, prepared.symbol, prepared.request_fields["ExchangeID"]
+                )
+                field = CThostFtdcInputOrderActionField()
+                native_fields = {
+                    k: v
+                    for k, v in prepared.request_fields.items()
+                    if k not in {"DispatchFrontID", "DispatchSessionID"}
+                }
+                for name, value in native_fields.items():
+                    setattr(field, name, 0.0 if name == "LimitPrice" else value)
+
+                def check_source_and_fields() -> None:
+                    if (
+                        os.getpid() != ticket.pid
+                        or threading.current_thread() is not ticket.owner_thread
+                        or self._cancel_session_locked(trader) != ticket.session
+                        or trader._api is not ticket.api
+                        or trader._spi is not ticket.spi
+                        or trader.is_trading_ready is not True
+                        or prepared.digest() != ticket.digest
+                    ):
+                        raise DirectWriteError("ctp_prepared_cancel_session_changed")
+                    for name, expected in native_fields.items():
+                        actual = getattr(field, name)
+                        if name == "LimitPrice":
+                            if type(actual) is not float or actual != 0.0:
+                                raise DirectWriteError("ctp_prepared_cancel_field_changed")
+                        elif type(actual) is not type(expected) or actual != expected:
+                            raise DirectWriteError("ctp_prepared_cancel_field_changed")
+
+                def final_check() -> None:
+                    check_source_and_fields()
+                    verifier.consume(
+                        grant,
+                        exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+                        operation=WriteOperation.CANCEL,
+                        session_generation=prepared.session_generation,
+                    )
+                    check_source_and_fields()
+
+                ret = trader.submit_order_action(
+                    field,
+                    prepared.request_fields["RequestID"],
+                    execution_capability=capability,
+                    _prepared_cancel_pre_dispatch=final_check,
+                    _prepared_cancel_dispatch_outcome=outcome,
+                )
+            except Exception:
+                return DirectSubmitResult(
+                    None if outcome.native_call_started else False,
+                    prepared.target_identity,
+                    "ctp_prepared_cancel_outcome_unknown"
+                    if outcome.native_call_started
+                    else "ctp_prepared_cancel_not_sent",
+                )
+            if type(ret) is not int:
+                return DirectSubmitResult(
+                    None, prepared.target_identity, "ctp_prepared_cancel_outcome_unknown"
+                )
+            return DirectSubmitResult(
+                ret == 0,
+                prepared.target_identity,
+                None if ret == 0 else "ctp_native_action_returned_nonzero",
             )
 
     def cancel_order(
@@ -1898,6 +2238,8 @@ class CtpDirectWriteProvider:
             stop.set()
         if thread is not None and thread is not threading.current_thread():
             thread.join(_READBACK_MONITOR_JOIN_TIMEOUT)
+        with self._lock:
+            self._cancel_reservations.clear()
         trader = self._listening_trader
         if trader is not None:
             try:

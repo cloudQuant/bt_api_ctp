@@ -9108,6 +9108,8 @@ class TraderClient:
         managed_intent_id: str | None = None,
         runtime_action_id: str | None = None,
         managed_cancel_intent_id: str | None = None,
+        _prepared_cancel_pre_dispatch: Callable[[], None] | None = None,
+        _prepared_cancel_dispatch_outcome: _CtpNativeRequestDispatchOutcome | None = None,
     ) -> Any:
         """Submit one gated cancellation and retain its exact callback target.
 
@@ -9128,7 +9130,19 @@ class TraderClient:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_invalid")
             if time.monotonic() >= deadline_monotonic:
                 raise CtpExecutionGateError("ctp_execution_gate_cancel_deadline_expired")
-        dispatch_outcome = _CtpNativeRequestDispatchOutcome()
+        if (_prepared_cancel_pre_dispatch is None) != (_prepared_cancel_dispatch_outcome is None):
+            raise CtpExecutionGateError("ctp_prepared_cancel_hook_invalid")
+        if _prepared_cancel_pre_dispatch is not None and (
+            not callable(_prepared_cancel_pre_dispatch)
+            or type(_prepared_cancel_dispatch_outcome) is not _CtpNativeRequestDispatchOutcome
+            or _prepared_cancel_dispatch_outcome.native_call_started is not False
+        ):
+            raise CtpExecutionGateError("ctp_prepared_cancel_hook_invalid")
+        dispatch_outcome = (
+            _CtpNativeRequestDispatchOutcome()
+            if _prepared_cancel_dispatch_outcome is None
+            else _prepared_cancel_dispatch_outcome
+        )
         request_count_recorded = False
 
         managed_cancel = _validate_managed_cancel_identity(
@@ -9265,6 +9279,7 @@ class TraderClient:
                 direct_write_authorization=direct_authorization,
                 deadline_monotonic=deadline_monotonic,
                 dispatch_outcome=dispatch_outcome,
+                pre_dispatch=_prepared_cancel_pre_dispatch,
             )
         except BaseException:
             with self._query_state_lock:

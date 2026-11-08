@@ -562,3 +562,12 @@ validate the new login. These local checks do not grant trading permission.
 `rebind_same_native()` performs the old-object check, replacement reader
 construction and final source checks under the same Trader lock. Current-session
 checks also retain login front/session identity, not just a generation number.
+
+
+### Iteration 63: prepared native cancellation (R15)
+
+The explicit `CtpDirectWriteProvider.prepare_cancel_order`, `submit_prepared_cancel` and `release_cancel_reservation` path fixes RequestID/OrderActionRef, action fields and the exact existing API/SPI/login before the SDK persists a dispatch marker. Preparation never connects a missing trader or sends a native request. Only the original provider-issued preparation can be consumed once. The final Trader state-lock hook rechecks source and fields and consumes the SDK grant; the existing native-call-started observation distinguishes a pre-entry rejection from an uncertain entered call.
+
+CTP preparation currently requires the target's original trading day to equal the current dispatch day. An old-day OrderRef or OrderSysID does not prove that the old order is still the same active target: without authoritative continuity evidence, preparation rejects with `ctp_prepared_cancel_cross_day_unproven` before allocating a request number. The neutral DTO's ability to represent different days does not establish cross-day CTP cancellation support.
+
+Native calls release the Trader state lock. Provider and SDK coordinator serialization locks still exist; synthetic tests of the built-in SPI listener path do not establish deadlock safety for arbitrary third-party callbacks. A zero native return only acknowledges request submission; cancellation completion and cancel-error attribution require separate authoritative returns. No account acceptance is implied by this source API.
