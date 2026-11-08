@@ -566,7 +566,10 @@ def _scripted(*, verified=True):
     feed._make_order_native = make_order_native
     feed._cancel_order_native = cancel_order_native
     if verified:
-        assert provider.settlement_status() is SettlementStatus.CONFIRMED
+        # This fake has no sealed query source; seed only the write-path
+        # retry fixture instead of promoting its status as venue evidence.
+        assert provider.settlement_status() is SettlementStatus.UNKNOWN
+        provider._note_trading_ready(trader)
     return provider, trader, sent
 
 
@@ -736,8 +739,7 @@ def test_no_readback_while_a_confirmation_is_pending_or_failed():
 def test_explicit_confirmation_also_marks_the_day_verified():
     provider, trader, sent = _scripted(verified=False)
     trader.relogin()
-    trader.outcomes = ["unconfirmed"]
-    assert provider.settlement_status() is SettlementStatus.UNCONFIRMED
+    assert provider.settlement_status() is SettlementStatus.UNKNOWN
     assert provider.confirm_settlement(_grant(trader.generation), Verifier()) is (
         SettlementStatus.CONFIRMED
     )
@@ -745,7 +747,7 @@ def test_explicit_confirmation_also_marks_the_day_verified():
     trader.relogin()
     assert _place(provider).sent is True
     assert trader.confirm_calls == 1
-    assert len(trader.verify_timeouts) == 2
+    assert len(trader.verify_timeouts) == 1
 
 
 def test_session_change_during_the_readback_refuses_the_place():
@@ -919,7 +921,7 @@ def test_one_monitor_thread_across_reconnects_and_none_after_close(fast_monitor)
     provider.close()
     assert _monitor_threads() == []
     # A closed provider does not start it again.
-    assert provider.settlement_status() is SettlementStatus.CONFIRMED
+    assert provider.settlement_status() is SettlementStatus.UNKNOWN
     assert _monitor_threads() == []
 
 
@@ -930,7 +932,8 @@ def test_monitor_ends_when_the_feed_releases_its_session(fast_monitor):
     _wait_for(lambda: _monitor_threads() == [])
 
     provider._feed._trader = trader
-    assert provider.settlement_status() is SettlementStatus.CONFIRMED
+    assert provider.settlement_status() is SettlementStatus.UNKNOWN
+    provider._note_trading_ready(trader)
     assert len(_monitor_threads()) == 1  # restarted by the next ready observation
 
 
@@ -964,3 +967,231 @@ def test_trading_ready_write_skips_the_session_state_read():
     assert provider._settlement_readback_for_write(trader) is False
     assert trader.state_reads == 0
     assert trader.verify_timeouts == []
+
+
+def test_r05_wrong_account_readback_cannot_report_unconfirmed():
+    provider, client, native = _real_setup()
+    _login(client, native, session_id=20)
+
+    def query(_field, request_id):
+        native.calls.append("query_settlement")
+        client._handle_query_callback(
+            "settlement_confirmation",
+            SimpleNamespace(BrokerID="9999", InvestorID="other", ConfirmDate=TODAY),
+            None, request_id, True,
+        )
+        return 0
+
+    native.ReqQrySettlementInfoConfirm = query
+    assert provider.settlement_status() is SettlementStatus.UNKNOWN
+    assert native.calls == ["query_settlement"]
+    assert client.is_trading_ready is False
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([], SettlementStatus.UNCONFIRMED),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": "20261105"}], SettlementStatus.UNCONFIRMED),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": TODAY}], SettlementStatus.CONFIRMED),
+        ([{"BrokerID": "9999", "InvestorID": "other", "ConfirmDate": TODAY}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "", "ConfirmDate": TODAY}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": ""}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": "20261131"}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": "20261109"}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": TODAY}, {"BrokerID": "9999", "InvestorID": "other", "ConfirmDate": TODAY}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": TODAY}, {"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": "20261105"}], SettlementStatus.UNKNOWN),
+        ([{"BrokerID": "9999", "InvestorID": "account", "TradingDay": TODAY, "ConfirmDate": "20261105"}], SettlementStatus.UNKNOWN),
+    ],
+    ids=["empty", "old", "current", "wrong-account", "missing-account", "missing-day", "bad-day", "future-day", "mixed-account", "mixed-day", "conflicting-days"],
+)
+def test_r05_source_bound_full_query_classifies_all_rows(rows, expected):
+    provider, client, native = _real_setup()
+    _login(client, native, session_id=20)
+
+    def query(_field, request_id):
+        native.calls.append("query_settlement")
+        if not rows:
+            client._handle_query_callback("settlement_confirmation", None, None, request_id, True)
+        for index, row in enumerate(rows):
+            client._handle_query_callback("settlement_confirmation", SimpleNamespace(**row), None, request_id, index == len(rows) - 1)
+        return 0
+
+    native.ReqQrySettlementInfoConfirm = query
+    assert provider.settlement_status() is expected
+    assert client.is_trading_ready is (expected is SettlementStatus.CONFIRMED)
+    assert native.calls == ["query_settlement"]
+    assert client.get_request_counts()["settlement_confirm"] == 0
+
+
+@pytest.mark.parametrize("failure", ["bad-day", "query-exception", "timeout", "cancel", "wrong-generation", "wrong-source"])
+def test_r05_bad_readback_never_reuses_previous_ready_proof(monkeypatch, failure):
+    provider, client, native = _real_setup()
+    assert client.is_trading_ready
+    monkeypatch.setattr(provider_module, "_SETTLEMENT_READBACK_TIMEOUT", 0.01)
+    original = client.query_settlement_confirmation_result
+
+    if failure == "bad-day":
+        native.confirmation_day = "20261131"
+    elif failure == "query-exception":
+        def query_exception(*_args, **_kwargs):
+            raise OSError("synthetic read error")
+        monkeypatch.setattr(client, "query_settlement_confirmation_result", query_exception)
+    elif failure == "timeout":
+        native.ReqQrySettlementInfoConfirm = lambda *_args: 0
+    elif failure == "cancel":
+        monkeypatch.setattr(client, "query_settlement_confirmation_result", lambda **_kwargs: client._local_query_failure("settlement_confirmation", "query_cancelled", completion_origin="local_cancel"))
+    else:
+        def changed(**kwargs):
+            result = original(**kwargs)
+            if failure == "wrong-generation":
+                object.__setattr__(result, "connection_generation", result.connection_generation + 1)
+            else:
+                object.__setattr__(result, "_source", None)
+            return result
+        monkeypatch.setattr(client, "query_settlement_confirmation_result", changed)
+
+    assert provider.settlement_status() is SettlementStatus.UNKNOWN
+    assert client.is_trading_ready is False
+    assert client.get_session_state()["settlement_readback_verified"] is False
+    assert client.get_request_counts()["settlement_confirm"] == 0
+    assert "confirm_settlement" not in native.calls
+
+
+@pytest.mark.parametrize("change", ["generation", "day", "trader", "api"])
+def test_r05_session_change_during_query_returns_unknown(monkeypatch, change):
+    provider, client, native = _real_setup()
+    _login(client, native, session_id=20)
+    original = client.query_settlement_confirmation_result
+
+    def query(**kwargs):
+        result = original(**kwargs)
+        if change == "generation":
+            client._connection_generation += 1
+        elif change == "day":
+            client._trading_day = "20261109"
+        elif change == "trader":
+            provider._feed._trader = object()
+        else:
+            client._api = object()
+        return result
+
+    monkeypatch.setattr(client, "query_settlement_confirmation_result", query)
+    try:
+        assert provider.settlement_status() is SettlementStatus.UNKNOWN
+        assert client.get_request_counts()["settlement_confirm"] == 0
+    finally:
+        provider._feed._trader = client
+
+
+@pytest.mark.parametrize("path", ["verify", "sdk_confirm"])
+def test_r05_conflicting_day_fields_never_promote_legacy_readback(monkeypatch, path):
+    provider, client, native = _real_setup()
+    _login(client, native, session_id=20)
+
+    def query(_field, request_id):
+        native.calls.append("query_settlement")
+        client._handle_query_callback(
+            "settlement_confirmation",
+            SimpleNamespace(BrokerID="9999", InvestorID="account", TradingDay=TODAY, ConfirmDate="20261105"),
+            None, request_id, True,
+        )
+        return 0
+
+    native.ReqQrySettlementInfoConfirm = query
+    if path == "verify":
+        result = client.verify_settlement_confirmation(timeout=0.01)
+        assert result.complete is True
+    else:
+        # Exercise the SDK confirmation result path without any native write.
+        monkeypatch.setattr(client, "_direct_sim_admission_is_current_locked", lambda: True)
+        monkeypatch.setattr(client, "_issue_settlement_authorization_for_core", lambda *_a, **_k: object())
+        monkeypatch.setattr(client, "confirm_settlement", lambda *_a, **_k: True)
+        assert provider.confirm_settlement(_grant(client.connection_generation, WriteOperation.SETTLEMENT_CONFIRM), Verifier()) is SettlementStatus.UNKNOWN
+    assert not client.is_trading_ready
+    assert native.calls == ["query_settlement"]
+    assert client.get_request_counts()["settlement_confirm"] == 0
+
+
+def test_r05_sdk_confirm_rejects_unsealed_same_day_query(monkeypatch):
+    provider, client, native = _real_setup()
+    _login(client, native, session_id=20)
+    original = client.query_settlement_confirmation_result
+
+    def unsealed(**kwargs):
+        result = original(**kwargs)
+        object.__setattr__(result, "_source", None)
+        return result
+
+    monkeypatch.setattr(client, "query_settlement_confirmation_result", unsealed)
+    monkeypatch.setattr(client, "_direct_sim_admission_is_current_locked", lambda: True)
+    monkeypatch.setattr(client, "_issue_settlement_authorization_for_core", lambda *_a, **_k: object())
+    monkeypatch.setattr(client, "confirm_settlement", lambda *_a, **_k: True)
+    assert provider.confirm_settlement(_grant(client.connection_generation, WriteOperation.SETTLEMENT_CONFIRM), Verifier()) is SettlementStatus.UNKNOWN
+    assert not client.is_trading_ready
+    assert client.get_session_state()["settlement_readback_verified"] is False
+    assert native.calls == ["query_settlement"]
+    assert client.get_request_counts()["settlement_confirm"] == 0
+
+
+def test_r05_legacy_verify_rejects_unsealed_same_day_query(monkeypatch):
+    _, client, native = _real_setup()
+    _login(client, native, session_id=20)
+    original = client.query_settlement_confirmation_result
+
+    def unsealed(**kwargs):
+        result = original(**kwargs)
+        object.__setattr__(result, "_source", None)
+        return result
+
+    monkeypatch.setattr(client, "query_settlement_confirmation_result", unsealed)
+    assert client.verify_settlement_confirmation(timeout=0.01).complete is True
+    assert client.is_trading_ready is False
+    assert client.get_session_state()["settlement_readback_verified"] is False
+    assert native.calls == ["query_settlement"]
+    assert client.get_request_counts()["settlement_confirm"] == 0
+
+
+def test_r05_old_readback_cannot_revoke_new_session_confirmation(monkeypatch):
+    _, client, native = _real_setup()
+    _login(client, native, session_id=20)
+    original = client.query_settlement_confirmation_result
+
+    def stale_result(**kwargs):
+        old_result = original(**kwargs)
+        _login(client, native, session_id=21)
+        monkeypatch.setattr(client, "query_settlement_confirmation_result", original)
+        current_result = client.verify_settlement_confirmation(timeout=0.01)
+        assert current_result.complete and client.is_trading_ready
+        return old_result
+
+    monkeypatch.setattr(client, "query_settlement_confirmation_result", stale_result)
+    assert client.verify_settlement_confirmation(timeout=0.01).complete
+    assert client.is_trading_ready
+    state = client.get_session_state()
+    assert state["settlement_readback_verified"] is True
+    assert state["session_id"] == 21
+    assert client.get_request_counts()["settlement_confirm"] == 0
+
+
+@pytest.mark.parametrize("extra", [
+    {"BrokerID": "9999", "InvestorID": "other", "ConfirmDate": TODAY},
+    {"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": "20261105"},
+])
+def test_r05_legacy_verify_rejects_mixed_complete_response(extra):
+    _, client, native = _real_setup()
+    _login(client, native, session_id=20)
+    rows = [{"BrokerID": "9999", "InvestorID": "account", "ConfirmDate": TODAY}, extra]
+
+    def query(_field, request_id):
+        native.calls.append("query_settlement")
+        for index, row in enumerate(rows):
+            client._handle_query_callback("settlement_confirmation", SimpleNamespace(**row), None, request_id, index == len(rows) - 1)
+        return 0
+
+    native.ReqQrySettlementInfoConfirm = query
+    assert client.verify_settlement_confirmation(timeout=0.01).complete
+    assert client.is_trading_ready is False
+    assert client.get_session_state()["settlement_readback_verified"] is False
+    assert native.calls == ["query_settlement"]
+    assert client.get_request_counts()["settlement_confirm"] == 0

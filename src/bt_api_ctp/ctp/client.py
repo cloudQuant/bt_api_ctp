@@ -8484,8 +8484,8 @@ class TraderClient:
             _settlement_environment_verified=True,
         )
         if confirmed:
-            self.verify_settlement_confirmation(timeout=max(float(timeout), 0.0))
-        return bool(self.is_trading_ready)
+            return self._read_direct_settlement_status(timeout=max(float(timeout), 0.0)) == "confirmed"
+        return False
 
     def arm_execution_for_sdk_admission(
         self,
@@ -12066,6 +12066,9 @@ class TraderClient:
         should_stop: Callable[[], bool] | None = None,
     ) -> QueryResult[Any]:
         """Read server confirmation and promote this matching session to trading ready."""
+        from bt_api_ctp.registered_sim_session import capture_query_session, validate_query_session
+        from bt_api_ctp.store_account_session import _valid_settlement_result
+
         if should_stop is not None and should_stop():
             return self._local_query_failure(
                 "settlement_confirmation", "query_cancelled", completion_origin="local_cancel"
@@ -12074,7 +12077,13 @@ class TraderClient:
             expected_generation = self._connection_generation
             expected_fingerprint = self._account_fingerprint
             expected_trading_day = self._trading_day
+            expected_api = self._api
+            expected_spi = self._spi
             self._clear_settlement_readback_locked("ctp_execution_gate_settlement_readback_refresh")
+        try:
+            binding = capture_query_session(self, environment=None)
+        except Exception:
+            binding = None
         if should_stop is None:
             result = self.query_settlement_confirmation_result(timeout=timeout)
         else:
@@ -12091,6 +12100,12 @@ class TraderClient:
             failure_reason = "ctp_execution_gate_settlement_readback_stale_generation"
         elif result.account_fingerprint != expected_fingerprint:
             failure_reason = "ctp_execution_gate_settlement_readback_wrong_account"
+        elif (
+            binding is None
+            or not _valid_settlement_result(result, binding)
+            or not validate_query_session(self, binding, now_monotonic=time.monotonic())
+        ):
+            failure_reason = "ctp_execution_gate_settlement_readback_untrusted"
 
         matched = False
         for record in result.records if not failure_reason else ():
@@ -12103,15 +12118,19 @@ class TraderClient:
 
             broker_id = str(getter("BrokerID", "") or "")
             investor_id = str(getter("InvestorID", "") or "")
-            confirmation_day = str(getter("TradingDay", "") or getter("ConfirmDate", "") or "")
-            if broker_id != self._bound_broker_id:
-                continue
-            if investor_id != self._bound_user_id:
-                continue
-            if not confirmation_day or confirmation_day != expected_trading_day:
-                continue
+            trading_day = str(getter("TradingDay", "") or "")
+            confirm_date = str(getter("ConfirmDate", "") or "")
+            confirmation_day = trading_day or confirm_date
+            if (
+                broker_id != self._bound_broker_id
+                or investor_id != self._bound_user_id
+                or not confirmation_day
+                or confirmation_day != expected_trading_day
+                or (trading_day and confirm_date and trading_day != confirm_date)
+            ):
+                matched = False
+                break
             matched = True
-            break
 
         if not failure_reason and not matched:
             failure_reason = "ctp_execution_gate_settlement_readback_identity_mismatch"
@@ -12121,15 +12140,24 @@ class TraderClient:
                 self._connection_generation != expected_generation
                 or self._account_fingerprint != expected_fingerprint
                 or self._trading_day != expected_trading_day
+                or self._api is not expected_api
+                or self._spi is not expected_spi
             ):
                 failure_reason = "ctp_execution_gate_settlement_readback_stale_generation"
             if not failure_reason and not self.is_read_only_ready:
                 failure_reason = "ctp_execution_gate_settlement_readback_session_not_ready"
             if failure_reason:
-                self._clear_settlement_readback_locked(
-                    failure_reason,
-                    request_id=result.request_id,
-                )
+                if (
+                    self._connection_generation == expected_generation
+                    and self._account_fingerprint == expected_fingerprint
+                    and self._trading_day == expected_trading_day
+                    and self._api is expected_api
+                    and self._spi is expected_spi
+                ):
+                    self._clear_settlement_readback_locked(
+                        failure_reason,
+                        request_id=result.request_id,
+                    )
             else:
                 self._settlement_state = "confirmed"
                 self._settlement_trading_day = expected_trading_day
@@ -12141,6 +12169,111 @@ class TraderClient:
                 self._ready = True
                 self._last_session_error = {}
         return result
+
+    def _read_direct_settlement_status(self, timeout: float = 5.0) -> str:
+        """Read a source-bound current-account settlement status without writes.
+
+        Preserve the existing policy: a complete account-filtered empty
+        response or rows with only older confirmation dates are unconfirmed.
+        This is a local policy, not proof that a venue's query covers a trading
+        day or that ConfirmDate maps to it. Any malformed, conflicting, stale,
+        or untrusted observation remains unknown.
+        """
+        from bt_api_ctp.registered_sim_session import capture_query_session, validate_query_session
+        from bt_api_ctp.store_account_session import _valid_settlement_result
+
+        with self._query_state_lock:
+            initial_scope = (
+                self._connection_generation, self._account_fingerprint, self._trading_day,
+                self._api, self._spi,
+            )
+        try:
+            binding = capture_query_session(self, environment=None)
+            with self._query_state_lock:
+                expected_api, expected_spi = self._api, self._spi
+            result = self.query_settlement_confirmation_result(timeout=timeout)
+            source_valid = _valid_settlement_result(result, binding)
+            states: set[str] = set()
+            if source_valid:
+                current_day = datetime.strptime(binding.trading_day, "%Y%m%d").date()
+                if current_day.strftime("%Y%m%d") != binding.trading_day:
+                    source_valid = False
+                for record in result.records:
+                    if not isinstance(record, Mapping):
+                        source_valid = False
+                        break
+                    broker = record.get("BrokerID")
+                    investor = record.get("InvestorID")
+                    trading_day = record.get("TradingDay") or ""
+                    confirm_day = record.get("ConfirmDate") or ""
+                    day = trading_day or confirm_day
+                    if (
+                        broker != binding.broker_id
+                        or investor != binding.investor_id
+                        or type(day) is not str
+                        or len(day) != 8
+                        or not day.isascii()
+                        or not day.isdigit()
+                        or (trading_day and confirm_day and trading_day != confirm_day)
+                    ):
+                        source_valid = False
+                        break
+                    parsed = datetime.strptime(day, "%Y%m%d").date()
+                    if parsed.strftime("%Y%m%d") != day or parsed > current_day:
+                        source_valid = False
+                        break
+                    states.add("current" if parsed == current_day else "older")
+                if len(states) > 1:
+                    source_valid = False
+            with self._query_state_lock:
+                if (
+                    not validate_query_session(self, binding, now_monotonic=time.monotonic())
+                    or self._api is not expected_api
+                    or self._spi is not expected_spi
+                ):
+                    if (
+                        (self._connection_generation, self._account_fingerprint, self._trading_day)
+                        == initial_scope[:3]
+                        and self._api is initial_scope[3]
+                        and self._spi is initial_scope[4]
+                    ):
+                        self._clear_settlement_readback_locked(
+                            "ctp_execution_gate_settlement_readback_untrusted"
+                        )
+                    return "unknown"
+                if not source_valid:
+                    self._clear_settlement_readback_locked(
+                        "ctp_execution_gate_settlement_readback_untrusted"
+                    )
+                    return "unknown"
+                if "current" not in states:
+                    self._clear_settlement_readback_locked(
+                        "ctp_execution_gate_settlement_readback_unconfirmed",
+                        request_id=result.request_id,
+                    )
+                    return "unconfirmed"
+                self._settlement_state = "confirmed"
+                self._settlement_trading_day = binding.trading_day
+                self._settlement_connection_generation = binding.connection_generation
+                self._settlement_account_fingerprint = binding.account_fingerprint
+                self._settlement_proof_source = "confirmation_query"
+                self._settlement_proof_query_request_id = result.request_id
+                self._settlement_readback_verified = True
+                self._ready = True
+                self._last_session_error = {}
+                return "confirmed" if self.is_trading_ready else "unknown"
+        except Exception:
+            with self._query_state_lock:
+                if (
+                    (self._connection_generation, self._account_fingerprint, self._trading_day)
+                    == initial_scope[:3]
+                    and self._api is initial_scope[3]
+                    and self._spi is initial_scope[4]
+                ):
+                    self._clear_settlement_readback_locked(
+                        "ctp_execution_gate_settlement_readback_untrusted"
+                    )
+            return "unknown"
 
     def next_order_ref(self) -> str:
         """Return the next monotonic CTP OrderRef.

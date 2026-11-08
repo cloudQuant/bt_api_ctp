@@ -1064,29 +1064,44 @@ class CtpDirectWriteProvider:
     # settlement (D62-20/29)
     # ------------------------------------------------------------------
     def settlement_status(self) -> SettlementStatus:
+        from bt_api_ctp.ctp.client import TraderClient
+
         with self._lock:
             try:
                 trader = self._trader()
-                if trader.is_trading_ready:
-                    self._note_trading_ready(trader)
-                    return SettlementStatus.CONFIRMED
-                result = trader.verify_settlement_confirmation(
-                    timeout=_SETTLEMENT_READBACK_TIMEOUT
+                if type(trader) is not TraderClient or self._feed.trader_client is not trader:
+                    return SettlementStatus.UNKNOWN
+                before = trader.get_session_state()
+                if not isinstance(before, dict) or before.get("read_only_ready") is not True:
+                    return SettlementStatus.UNKNOWN
+                identity_fields = (
+                    "connection_generation", "account_fingerprint", "trading_day",
+                    "front_id", "session_id",
                 )
-                if trader.is_trading_ready:
+                result = TraderClient._read_direct_settlement_status(
+                    trader, timeout=_SETTLEMENT_READBACK_TIMEOUT
+                )
+                after = trader.get_session_state()
+                if (
+                    self._feed.trader_client is not trader
+                    or not isinstance(after, dict)
+                    or after.get("read_only_ready") is not True
+                    or any(before.get(name) != after.get(name) for name in identity_fields)
+                ):
+                    return SettlementStatus.UNKNOWN
+                if (
+                    result == "confirmed"
+                    and after.get("trading_ready") is True
+                    and after.get("settlement_readback_verified") is True
+                    and after.get("settlement_proof_source") == "confirmation_query"
+                    and after.get("settlement_proof_query_request_id") is not None
+                    and after.get("settlement_connection_generation") == after.get("connection_generation")
+                    and after.get("settlement_account_fingerprint") == after.get("account_fingerprint")
+                    and after.get("settlement_trading_day") == after.get("trading_day")
+                ):
                     self._note_trading_ready(trader)
                     return SettlementStatus.CONFIRMED
-                # A complete, error-free readback for this session that holds
-                # no confirmation for the current trading day means the
-                # account still has to confirm.  Incomplete, timed-out or
-                # failed readbacks stay UNKNOWN (no blind confirmation).
-                error_code = getattr(result, "error_code", None)
-                if (
-                    getattr(result, "complete", False) is True
-                    and getattr(result, "timed_out", False) is not True
-                    and error_code in (None, 0)
-                    and getattr(result, "error_message", "") != "query_cancelled"
-                ):
+                if result == "unconfirmed":
                     return SettlementStatus.UNCONFIRMED
                 return SettlementStatus.UNKNOWN
             except Exception:

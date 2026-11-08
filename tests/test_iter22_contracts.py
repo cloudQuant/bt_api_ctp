@@ -1789,6 +1789,7 @@ def test_server_confirmation_query_promotes_only_matching_account_and_day() -> N
             return 0
 
     client._api = Api()
+    _read_ready(client)  # Bind the fake SPI to the installed native source.
     result = client.verify_settlement_confirmation(timeout=0.01)
     state = client.get_session_state()
     assert result.complete is True
