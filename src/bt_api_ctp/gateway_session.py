@@ -11,13 +11,15 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from bt_api_base.account_protocol import AccountKey
+from bt_api_base.exceptions import ExchangeConnectionError
 from bt_api_base.market_protocol import MarketInstrumentKey
 
 from bt_api_ctp.account_provider import CtpReadOnlyAccountSessionProvider
-from bt_api_ctp.ctp.client import TraderClient
+from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.direct_write_provider import CtpDirectWriteProvider
 from bt_api_ctp.feeds.live_ctp_feed import ConnectionState, CtpMarketStream, CtpRequestDataFuture
 from bt_api_ctp.market_provider import CtpQuoteV2MarketProvider
@@ -40,6 +42,60 @@ def _timeout(value: object, maximum: float) -> float:
             or not math.isfinite(value) or not 0.05 <= value <= maximum):
         raise CtpGatewaySessionError("INVALID_CONFIGURATION")
     return float(value)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectionOwner:
+    feed: object = field(repr=False)
+    trader: object = field(repr=False)
+    query_lock: object = field(repr=False)
+    api: object = field(repr=False)
+    spi: object = field(repr=False)
+    account: object = field(repr=False)
+    reader: object = field(repr=False)
+    direct: object = field(repr=False)
+    flow: object = field(repr=False)
+    feed_flow: object = field(repr=False)
+    trader_flow: object = field(repr=False)
+    flow_config: tuple = field(repr=False)
+    return_buffer: object = field(repr=False)
+    issuer: object = field(repr=False)
+    callback_ingress: object = field(repr=False)
+    callback_tags: object = field(repr=False)
+    generation: str = field(repr=False)
+    source_tags: tuple = field(repr=False)
+    feed_config: tuple = field(repr=False)
+    trader_config: tuple = field(repr=False)
+    api_config: tuple = field(repr=False)
+    account_binding: str = field(repr=False)
+    connection_generation: int = field(repr=False)
+
+
+_FEED_BINDING_FIELDS = (
+    "broker_id", "user_id", "td_front", "md_front", "ctp_env_profile", "ctp_environment",
+    "_execution_bound_broker_id", "_execution_bound_user_id", "_execution_bound_td_front",
+    "_execution_bound_md_front", "_execution_bound_profile", "_execution_bound_environment",
+    "auto_settlement_confirm",
+)
+_TRADER_BINDING_FIELDS = (
+    "broker_id", "user_id", "front", "md_front", "ctp_env_profile", "_bound_broker_id",
+    "_bound_user_id", "_bound_front", "_bound_md_front", "_account_fingerprint",
+    "_lifecycle_generation",
+)
+_SPI_BINDING_FIELDS = (
+    "_native_spi_source_id", "_native_api_generation", "_native_client_epoch", "_native_api_source_id",
+)
+
+
+def _binding_fields(value: object, names: tuple[str, ...]) -> tuple:
+    return tuple(getattr(value, name) for name in names)
+
+
+def _binding_matches(actual: tuple, expected: tuple) -> bool:
+    return len(actual) == len(expected) and all(
+        type(value) is type(original) and value == original
+        for value, original in zip(actual, expected)
+    )
 
 
 class CtpGatewaySession:
@@ -91,6 +147,7 @@ class CtpGatewaySession:
         self._trader: TraderClient | None = None
         self._account_binding: str | None = None
         self._direct: CtpDirectWriteProvider | None = None
+        self._connection_owner: _ConnectionOwner | None = None
         self._reader = CtpReadOnlyAccountSessionProvider(
             self._checked_feed, stop_timeout_seconds=self._stop_timeout,
             account_observation_issuer=observation_issuer,
@@ -182,11 +239,129 @@ class CtpGatewaySession:
             direct.ensure_listening()
             if feed.trader_client is not trader:
                 raise CtpGatewaySessionError("SESSION_CHANGED")
+            with trader._query_state_lock:
+                spi = trader._spi
+                source_tags = trader._query_source_tags_locked()
+                if (trader._api is None or type(spi) is not _TraderSpi
+                        or spi._native_api is not trader._api or spi._c is not trader or not spi._is_current_locked()
+                        or trader._session_native_api is not trader._api
+                        or trader._current_login_identity_locked() is None
+                        or type(source_tags) is not tuple or len(source_tags) != 6
+                        or (trader._callback_ingress is not None and (
+                            trader._callback_ingress.poisoned
+                            or trader._callback_ingress.current_source_tags_object is not spi._callback_source_tags
+                            or trader._callback_ingress.current_source_tags != source_tags))
+                        or scope.issuer is not trader._query_evidence_issuer
+                        or scope.source_tags != source_tags
+                        or scope.account_fingerprint != trader._account_fingerprint
+                        or scope.broker_id != self._account_key.subaccount_id
+                        or scope.investor_id != self._account_key.account_id):
+                    raise CtpGatewaySessionError("SESSION_CHANGED")
+                self._connection_owner = _ConnectionOwner(
+                    feed, trader, trader._query_state_lock, trader._api, spi, self._account_key, self._reader,
+                    direct, self._flow, feed._trusted_flow, trader._trusted_flow,
+                    (flow_binding(self._flow), flow_binding(feed._trusted_flow), flow_binding(trader._trusted_flow)),
+                    self._return_buffer, scope.issuer, trader._callback_ingress,
+                    spi._callback_source_tags, generation, source_tags[:5],
+                    _binding_fields(feed, _FEED_BINDING_FIELDS),
+                    _binding_fields(trader, _TRADER_BINDING_FIELDS),
+                    _binding_fields(spi, _SPI_BINDING_FIELDS), scope.account_fingerprint,
+                    scope.connection_generation,
+                )
             self._service_generation = generation
             self._state = "connected"
         except BaseException:
             self._state = "failed"
             raise
+
+    def _connection_owner_matches(self, owner: object) -> bool:
+        try:
+            return bool(type(owner) is _ConnectionOwner and self._connection_owner is owner
+                and self._state == "connected" and self._feed is owner.feed and self._trader is owner.trader
+                and self._account_key is owner.account and self._reader is owner.reader
+                and self._direct is owner.direct and owner.direct._feed is owner.feed
+                and owner.direct._owner_closing is False and owner.direct._owner_closed is False
+                and self._flow is owner.flow and self._return_buffer is owner.return_buffer
+                and self._service_generation == owner.generation
+                and self._account_binding == owner.account_binding
+                and owner.reader._request_feed is owner.feed and owner.reader._trader is owner.trader
+                and owner.reader._account_key is owner.account
+                and owner.reader._service_generation == owner.generation
+                and owner.feed._trader is owner.trader and owner.trader._query_state_lock is owner.query_lock)
+        except Exception:
+            return False
+
+    def connection_status(self) -> str:
+        """Inspect the existing owner only; no connect, refresh or native I/O.
+
+        Reconnecting is a local link/login state, not write or market readiness.
+        The flow object binding is checked; filesystem identity is not re-read.
+        """
+        self._check_owner()
+        owner = self._connection_owner
+        if not self._connection_owner_matches(owner):
+            raise CtpGatewaySessionError("SESSION_CHANGED")
+        trader, feed, spi = owner.trader, owner.feed, owner.spi
+        if not trader._query_state_lock.acquire(blocking=False):
+            return "busy"
+        try:
+            source_tags = trader._query_source_tags_locked()
+            if (not self._connection_owner_matches(owner)
+                    or feed._trusted_flow is not owner.feed_flow or feed._gateway_return_buffer is not owner.return_buffer
+                    or trader._trusted_flow is not owner.trader_flow
+                    or (flow_binding(self._flow), flow_binding(feed._trusted_flow),
+                        flow_binding(trader._trusted_flow)) != owner.flow_config
+                    or not _binding_matches(_binding_fields(feed, _FEED_BINDING_FIELDS), owner.feed_config)
+                    or not _binding_matches(_binding_fields(trader, _TRADER_BINDING_FIELDS), owner.trader_config)
+                    or trader._api is not owner.api or trader._spi is not spi
+                    or spi._native_api is not owner.api or spi._c is not trader or not spi._is_current_locked()
+                    or trader._callback_ingress is not owner.callback_ingress
+                    or spi._callback_source_tags is not owner.callback_tags
+                    or not _binding_matches(_binding_fields(spi, _SPI_BINDING_FIELDS), owner.api_config)
+                    or trader._query_evidence_issuer is not owner.issuer
+                    or type(source_tags) is not tuple or source_tags[:5] != owner.source_tags
+                    or (trader._callback_ingress is not None and (
+                        trader._callback_ingress.current_source_tags_object is not owner.callback_tags
+                        or trader._callback_ingress.current_source_tags != source_tags))
+                    or type(trader._connection_generation) is not int
+                    or trader._connection_generation < owner.connection_generation
+                    or not trader._bound_identity_is_current(require_active_front=False)
+                    or (trader._callback_ingress is not None and trader._callback_ingress.poisoned)):
+                raise CtpGatewaySessionError("SESSION_CHANGED")
+            if trader._connected is False:
+                if (trader._session_native_api is not None or trader._session_native_front is not None
+                        or trader._authentication_state != "disconnected"
+                        or trader._login_state != "disconnected"
+                        or trader._login_identity_observation is not None):
+                    raise CtpGatewaySessionError("SESSION_CHANGED")
+                return "reconnecting"
+            if (trader._connected is not True or trader._session_native_api is not owner.api
+                    or trader._session_native_front != trader._bound_front):
+                raise CtpGatewaySessionError("SESSION_CHANGED")
+            login = trader._current_login_identity_locked()
+            if login is not None:
+                if (login.broker_id != owner.account.subaccount_id
+                        or login.user_id != owner.account.account_id
+                        or login.connection_generation != trader._connection_generation
+                        or login.trading_day != trader._trading_day):
+                    raise CtpGatewaySessionError("SESSION_CHANGED")
+                return "ready"
+            if (trader._login_identity_observation is None
+                    and ((trader._authentication_state == "authenticating"
+                          and trader._login_state == "not_started")
+                         or (trader._authentication_state == "authenticated"
+                             and trader._login_state == "logging_in"))):
+                return "reconnecting"
+            if (trader._login_identity_observation is None
+                    and trader._session_retry_current_locked(api=owner.api, spi=spi)):
+                return "reconnecting"
+            raise CtpGatewaySessionError("SESSION_CHANGED")
+        except CtpGatewaySessionError:
+            raise
+        except Exception:
+            raise CtpGatewaySessionError("SESSION_CHANGED") from None
+        finally:
+            trader._query_state_lock.release()
 
     @property
     def return_buffer(self) -> CtpGatewayReturnBuffer:
@@ -199,6 +374,37 @@ class CtpGatewaySession:
             self._trader, environment=self._account_key.environment,
             broker_id=self._account_key.subaccount_id, investor_id=self._account_key.account_id,
         )
+
+    def _require_instrument_connected(self) -> None:
+        """Check the exact TD owner without borrowing an account-read epoch."""
+        def check() -> None:
+            status = self.connection_status()
+            if status == "ready":
+                return
+            if status == "busy":
+                raise CtpGatewaySessionError("INSTRUMENT_SESSION_BUSY")
+            if status == "reconnecting":
+                raise CtpGatewaySessionError("INSTRUMENT_SESSION_RECONNECTING")
+            raise CtpGatewaySessionError("SESSION_CHANGED")
+
+        check()
+        try:
+            self._flow.verify_root()
+        except Exception:
+            raise CtpGatewaySessionError("SESSION_CHANGED") from None
+        check()
+
+    def create_instrument_query_reader(self):
+        """Borrow this session's Trader for source-bound static instrument rules."""
+        self._require_instrument_connected()
+        from bt_api_ctp.gateway_instrument_query import CtpGatewayInstrumentQueryReader
+
+        reader = CtpGatewayInstrumentQueryReader(self._trader, account_key=self._account_key)
+        reader._gateway_session = self
+        reader._native_owner_gateway_session = self
+        reader._gateway_service_generation = self._service_generation
+        reader._check_session()
+        return reader
 
     def assert_return_record_current(self, record: CtpGatewayReturnRecord) -> None:
         """Validate an offered record against the exact current native session."""
@@ -262,8 +468,14 @@ class CtpGatewaySession:
         if self._state != "connected" or self._feed is None or self._feed.trader_client is not self._trader:
             raise CtpGatewaySessionError("SESSION_NOT_CONNECTED")
         self._flow.verify_root()
-        self._reader.refresh_session()
-        scope = self._feed.get_query_session_scope()
+        try:
+            self._reader.refresh_session()
+            scope = self._feed.get_query_session_scope()
+        except ExchangeConnectionError as exc:
+            # AuthenticationError is a subclass, but is not a link transition.
+            if type(exc) is not ExchangeConnectionError:
+                raise
+            raise CtpGatewaySessionError("SESSION_UNAVAILABLE") from None
         if scope.account_fingerprint != self._account_binding:
             raise CtpGatewaySessionError("SESSION_CHANGED")
 
@@ -290,6 +502,7 @@ class CtpGatewaySession:
         except BaseException:
             pass
         if market_stopped and direct_stopped and account_stopped:
+            self._connection_owner = None
             self._direct = None
             self._trader = None
             self._feed = None

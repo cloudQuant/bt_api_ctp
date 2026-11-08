@@ -2323,6 +2323,36 @@ class _QueryAccumulator:
         )
 
 
+class CtpInstrumentQueryHandle:
+    """Opaque instance-bound token; ownership and state stay in TraderClient."""
+
+    __slots__ = ()
+
+
+@dataclass
+class _AsyncInstrumentQuery:
+    pid: int
+    thread: threading.Thread
+    api: Any
+    spi: Any
+    session_api: Any
+    login: Any
+    generation: int
+    fingerprint: str
+    trading_day: str
+    source_tags: Any
+    deadline: float
+    instrument_id: str
+    exchange_id: str
+    max_records: int
+    accumulator: _QueryAccumulator | None = None
+    result: QueryResult[Any] | None = None
+    native_may_have_entered: bool = False
+    submit_status: str | None = None
+    submit_code: int | None = None
+    submit_finished: float | None = None
+
+
 # ===========================================================================
 #  MdClient - 行情客户端
 # ===========================================================================
@@ -4394,6 +4424,18 @@ class _TraderLoginIdentityObservation:
     request_id: int
 
 
+@dataclass(frozen=True)
+class _TraderSessionRetryBinding:
+    """Private read-only identity for one scheduled same-session retry."""
+
+    timer: Any
+    token: object
+    generation: int
+    step: str
+    api: Any
+    spi: Any
+
+
 @dataclass
 class _TraderCallbackIngressState:
     """Process-local side of a durable, opt-in Trader callback owner."""
@@ -5494,6 +5536,7 @@ class TraderClient:
         self.session_retry_enabled = False
         self._session_retry_timer: Any = None
         self._session_retry_token: object | None = None
+        self._session_retry_binding: _TraderSessionRetryBinding | None = None
         self._session_retry_timer_factory: Callable[..., Any] = threading.Timer
         self._session_retry_generation: int | None = None
         self._session_retry_failures = 0
@@ -5547,6 +5590,7 @@ class TraderClient:
         self._gateway_return_buffer = None
         self._gateway_return_environment = None
         self._query_history: dict[int, _QueryAccumulator] = {}
+        self._async_instrument_queries: dict[CtpInstrumentQueryHandle, _AsyncInstrumentQuery] = {}
         # The vendor keeps one outstanding ReqQry* per session until its
         # terminal packet, even after a local timeout sealed the accumulator.
         # ``(request_id, request_type, connection_generation)`` or ``None``.
@@ -5993,6 +6037,7 @@ class TraderClient:
         deadline_monotonic: float | None = None,
         dispatch_outcome: _CtpNativeRequestDispatchOutcome | None = None,
         pre_dispatch: Callable[[], None] | None = None,
+        query_session_binding: _AsyncInstrumentQuery | None = None,
     ) -> Any:
         """Invoke a pinned session Req with every SDK lock released.
 
@@ -6031,6 +6076,14 @@ class TraderClient:
             raise CtpExecutionGateError("ctp_native_request_dispatch_outcome_scope_mismatch")
         with self._query_state_lock:
             state = self._callback_ingress
+            if query_session_binding is not None and (
+                method_name != "ReqQryInstrument"
+                or type(query_session_binding) is not _AsyncInstrumentQuery
+                or not self._async_instrument_session_current_locked(query_session_binding)
+            ):
+                raise CtpExecutionGateError("ctp_async_query_session_changed")
+            if query_session_binding is not None and time.monotonic() >= query_session_binding.deadline:
+                raise CtpExecutionGateError("ctp_async_query_deadline_expired")
             if api is None or self._api is not api or (state is not None and self._spi is None):
                 if state is not None:
                     self._poison_callback_ingress_locked("source_identity_mismatch")
@@ -6192,6 +6245,10 @@ class TraderClient:
                     raise _CtpNativeRequestDeadlineExpired(
                         "ctp_execution_gate_cancel_deadline_expired"
                     )
+                if query_session_binding is not None:
+                    if time.monotonic() >= query_session_binding.deadline:
+                        raise CtpExecutionGateError("ctp_async_query_deadline_expired")
+                    query_session_binding.native_may_have_entered = True
                 native_call_started = True
                 if dispatch_outcome is not None:
                     dispatch_outcome.native_call_started = True
@@ -9840,15 +9897,63 @@ class TraderClient:
         timer.daemon = True
         self._session_retry_timer = timer
         self._session_retry_token = token
-        timer.start()
+        self._session_retry_binding = _TraderSessionRetryBinding(
+            timer, token, generation, step, self._api, self._spi
+        )
+        try:
+            timer.start()
+        except BaseException:
+            self._session_retry_timer = None
+            self._session_retry_token = None
+            self._session_retry_binding = None
+            timer.cancel()
+            raise
         return delay
 
     def _cancel_session_retry_locked(self) -> None:
         timer = self._session_retry_timer
         self._session_retry_timer = None
         self._session_retry_token = None
+        self._session_retry_binding = None
         if timer is not None:
             timer.cancel()
+
+    def _session_retry_current_locked(self, *, api: Any, spi: Any) -> bool:
+        """Check a genuinely pending built-in timer, without scheduling or I/O."""
+        binding = self._session_retry_binding
+        if (type(binding) is not _TraderSessionRetryBinding
+                or type(binding.timer) is not threading.Timer
+                or binding.timer is not self._session_retry_timer
+                or binding.token is not self._session_retry_token
+                or binding.api is not api or binding.spi is not spi
+                or self._api is not api or self._spi is not spi
+                or self._session_native_api is not api or self._connected is not True
+                or self.session_retry_enabled is not True
+                or type(binding.generation) is not int
+                or binding.generation != self._connection_generation
+                or binding.generation != self._session_retry_generation
+                or binding.step not in ("authenticate", "login")
+                or binding.timer.finished.is_set()
+                or not binding.timer._started.is_set()):
+            return False
+        function = binding.timer.function
+        if (getattr(function, "__self__", None) is not self
+                or getattr(function, "__func__", None) is not TraderClient._session_retry_due
+                or type(binding.timer.args) is not tuple or len(binding.timer.args) != 5
+                or binding.timer.args[0] is not binding.token
+                or type(binding.timer.args[1]) is not int
+                or binding.timer.args[1] != binding.generation
+                or type(binding.timer.args[2]) is not str
+                or binding.timer.args[2] != binding.step
+                or binding.timer.args[3] is not api or binding.timer.args[4] is not spi
+                or binding.timer.kwargs):
+            return False
+        return bool(
+            (binding.step == "authenticate" and self._authentication_state == "failed"
+             and self._login_state == "not_started")
+            or (binding.step == "login" and self._authentication_state == "authenticated"
+                and self._login_state == "failed")
+        )
 
     def _session_retry_due(
         self, token: object, generation: int, step: str, api: Any, spi: Any
@@ -9860,6 +9965,7 @@ class TraderClient:
                 return
             self._session_retry_timer = None
             self._session_retry_token = None
+            self._session_retry_binding = None
             if (
                 self._api is not api
                 or self._spi is not spi
@@ -11667,6 +11773,294 @@ class TraderClient:
     def query_trades(self, **kwargs: Any) -> list[Any]:
         result = self.query_trades_result(**kwargs)
         return list(result.records) if result.complete else []
+
+    def _async_instrument_session_current_locked(self, state: _AsyncInstrumentQuery) -> bool:
+        return (
+            self._api is state.api
+            and self._spi is state.spi
+            and self._session_native_api is state.session_api
+            and self._connection_generation == state.generation
+            and self._account_fingerprint == state.fingerprint
+            and self._trading_day == state.trading_day
+            and self._current_login_identity_locked() is state.login
+            and self._query_source_tags_locked() == state.source_tags
+        )
+
+    def _async_instrument_owned(self, handle: CtpInstrumentQueryHandle) -> _AsyncInstrumentQuery:
+        if type(handle) is not CtpInstrumentQueryHandle:
+            raise ValueError("ctp_async_query_handle_invalid")
+        state = self._async_instrument_queries.get(handle)
+        if state is None:
+            raise ValueError("ctp_async_query_handle_invalid")
+        if state.pid != os.getpid() or state.thread is not threading.current_thread():
+            raise RuntimeError("ctp_async_query_owner_mismatch")
+        return state
+
+    def begin_instruments_query(
+        self, *, instrument_id: str, exchange_id: str, timeout: float = 5.0, max_records: int = 2
+    ) -> CtpInstrumentQueryHandle:
+        """Reserve a local owner-bound query, without entering native code.
+
+        Polls never sleep or wait for the query-rate lane. A vendor Req entered
+        by a later poll cannot be interrupted and may itself block in native code.
+        """
+        for value in (instrument_id, exchange_id):
+            if (type(value) is not str or not value or value != value.strip()
+                or not value.isascii() or not value.isprintable() or len(value) > 128):
+                raise ValueError("ctp_async_query_filter_invalid")
+        if type(timeout) not in (int, float):
+            raise ValueError("ctp_async_query_timeout_invalid")
+        try:
+            timeout = float(timeout)
+        except (OverflowError, ValueError):
+            raise ValueError("ctp_async_query_timeout_invalid") from None
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("ctp_async_query_timeout_invalid")
+        if type(max_records) is not int or not 1 <= max_records <= _MAX_QUERY_RECORDS:
+            raise ValueError("ctp_async_query_record_limit_invalid")
+        deadline = time.monotonic() + float(timeout)
+        if not math.isfinite(deadline):
+            raise ValueError("ctp_async_query_timeout_invalid")
+        if not self._query_state_lock.acquire(blocking=False):
+            raise RuntimeError("ctp_async_query_state_busy")
+        try:
+            if len(self._async_instrument_queries) >= 64:
+                raise RuntimeError("ctp_async_query_capacity")
+            login = self._current_login_identity_locked()
+            api, spi = self._api, self._spi
+            if login is None or api is None or spi is None or self._session_native_api is not api:
+                raise RuntimeError("ctp_async_query_session_unavailable")
+            handle = CtpInstrumentQueryHandle()
+            self._async_instrument_queries[handle] = _AsyncInstrumentQuery(
+                os.getpid(), threading.current_thread(), api, spi, self._session_native_api,
+                login, self._connection_generation, self._account_fingerprint, self._trading_day,
+                self._query_source_tags_locked(), deadline, instrument_id, exchange_id, max_records,
+            )
+            return handle
+        finally:
+            self._query_state_lock.release()
+
+    def _async_instrument_finish_locked(
+        self, state: _AsyncInstrumentQuery, *, origin: str | None = None,
+        message: str = "", error_code: int | None = None, timed_out: bool = False,
+        unsupported: bool = False,
+    ) -> QueryResult[Any]:
+        accumulator = state.accumulator
+        if accumulator is None:
+            # No vendor request exists: keep this local failure out of the
+            # shared callback history, whose bound applies to actual Req ids.
+            accumulator = _QueryAccumulator(
+                request_type="instruments", request_id=self._next_request_id(),
+                connection_generation=state.generation, account_fingerprint=state.fingerprint,
+                started_at_utc=datetime.now(timezone.utc), record_limit=state.max_records)
+            state.accumulator = accumulator
+        # The base result contract requires an overflow to retain its
+        # record_limit origin, even if submission subsequently times out or
+        # raises after synchronous callbacks have already sealed the query.
+        if accumulator.record_limit_exceeded:
+            accumulator.timed_out = accumulator.timed_out or timed_out
+            origin = None
+        if origin is not None:
+            accumulator.record_completion_origin(origin)
+            accumulator.error_code = error_code
+            accumulator.error_message = message
+            accumulator.timed_out = timed_out
+            accumulator.unsupported = unsupported
+        if accumulator.completed_at_utc is None:
+            accumulator.completed_at_utc = datetime.now(timezone.utc)
+        if accumulator.completed_monotonic is None:
+            accumulator.completed_monotonic = time.monotonic()
+        accumulator.sealed = True
+        accumulator.event.set()
+        state.result = accumulator.result()
+        return state.result
+
+    def _async_instrument_existing_locked(
+        self, state: _AsyncInstrumentQuery
+    ) -> QueryResult[Any] | None:
+        accumulator = state.accumulator
+        if state.submit_status is not None:
+            status, code = state.submit_status, state.submit_code
+            state.submit_status = None
+            if accumulator is None:
+                raise RuntimeError("ctp_async_query_state_invalid")
+            if status in {"deadline", "session", "exception", "invalid"}:
+                if not state.native_may_have_entered:
+                    self._release_query_slot_locked(accumulator.request_id, "instruments")
+                if status == "deadline":
+                    return self._async_instrument_finish_locked(
+                        state, origin="deadline", message="query_deadline_exceeded", timed_out=True)
+                return self._async_instrument_finish_locked(
+                    state, origin="submit_exception", message="query_submit_exception", error_code=-4)
+            accumulator.submit_code = code
+            if status == "accepted" and state.submit_finished is not None and state.submit_finished >= state.deadline:
+                return self._async_instrument_finish_locked(
+                    state, origin="deadline", message="query_deadline_exceeded", timed_out=True)
+            if status == "rejected":
+                self._release_query_slot_locked(accumulator.request_id, "instruments")
+                return self._async_instrument_finish_locked(
+                    state, origin="submit_rejected", message="query_submit_rejected", error_code=code)
+        if not self._async_instrument_session_current_locked(state):
+            if accumulator is not None and accumulator.sealed and not accumulator.result().complete:
+                return self._async_instrument_finish_locked(state)
+            return self._async_instrument_finish_locked(
+                state, origin="front_disconnected", message="connection_lost", error_code=-2)
+        now = time.monotonic()
+        if accumulator is not None:
+            if accumulator.record_limit_exceeded:
+                return self._async_instrument_finish_locked(state)
+            for row in accumulator.records:
+                if (type(row.get("InstrumentID")) is not str
+                    or type(row.get("ExchangeID")) is not str
+                    or row.get("InstrumentID") != state.instrument_id
+                    or row.get("ExchangeID") != state.exchange_id):
+                    return self._async_instrument_finish_locked(
+                        state, origin="query_response", message="instrument_query_scope_mismatch",
+                        error_code=-1)
+            if accumulator.event.is_set() or accumulator.is_last_seen or accumulator.error_code not in (None, 0):
+                if (accumulator.completed_monotonic is not None
+                    and accumulator.completed_monotonic > state.deadline):
+                    return self._async_instrument_finish_locked(
+                        state, origin="deadline", message="query_deadline_exceeded", timed_out=True)
+                return self._async_instrument_finish_locked(state)
+        if now >= state.deadline:
+            return self._async_instrument_finish_locked(
+                state, origin="deadline", message="query_deadline_exceeded", timed_out=True)
+        return None
+
+    def poll_instruments_query(self, handle: CtpInstrumentQueryHandle) -> QueryResult[Any] | None:
+        """Advance one query without waiting for rate, slot or callbacks.
+
+        The underlying native Req may synchronously block; it cannot be
+        preempted. A pending result is ``None`` and never means an empty catalog.
+        """
+        state = self._async_instrument_owned(handle)
+        if state.result is not None:
+            return state.result
+        if not self._query_state_lock.acquire(blocking=False):
+            return None
+        try:
+            result = self._async_instrument_existing_locked(state)
+            if result is not None or state.accumulator is not None:
+                return result
+        finally:
+            self._query_state_lock.release()
+        if getattr(self._native_callback_thread_state, "depth", 0) > 0:
+            return None
+        if not self._query_lock.acquire(blocking=False):
+            return None
+        try:
+            if not self._query_state_lock.acquire(blocking=False):
+                return None
+            try:
+                result = self._async_instrument_existing_locked(state)
+                if result is not None or state.accumulator is not None:
+                    return result
+                if self._query_slot_blocking_locked():
+                    return None
+                if time.monotonic() - self._last_query_submitted_at < self._query_interval:
+                    return None
+                try:
+                    field = CThostFtdcQryInstrumentField()
+                    field.InstrumentID = state.instrument_id
+                    field.ExchangeID = state.exchange_id
+                    filters = {"InstrumentID": state.instrument_id, "ExchangeID": state.exchange_id}
+                    intended = _query_filter_items(filters)
+                    readback = _read_native_query_filter_items(field, intended)
+                    if not callable(getattr(state.api, "ReqQryInstrument", None)):
+                        raise ValueError("unsupported")
+                except Exception:
+                    return self._async_instrument_finish_locked(
+                        state, origin="local_preflight", message="native_query_filter_unavailable",
+                        error_code=-3, unsupported=True)
+                if time.monotonic() >= state.deadline:
+                    return self._async_instrument_finish_locked(
+                        state, origin="deadline", message="query_deadline_exceeded", timed_out=True)
+                protected = {id(item.accumulator) for item in self._async_instrument_queries.values()
+                             if item.accumulator is not None}
+                for request_id, prior in tuple(self._query_history.items()):
+                    if len(self._query_history) < 256:
+                        break
+                    slot = self._query_native_inflight
+                    if (prior.sealed and id(prior) not in protected
+                        and (slot is None or slot[0] != request_id)):
+                        del self._query_history[request_id]
+                if len(self._query_history) >= 256:
+                    return self._async_instrument_finish_locked(
+                        state, origin="local_preflight", message="query_history_capacity", error_code=-1)
+                accumulator = self._new_query_accumulator(
+                    "instruments", dict(readback),
+                    explicit_request_filters=("InstrumentID", "ExchangeID"),
+                    request_intent_filters=dict(intended), record_limit=state.max_records)
+                state.accumulator = accumulator
+                self._query_native_inflight = (accumulator.request_id, "instruments", state.generation)
+                self._last_query_submitted_at = time.monotonic()
+                try:
+                    self._record_request("query_instruments")
+                except Exception:
+                    self._release_query_slot_locked(accumulator.request_id, "instruments")
+                    return self._async_instrument_finish_locked(
+                        state, origin="local_preflight", message="query_pre_dispatch_failed", error_code=-1)
+            finally:
+                self._query_state_lock.release()
+        finally:
+            self._query_lock.release()
+        try:
+            submitted = self._invoke_session_native_request(
+                state.api, "ReqQryInstrument", field, accumulator.request_id,
+                query_session_binding=state)
+        except Exception as exc:
+            if type(exc) is CtpExecutionGateError and exc.code == "ctp_async_query_deadline_expired":
+                state.submit_status = "deadline"
+            elif type(exc) is CtpExecutionGateError and exc.code == "ctp_async_query_session_changed":
+                state.submit_status = "session"
+            else:
+                state.submit_status = "exception"
+        else:
+            if submitted is not None and type(submitted) is not int:
+                state.submit_status = "invalid"
+            elif submitted not in (None, 0):
+                state.submit_status, state.submit_code = "rejected", submitted
+            else:
+                state.submit_status, state.submit_code = "accepted", submitted
+        state.submit_finished = time.monotonic()
+        if not self._query_state_lock.acquire(blocking=False):
+            return None
+        try:
+            return self._async_instrument_existing_locked(state)
+        finally:
+            self._query_state_lock.release()
+
+    def cancel_instruments_query(self, handle: CtpInstrumentQueryHandle) -> bool:
+        """Seal locally; False means the state lock was busy and must be retried.
+
+        No vendor cancellation is asserted. A submitted slot stays reserved
+        until its own terminal callback or the owning session disconnects.
+        """
+        state = self._async_instrument_owned(handle)
+        if state.result is not None:
+            return True
+        if not self._query_state_lock.acquire(blocking=False):
+            return False
+        try:
+            existing = self._async_instrument_existing_locked(state)
+            if existing is None:
+                self._async_instrument_finish_locked(
+                    state, origin="local_cancel", message="query_cancelled", error_code=-1)
+            return True
+        finally:
+            self._query_state_lock.release()
+
+    def release_instruments_query(self, handle: CtpInstrumentQueryHandle) -> bool:
+        """Retire a terminal local handle without altering the native slot."""
+        state = self._async_instrument_owned(handle)
+        if state.result is None or not self._query_state_lock.acquire(blocking=False):
+            return False
+        try:
+            del self._async_instrument_queries[handle]
+            return True
+        finally:
+            self._query_state_lock.release()
 
     def query_instruments_result(
         self,

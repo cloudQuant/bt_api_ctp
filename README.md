@@ -602,3 +602,32 @@ New prepared cancels bind the registered Python source, source-tag digest and se
 Preparation requires an explicit exchange, positive whole `contracts`/`lots`/`native` quantities, and speculative hedge settings. `base` quantities and unsupported hedge choices are rejected before allocation. The persisted LimitPrice is the canonical `float.hex()` of the actual finite positive native double; callback comparison uses the same representation. The ordinary direct mapping is unchanged.
 
 `gateway_place_return_projection` requires a positive insert error, exact request ID, full echoed request fields and matching persisted source/day/generation. Missing RequestID or historical preparation is not guessed. Its result is a request-error observation, not an order terminal state or proof of venue callback enqueue time. Account/native acceptance remains separate from synthetic Python tests.
+
+
+### Iteration 63 polled instrument rules (R26 candidate)
+
+`TraderClient.begin_instruments_query` allocates an owner-bound local handle;
+`poll_instruments_query` advances rate/slot admission, a single native request,
+and terminal callback sealing without waiting for those three conditions.
+`cancel_instruments_query` seals locally; `release_instruments_query` retires a
+terminal local token. Neither releases an issued vendor query slot early: its
+own terminal packet or session invalidation remains required. Completed raw
+`QueryResult` values are historical evidence, not current-source authorization.
+Existing state-lock critical sections and entered native calls are not preemptible.
+
+`CtpGatewaySession.create_instrument_query_reader()` borrows the same TD and
+requires no MD connection. The reader validates the exact session, query filters,
+terminal source certificate, native row digest and expiry. It supports futures
+limit rules only and preserves native `MinLimitOrderVolume`/`MaxLimitOrderVolume`;
+missing or contradictory bounds fail. A completed observation expires no later
+than 35 seconds after its original terminal callback. Subsequent source checks
+do not renew that deadline. Begin handles remain reachable for cleanup if a login
+changes before polling; old-reader cleanup never creates a replacement connection.
+These local contracts do not establish CTP account acceptance; validation status is recorded in the R26 round report.
+
+`CtpGatewaySession.connection_status()` is an owner-local probe of the originally
+bound Feed, Trader, API/SPI and account/configuration. It returns `ready`,
+`reconnecting`, or `busy` without connecting or entering native code. `busy` means
+the query-state lock was unavailable; it is not evidence of source health. An
+untrusted or replaced binding raises instead of being classified as a reconnect.
+A ready result is a point-in-time observation, not a trading authorization.
