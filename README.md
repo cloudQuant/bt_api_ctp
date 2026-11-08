@@ -46,6 +46,18 @@ This package provides the **CTP (China Futures)** exchange plugin for the [bt_ap
 
 ### Provider and framework boundary
 
+`market_key_contract.validate_ctp_market_key` exposes the existing CTP tick-key
+shape checks without loading native clients or feeds. The SDK can validate a
+joint Gateway profile before starting its session. The market provider delegates
+to this same function while preserving its original error type and codes. Key
+validation grants no entitlement and does not attest a live source.
+
+`CtpQuoteV2MarketProvider.retained_events_ready(handle)` applies the same source,
+recovery, symbol and epoch checks used before `poll`, without draining or
+acknowledging events. It may advance the existing recovery and still return
+False for that call. This owner-thread observation supports the SDK's retained
+delivery bridge; it cannot make later cross-thread or network delivery atomic.
+
 The working-tree `execution_instrument` module owns CTP execution and native-wire instrument normalization. The SDK retains its proof and authorization checks and loads the provider parser lazily; the client uses the same parser. The shared parser changes a trust dependency and has not passed behavior or distribution acceptance.
 
 This package implements the native CTP client, request feed, market/trade stream adapters, and typed provider data. Its `bt_api.plugins` entry point registers only `CTP___FUTURE` feeds, exchange data, balance handling, and stream handlers when `bt_api_base.PluginLoader` loads it; importing the package alone does not register it. `bt_api_py` provides the `BtApi` facade and event queue, while Backtrader supplies the strategy and engine layer. Managed live-order execution uses `ServiceExecutionSession`/service-v2 only when this provider is integrated with ServiceHost; provider APIs or SimNow support do not establish that integration or real-account acceptance. See [Trading System Architecture](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md).

@@ -36,6 +36,7 @@ from bt_api_ctp.feeds.live_ctp_feed import (
     CtpQuoteClockSourceScope,
     _get_ctp_managed_quote_v2_receipt,
 )
+from bt_api_ctp.market_key_contract import CtpMarketKeyError, validate_ctp_market_key
 from bt_api_ctp.market_tick_projection import project_ctp_market_tick
 
 DEFAULT_CTP_QUOTE_QUEUE_CAPACITY = 1_024
@@ -615,26 +616,7 @@ class CtpQuoteV2MarketProvider:
         handle = self._state_for_handle(handle)
         if handle is None or not handle.active:
             return ()
-        stream = handle.stream
-        if self._source_recovery is not None:
-            self._drive_source_recovery()
-            return ()
-        if stream.quote_v2_service_recovery_required:
-            self._begin_source_recovery(stream)
-            if self._source_recovery is not None:
-                self._drive_source_recovery()
-            return ()
-        if stream.quote_v2_service_fail_closed:
-            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
-        current_scope = self._current_source_scope(stream)
-        if current_scope is None:
-            return ()
-        if current_scope is not handle.source_scope:
-            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
-        if (
-            stream.is_quote_v2_service_symbol_ready(handle.key.instrument.native_symbol) is not True
-            or handle.source_epoch_reset_pending
-        ):
+        if not self._retained_source_ready(handle):
             return ()
         raw_items, loss_before_first = handle.queue.drain_marking_loss(limit)
         events: list[MarketProviderEvent] = []
@@ -649,6 +631,42 @@ class CtpQuoteV2MarketProvider:
                 self._invalid_events += 1
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_EVENT_INVALID") from None
         return tuple(events)
+
+    def retained_events_ready(self, handle: object) -> bool:
+        """Check the current source without draining or acknowledging queued events.
+
+        This is an owner-thread observation; the source may change after it
+        returns and it does not make any later network delivery atomic.
+        """
+        self._check_owner()
+        state = self._state_for_handle(handle)
+        if state is None or not state.active:
+            return False
+        return self._retained_source_ready(state)
+
+    def _retained_source_ready(self, handle: _HandleState) -> bool:
+        stream = handle.stream
+        if self._source_recovery is not None:
+            self._drive_source_recovery()
+            return False
+        if stream.quote_v2_service_recovery_required:
+            self._begin_source_recovery(stream)
+            if self._source_recovery is not None:
+                self._drive_source_recovery()
+            return False
+        if stream.quote_v2_service_fail_closed:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
+        current_scope = self._current_source_scope(stream)
+        if current_scope is None:
+            return False
+        if current_scope is not handle.source_scope:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
+        if (
+            stream.is_quote_v2_service_symbol_ready(handle.key.instrument.native_symbol) is not True
+            or handle.source_epoch_reset_pending
+        ):
+            return False
+        return True
 
     def describe_source(
         self,
@@ -1695,19 +1713,12 @@ class CtpQuoteV2MarketProvider:
         return scope
 
     def _validate_key(self, key: object) -> None:
-        if type(key) is not MarketSubscriptionKey:
-            raise CtpQuoteV2MarketProviderError("INVALID_CTP_MARKET_KEY")
-        instrument = key.instrument
-        if (
-            key.source_ref != self._source_ref
-            or key.entitlement_ref != self._entitlement_ref
-            or instrument.provider != "ctp"
-            or key.channel != "tick"
-            or key.depth is not None
-            or key.timeframe is not None
-            or instrument.instrument_id != instrument.native_symbol
-        ):
-            raise CtpQuoteV2MarketProviderError("UNSUPPORTED_CTP_MARKET_KEY")
+        try:
+            validate_ctp_market_key(
+                key, source_ref=self._source_ref, entitlement_ref=self._entitlement_ref
+            )
+        except CtpMarketKeyError as error:
+            raise CtpQuoteV2MarketProviderError(error.code) from None
 
     def _await_authenticated_scope(self, stream: CtpMarketStream) -> object | None:
         deadline = time.monotonic() + self._connect_timeout_seconds
