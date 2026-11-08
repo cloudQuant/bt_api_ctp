@@ -367,8 +367,8 @@ def test_ctp_market_provider_projects_the_native_callback_and_opaque_clock_ident
     handle = provider.subscribe(key, generation="hub-generation-r1")
     (client,) = _SyntheticMdClient.instances
     assert client.subscribed == ["IF2612"]
-    assert handle.stream.get_quote_clock_source_scope() is not None
-    scope = handle.stream.get_quote_clock_source_scope()
+    assert provider._known_handles[handle].stream.get_quote_clock_source_scope() is not None
+    scope = provider._known_handles[handle].stream.get_quote_clock_source_scope()
     assert scope is not None
 
     client.emit_tick(
@@ -501,14 +501,14 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
     client.next_request_id = 1
     second = provider.subscribe(second_key, generation="hub-generation-b")
     assert len(streams) == 1
-    assert first.stream is second.stream is streams[0]
+    assert provider._known_handles[first].stream is provider._known_handles[second].stream is streams[0]
     assert client.subscribed == ["IF2612", "IH2612"]
-    assert first.stream._quote_v2_service_symbol_request_ids == {
+    assert provider._known_handles[first].stream._quote_v2_service_symbol_request_ids == {
         "IF2612": 1,
         "IH2612": 1,
     }
-    assert first.stream._quote_v2_service_completed_request_ids == {1}
-    assert first.stream.get_quote_v2_service_ready_scope() is not None
+    assert provider._known_handles[first].stream._quote_v2_service_completed_request_ids == {1}
+    assert provider._known_handles[first].stream.get_quote_v2_service_ready_scope() is not None
     assert provider.diagnostics["active_sessions"] == 1
 
     first_descriptor = provider.describe_source(
@@ -570,7 +570,7 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
     assert provider.unsubscribe(first) is True
     assert client.unsubscribed == ["IF2612"]
     assert client.stop_calls == 0
-    assert second.active is True
+    assert provider._known_handles[second].active is True
     assert provider.unsubscribe(second) is True
     assert client.unsubscribed == ["IF2612"]
     assert client.stop_calls == 1
@@ -633,23 +633,23 @@ def test_incremental_keys_keep_one_md_epoch_and_preserve_queued_ticks(
     # The first key can already have a valid native callback in the Hub's
     # per-key replay path while later keys are still being installed.  Its
     # queue also holds the published readiness tick (D62-38).
-    assert first.queue.size == 1
+    assert provider._known_handles[first].queue.size == 1
     emit("IF2612", 1)
-    assert first.queue.size == 2
-    assert first.stream._quote_v2_subscription_metadata["IF2612"]["subscription_epoch"] == 1
+    assert provider._known_handles[first].queue.size == 2
+    assert provider._known_handles[first].stream._quote_v2_subscription_metadata["IF2612"]["subscription_epoch"] == 1
 
     second = provider.subscribe(keys[1], generation="hub-generation-b")
     emit("IH2612", 2)
-    assert first.queue.size == 2
-    assert second.queue.size == 1
+    assert provider._known_handles[first].queue.size == 2
+    assert provider._known_handles[second].queue.size == 1
 
     third = provider.subscribe(keys[2], generation="hub-generation-c")
-    assert first.queue.size == 2
-    assert second.queue.size == 1
-    assert third.queue.size == 0
+    assert provider._known_handles[first].queue.size == 2
+    assert provider._known_handles[second].queue.size == 1
+    assert provider._known_handles[third].queue.size == 0
     assert {
         symbol: metadata["subscription_epoch"]
-        for symbol, metadata in first.stream._quote_v2_subscription_metadata.items()
+        for symbol, metadata in provider._known_handles[first].stream._quote_v2_subscription_metadata.items()
     } == {"IF2612": 1, "IH2612": 1, "IC2612": 1}
 
     for symbol in ("IF2612", "IH2612", "IC2612"):
@@ -716,7 +716,7 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
     second = provider.subscribe(keys[1], generation="hub-generation-b")
     (old_client,) = _SyntheticMdClient.instances
     old_callback = old_client.on_tick
-    old_stream = first.stream
+    old_stream = provider._known_handles[first].stream
 
     assert provider.unsubscribe(first) is True
     assert old_stream._retired_quote_v2_subscriptions == {"IF2612": 1}
@@ -726,10 +726,10 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
         provider.subscribe(keys[0], generation="hub-generation-a2")
     assert error.value.code == "CTP_MARKET_FRESH_STREAM_REQUIRED"
     assert tuple(old_client.subscribed) == subscribe_calls_before_readd
-    assert provider._source_scope is source_scope_before_readd is second.source_scope
-    assert old_stream.get_quote_clock_source_scope() is second.source_scope
+    assert provider._source_scope is source_scope_before_readd is provider._known_handles[second].source_scope
+    assert old_stream.get_quote_clock_source_scope() is provider._known_handles[second].source_scope
     assert provider.diagnostics["active_handles"] == 1
-    assert second.active is True
+    assert provider._known_handles[second].active is True
 
     old_client.emit_tick(
         InstrumentID="IH2612",
@@ -788,14 +788,14 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
     assert provider.diagnostics["active_handles"] == 0
     fresh = provider.subscribe(keys[0], generation="hub-generation-a3")
     assert len(streams) == 2
-    assert fresh.stream is streams[1]
-    assert fresh.stream is not old_stream
+    assert provider._known_handles[fresh].stream is streams[1]
+    assert provider._known_handles[fresh].stream is not old_stream
     (new_client,) = _SyntheticMdClient.instances[1:]
     assert new_client is not old_client
 
     # The old callback closure cannot be relabelled into the new stream after
     # confirmed full close and a fresh native client token.
-    old_queue_size = fresh.queue.size
+    old_queue_size = provider._known_handles[fresh].queue.size
     old_callback(
         SimpleNamespace(
             InstrumentID="IF2612",
@@ -821,11 +821,11 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
         )
     )
     # Only the fresh session's own readiness tick is queued (D62-38).
-    assert fresh.queue.size == old_queue_size == 1
+    assert provider._known_handles[fresh].queue.size == old_queue_size == 1
     (readiness,) = provider.poll(fresh, limit=8)
     assert (
         readiness.data["clock_source_session_id"]
-        == fresh.source_scope.clock_source_session_id
+        == provider._known_handles[fresh].source_scope.clock_source_session_id
     )
     assert provider.unsubscribe(fresh) is True
 
@@ -856,10 +856,10 @@ def test_retired_symbol_limit_fences_additions_but_allows_provider_release(
     first = provider.subscribe(keys[0], generation="hub-generation-a")
     second = provider.subscribe(keys[1], generation="hub-generation-b")
     (client,) = _SyntheticMdClient.instances
-    retired = first.stream._retired_quote_v2_subscriptions
+    retired = provider._known_handles[first].stream._retired_quote_v2_subscriptions
     retired.update(
         {
-            f"retired-{index}": first.stream._md_client_token
+            f"retired-{index}": provider._known_handles[first].stream._md_client_token
             for index in range(live_ctp_feed._MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS - 1)
         }
     )
@@ -868,7 +868,7 @@ def test_retired_symbol_limit_fences_additions_but_allows_provider_release(
     # teardown sequence to continue.
     assert provider.unsubscribe(first) is True
     assert len(retired) == live_ctp_feed._MAX_CTP_QUOTE_V2_RETIRED_SYMBOLS
-    assert first.active is False and second.active is True
+    assert provider._known_handles[first].active is False and provider._known_handles[second].active is True
     assert provider.diagnostics["active_handles"] == 1
     assert tuple(client.unsubscribed) == ("IF2612",)
     native_symbols_before_fenced_add = tuple(client.subscribed)
@@ -879,8 +879,8 @@ def test_retired_symbol_limit_fences_additions_but_allows_provider_release(
     assert error.value.code == "CTP_MARKET_RETIRED_SYMBOL_LIMIT"
     assert tuple(client.subscribed) == native_symbols_before_fenced_add
     assert client.subscribe_additional_calls == native_add_calls_before_fenced_add
-    assert provider._source_scope is second.source_scope
-    assert second.stream.get_quote_clock_source_scope() is second.source_scope
+    assert provider._source_scope is provider._known_handles[second].source_scope
+    assert provider._known_handles[second].stream.get_quote_clock_source_scope() is provider._known_handles[second].source_scope
 
     # The remaining handle can still be released, and its final release stops
     # the exact native session despite the full retired-symbol ledger.
@@ -921,7 +921,7 @@ def test_failed_additional_native_subscription_is_rolled_back_and_session_fails_
         connect_timeout_seconds=1.0,
     )
     first = provider.subscribe(first_key, generation="hub-generation-a")
-    stream = first.stream
+    stream = provider._known_handles[first].stream
     (client,) = _SyntheticMdClient.instances
     client.fail_subscribe_additional_after_accept = True
 
@@ -945,7 +945,7 @@ def test_failed_additional_native_subscription_is_rolled_back_and_session_fails_
     client.on_login(SimpleNamespace())
     assert stream.state is ConnectionState.ERROR
     client.emit_tick(InstrumentID="IF2612", LastPrice=4_001.0)
-    assert first.queue.size == 0
+    assert provider._known_handles[first].queue.size == 0
 
     with pytest.raises(CtpQuoteV2MarketProviderError) as poll_error:
         provider.poll(first, limit=1)
@@ -986,7 +986,7 @@ def test_post_subscribe_metadata_mismatch_fences_the_entire_shared_session(
         connect_timeout_seconds=1.0,
     )
     first = provider.subscribe(first_key, generation="hub-generation-a")
-    stream = first.stream
+    stream = provider._known_handles[first].stream
     original_subscribe_topics = stream.subscribe_topics
 
     def subscribe_then_drop_metadata(topics: object) -> None:
@@ -1071,10 +1071,10 @@ def test_ctp_market_provider_retains_unconfirmed_native_stop_for_retry(
     )
 
     assert provider.unsubscribe(handle) is False
-    assert handle.active is True
+    assert provider._known_handles[handle].active is True
     assert provider.diagnostics["active_handles"] == 1
     assert provider.unsubscribe(handle) is True
-    assert handle.active is False
+    assert provider._known_handles[handle].active is False
     assert client.stop_calls == 1
     assert client.stop_wait_calls == 2
     assert provider.diagnostics["active_handles"] == 0
@@ -1113,7 +1113,7 @@ def test_ctp_market_provider_reconnect_requires_stop_ack_tick_and_hub_epoch(
     )
     second_handle = provider.subscribe(second_key, generation="hub-generation-r1")
     old_client = created[0]
-    old_scope = handle.source_scope
+    old_scope = provider._known_handles[handle].source_scope
     assert provider.describe_source(
         handle,
         key=handle.key,
@@ -1182,7 +1182,7 @@ def test_ctp_market_provider_reconnect_requires_stop_ack_tick_and_hub_epoch(
     assert provider.poll(handle, limit=1) == ()
     assert provider.source_epoch_reset_required(handle) is True
     assert provider.source_epoch_reset_required(second_handle) is True
-    new_scope = handle.source_scope
+    new_scope = provider._known_handles[handle].source_scope
     assert new_scope is not old_scope
     assert new_scope.connection_generation > old_scope.connection_generation
     assert new_scope.clock_source_session_id != old_scope.clock_source_session_id
@@ -1222,7 +1222,7 @@ def test_ctp_market_provider_reconnect_requires_stop_ack_tick_and_hub_epoch(
         UpdateTime="09:30:03",
         UpdateMillisec=0,
     )
-    assert handle.queue.drain(1) == ()
+    assert provider._known_handles[handle].queue.drain(1) == ()
     new_client.emit_tick(
         InstrumentID="IF2612",
         ExchangeID="CFFEX",
@@ -1460,8 +1460,8 @@ def test_ctp_market_provider_reconnect_startup_worker_times_out_fail_closed(
         assert recovery.reconnect_error is None
         assert recovery.reconnected_client is new_client
         assert recovery.reconnect_fenced is True
-        assert handle.stream.quote_v2_service_fail_closed is True
-        assert handle.stream.get_quote_v2_service_ready_scope() is None
+        assert provider._known_handles[handle].stream.quote_v2_service_fail_closed is True
+        assert provider._known_handles[handle].stream.get_quote_v2_service_ready_scope() is None
         assert provider.source_epoch_reset_required(handle) is False
         # The late client stays fenced; the next attempt stops it first.
         assert provider.poll(handle, limit=1) == ()
@@ -1472,7 +1472,7 @@ def test_ctp_market_provider_reconnect_startup_worker_times_out_fail_closed(
         assert retry.stop_done.wait(timeout=1.0) is True
         assert provider.poll(handle, limit=1) == ()
         assert retry.state == "retry_wait"
-        assert handle.stream._md_client is None
+        assert provider._known_handles[handle].stream._md_client is None
         assert new_client.stop_wait_calls >= 1
         assert len(created) == 2
         assert provider.close() is True
@@ -1541,7 +1541,7 @@ def test_ctp_market_provider_closes_constructor_failed_reconnect_from_exact_old_
     assert recovery.reconnect_succeeded is False
     assert recovery.reconnected_client is None
 
-    stream = handle.stream
+    stream = provider._known_handles[handle].stream
     assert stream._md_client is None
     assert stream.state is live_ctp_feed.ConnectionState.ERROR
     assert stream._quote_v2_service_recovery_stopped_client is old_client
@@ -1601,7 +1601,7 @@ def test_ctp_market_provider_recovery_without_fresh_ack_tick_publishes_nothing_w
     assert provider.poll(handle, limit=1) == ()
     new_client = created[1]
     assert provider.poll(handle, limit=1) == ()
-    assert handle.stream.get_quote_v2_service_ready_scope() is None
+    assert provider._known_handles[handle].stream.get_quote_v2_service_ready_scope() is None
     # The reconnect fake sent a tick only after all ACKs; with that fresh tick
     # deliberately omitted, no new scope or Hub reset is authorized.
     assert new_client.subscribed == ["IF2612"]
@@ -1614,9 +1614,9 @@ def test_ctp_market_provider_recovery_without_fresh_ack_tick_publishes_nothing_w
     # authorized meanwhile: no scope, no reset, no event, no descriptor.
     assert provider._source_recovery is recovery
     assert recovery.state == "connecting"
-    assert handle.stream.quote_v2_service_fail_closed is False
+    assert provider._known_handles[handle].stream.quote_v2_service_fail_closed is False
     assert provider.source_epoch_reset_required(handle) is False
-    assert handle.stream.get_quote_v2_service_ready_scope() is None
+    assert provider._known_handles[handle].stream.get_quote_v2_service_ready_scope() is None
     assert provider.describe_source(
         handle,
         key=handle.key,
@@ -1868,7 +1868,7 @@ def test_added_key_is_acquired_only_after_the_asynchronous_venue_ack(
         )
         is not None
     )
-    assert first.stream.quote_v2_service_fail_closed is False
+    assert provider._known_handles[first].stream.quote_v2_service_fail_closed is False
     assert provider.unsubscribe(added) is True
     assert provider.unsubscribe(first) is True
     assert provider.diagnostics["active_sessions"] == 0
@@ -1883,7 +1883,7 @@ def test_unacknowledged_added_key_fails_the_shared_session_closed(
 ) -> None:
     provider = _async_ack_provider(monkeypatch, delay=delay, error_id=error_id, timeout=0.4)
     first = provider.subscribe(_key(), generation="hub-generation-a")
-    stream = first.stream
+    stream = provider._known_handles[first].stream
 
     started = time.monotonic()
     with pytest.raises(CtpQuoteV2MarketProviderError) as error:
@@ -2119,11 +2119,11 @@ def test_a_disconnect_still_publishes_nothing_until_recovery(
     client.emit_tick(InstrumentID="IF2612", Volume=3)  # late callback, old session
     assert provider.poll(handle, limit=8) == ()
     assert provider.diagnostics["source_recovery_active"] == 1
-    assert handle.queue.size == 0
+    assert provider._known_handles[handle].queue.size == 0
     _finish_recovery(provider, handle, "hub-epoch-c2")
     events = provider.poll(handle, limit=8)
     assert events and all(
-        event.data["provider_connection_generation"] == handle.source_scope.connection_generation
+        event.data["provider_connection_generation"] == provider._known_handles[handle].source_scope.connection_generation
         for event in events
     )
     assert 3.0 not in {event.data["cumulative_volume"] for event in events}
@@ -2136,14 +2136,14 @@ def test_the_first_tick_after_a_reconnect_is_a_continuous_baseline(
     provider, handle, client = _live_provider(monkeypatch)
     client.emit_tick(InstrumentID="IF2612", Volume=2)
     assert len(provider.poll(handle, limit=8)) == 2
-    old_scope = handle.source_scope
+    old_scope = provider._known_handles[handle].source_scope
     client.emit_disconnect()
     _finish_recovery(provider, handle, "hub-epoch-c2")
     # The replacement session's readiness tick (Volume=1) is published first.
     readiness, *_ = provider.poll(handle, limit=8)
-    assert handle.source_scope is not old_scope
+    assert provider._known_handles[handle].source_scope is not old_scope
     assert readiness.data["provider_connection_generation"] > old_scope.connection_generation
-    assert readiness.data["clock_source_session_id"] == handle.source_scope.clock_source_session_id
+    assert readiness.data["clock_source_session_id"] == provider._known_handles[handle].source_scope.clock_source_session_id
     assert _tick_facts(readiness) == (0.0, False, "baseline", "continuous")
     assert provider.close() is True
 
@@ -2349,7 +2349,7 @@ def test_symbols_change_during_a_retry_wait_release_allowed_addition_refused(
         provider.subscribe(_instrument_key("IC2612"), generation="hub-generation-r1")
     assert refused.value.code == "CTP_MARKET_RECOVERY_IN_PROGRESS"
     assert provider.unsubscribe(second_handle) is True
-    assert second_handle.active is False
+    assert provider._known_handles[second_handle].active is False
     assert provider._source_recovery.symbols == frozenset({"IF2612"})
 
     fail[0] = False
@@ -2363,7 +2363,7 @@ def test_symbols_change_during_a_retry_wait_release_allowed_addition_refused(
     events = provider.poll(handle, limit=4)  # the readiness tick, then this one
     assert [event.data["last_price"] for event in events][-1] == 4_006.0
     assert {event.data["provider_connection_generation"] for event in events} == {
-        handle.source_scope.connection_generation
+        provider._known_handles[handle].source_scope.connection_generation
     }
     assert provider.close() is True
 
@@ -2403,7 +2403,7 @@ def test_a_final_refusal_racing_the_connecting_check_stays_final(
         lambda: provider._source_recovery is not None
         and provider._source_recovery.state == "connecting",
     )
-    stream = handle.stream
+    stream = provider._known_handles[handle].stream
 
     def refused_during_the_check(checked: CtpMarketStream) -> None:
         checked._on_error(
@@ -2419,3 +2419,31 @@ def test_a_final_refusal_racing_the_connecting_check_stays_final(
     assert stream.quote_v2_service_fail_closed is True
     assert len(created) == 2
     assert provider.close() is True
+
+
+def test_retained_released_handles_do_not_retain_stopped_streams_or_queues(monkeypatch):
+    import gc
+    import weakref
+
+    _SyntheticMdClient.instances.clear()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=_stream_factory, source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF, connect_timeout_seconds=1.0,
+    )
+    handles = []
+    resources = []
+    for _ in range(3):
+        handle = provider.subscribe(_key(), generation="hub-generation-gc")
+        handles.append(handle)
+        resources.append((weakref.ref(provider._known_handles[handle].stream),
+                          weakref.ref(provider._known_handles[handle].queue)))
+        assert provider.unsubscribe(handle) is True
+        assert provider.unsubscribe(handle) is True
+    # The fake class records every native client; remove that test-only owner
+    # before checking collection while the public handles stay reachable.
+    _SyntheticMdClient.instances.clear()
+    gc.collect()
+    assert all(stream_ref() is None and queue_ref() is None
+               for stream_ref, queue_ref in resources)
+    assert all(provider.unsubscribe(handle) is True for handle in handles)

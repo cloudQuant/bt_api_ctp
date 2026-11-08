@@ -515,13 +515,31 @@ class CtpDirectWriteProvider:
     execution_ids_trading_day_scoped = True
     settlement_required = True
 
-    def __init__(self, feed: Any, *, catalog_cache: Any = None) -> None:
+    def __init__(
+        self, feed: Any, *, catalog_cache: Any = None,
+        owner_thread_only: bool = False,
+        background_settlement_readback: bool = True,
+        allow_implicit_connect: bool = True,
+    ) -> None:
         from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
 
         if type(feed) is not CtpRequestDataFuture:
             raise DirectWriteError("ctp_direct_write_feed_invalid")
+        if any(type(value) is not bool for value in (
+            owner_thread_only, background_settlement_readback, allow_implicit_connect
+        )):
+            raise DirectWriteError("ctp_direct_configuration_invalid")
         self._feed = feed
         self._settlement_owner_pid = os.getpid()
+        self._owner_thread = threading.current_thread()
+        self._owner_thread_only = owner_thread_only
+        self._background_settlement_readback = background_settlement_readback
+        self._allow_implicit_connect = allow_implicit_connect
+        self._bound_gateway_trader = None if allow_implicit_connect else feed.trader_client
+        if not allow_implicit_connect and self._bound_gateway_trader is None:
+            raise DirectWriteError("ctp_direct_session_unavailable")
+        self._owner_closed = False
+        self._owner_closing = False
         self._lock = threading.RLock()
         self._events: deque[DirectExecutionEvent] = deque()
         self._events_lock = threading.Lock()
@@ -565,12 +583,35 @@ class CtpDirectWriteProvider:
     # ------------------------------------------------------------------
     # session
     # ------------------------------------------------------------------
+    def _check_access(self, *, allow_closed: bool = False) -> None:
+        if os.getpid() != self._settlement_owner_pid:
+            raise DirectWriteError("ctp_direct_wrong_owner")
+        if self._owner_thread_only and threading.current_thread() is not self._owner_thread:
+            raise DirectWriteError("ctp_direct_wrong_owner")
+        if self._owner_thread_only and (self._owner_closed or self._owner_closing) and not allow_closed:
+            raise DirectWriteError("ctp_direct_provider_closed")
+
+    def _check_settlement_thread(self) -> None:
+        if self._owner_thread_only and threading.current_thread() is not self._owner_thread:
+            raise DirectWriteError("ctp_direct_wrong_owner")
+        if self._owner_thread_only and (self._owner_closed or self._owner_closing):
+            raise DirectWriteError("ctp_direct_provider_closed")
+
+    def _begin_close(self) -> None:
+        self._check_access(allow_closed=True)
+        if self._owner_thread_only:
+            self._owner_closing = True
+
     def _trader(self) -> Any:
         feed = self._feed
         if feed.trader_client is None:
+            if not self._allow_implicit_connect:
+                raise DirectWriteError("ctp_direct_session_unavailable")
             feed.ensure_read_only_connected()
         trader = feed.trader_client
-        if trader is None:
+        if trader is None or (
+            not self._allow_implicit_connect and trader is not self._bound_gateway_trader
+        ):
             raise DirectWriteError("ctp_direct_session_unavailable")
         if trader is not self._listening_trader:
             trader.add_execution_listener(self._on_native_return)
@@ -579,11 +620,13 @@ class CtpDirectWriteProvider:
 
     def ensure_listening(self) -> None:
         """Connect the TD session (read-only login) and attach the return tap."""
+        self._check_access()
 
         with self._lock:
             self._trader()
 
     def session_generation(self) -> Optional[int]:
+        self._check_access()
         trader = self._feed.trader_client
         if trader is None:
             return None
@@ -593,6 +636,7 @@ class CtpDirectWriteProvider:
             return None
 
     def trading_day(self) -> Optional[str]:
+        self._check_access()
         trader = self._feed.trader_client
         if trader is None:
             return None
@@ -601,6 +645,7 @@ class CtpDirectWriteProvider:
         return str(value) if value else None
 
     def login_clock_observation(self) -> Optional[dict[str, Any]]:
+        self._check_access()
         trader = self._feed.trader_client
         method = getattr(trader, "login_clock_observation", None)
         return method() if callable(method) else None
@@ -838,6 +883,8 @@ class CtpDirectWriteProvider:
     # ------------------------------------------------------------------
     def _ensure_readback_monitor(self) -> None:
         """Start the provider's monitor thread unless running or closed."""
+        if not self._background_settlement_readback:
+            return
         with self._monitor_lock:
             if self._monitor_closed or self._monitor_thread is not None:
                 return
@@ -899,6 +946,7 @@ class CtpDirectWriteProvider:
     # orders
     # ------------------------------------------------------------------
     def reserve_order(self, request: Any) -> DirectOrderReservation:
+        self._check_access()
         from bt_api_ctp.order_request_mapping import map_order_request
 
         # Unrepresentable requests (order type, validity, offset intent) fail
@@ -941,6 +989,7 @@ class CtpDirectWriteProvider:
             return reservation
 
     def release_reservation(self, reservation: DirectOrderReservation) -> None:
+        self._check_access()
         with self._lock:
             self._reservations.pop(reservation.reservation_id, None)
 
@@ -951,6 +1000,7 @@ class CtpDirectWriteProvider:
         grant: WriteGrant,
         verifier: WriteGrantVerifier,
     ) -> DirectSubmitResult:
+        self._check_access()
         from bt_api_ctp.ctp import client as ctp_client
         from bt_api_ctp.errors import CtpOrderSubmissionOutcomeUnknown
         from bt_api_ctp.order_request_mapping import map_order_request
@@ -1030,6 +1080,7 @@ class CtpDirectWriteProvider:
         grant: WriteGrant,
         verifier: WriteGrantVerifier,
     ) -> DirectSubmitResult:
+        self._check_access()
         from bt_api_ctp.ctp import client as ctp_client
 
         with self._lock:
@@ -1087,6 +1138,9 @@ class CtpDirectWriteProvider:
     # settlement (D62-20/29)
     # ------------------------------------------------------------------
     def settlement_status(self) -> SettlementStatus:
+        if os.getpid() != self._settlement_owner_pid:
+            return SettlementStatus.UNKNOWN
+        self._check_settlement_thread()
         observation = self.observe_settlement()
         return SettlementStatus.UNKNOWN if observation is None else observation.status
 
@@ -1094,6 +1148,7 @@ class CtpDirectWriteProvider:
         """Return only this provider's latest source-bound settlement observation."""
         if os.getpid() != self._settlement_owner_pid:
             return None
+        self._check_settlement_thread()
         from bt_api_ctp.ctp.client import TraderClient
 
         with self._lock:
@@ -1164,6 +1219,7 @@ class CtpDirectWriteProvider:
         """Recheck the exact issued object and source without provider I/O."""
         if os.getpid() != self._settlement_owner_pid:
             return False
+        self._check_settlement_thread()
         from bt_api_ctp.registered_sim_session import validate_query_session
         from bt_api_ctp.store_account_session import _valid_settlement_result
 
@@ -1205,6 +1261,7 @@ class CtpDirectWriteProvider:
     ) -> SettlementStatus:
         if os.getpid() != self._settlement_owner_pid:
             raise DirectWriteError("ctp_settlement_observation_invalid")
+        self._check_settlement_thread()
         from bt_api_ctp.ctp import client as ctp_client
 
         with self._lock:
@@ -1332,6 +1389,7 @@ class CtpDirectWriteProvider:
         )
 
     def drain_execution_events(self, max_events: int) -> tuple[DirectExecutionEvent, ...]:
+        self._check_access()
         limit = max(1, int(max_events))
         out: list[DirectExecutionEvent] = []
         with self._events_lock:
@@ -1349,6 +1407,7 @@ class CtpDirectWriteProvider:
 
     def instrument_catalog_counters(self) -> dict[str, int]:
         """Catalog cache counters (process-wide cache) plus this provider's queries."""
+        self._check_access()
 
         counters = dict(self._instrument_catalog().counters())
         with self._catalog_lock:
@@ -1366,6 +1425,7 @@ class CtpDirectWriteProvider:
         Returns the cache's ``CatalogReady`` or raises
         ``InstrumentCatalogNotReady``.
         """
+        self._check_access()
         trader = self._trader()
         self._session_fields(trader)
         from bt_api_ctp.instrument_catalog_cache import CtpFeedCatalogSource
@@ -1387,6 +1447,7 @@ class CtpDirectWriteProvider:
         venue is proven.  Catalog entries are reference data only, not quote,
         position or permission evidence.
         """
+        self._check_access()
         if not symbol:
             return None
         trader = self._trader()
@@ -1454,6 +1515,7 @@ class CtpDirectWriteProvider:
         ``session_changed_during_query``.  Rows are projected verbatim;
         nothing is attributed to a strategy here.
         """
+        self._check_access()
         blockers: list[str] = []
         trader = self._trader()
         session = self._session_fields(trader)
@@ -1571,6 +1633,7 @@ class CtpDirectWriteProvider:
         account (or any other instrument) flat; use :meth:`account_facts` for
         whole-account evidence (D62-11a).
         """
+        self._check_access()
         if not _valid_instrument_filter(symbol):
             raise DirectWriteError("ctp_instrument_positions_symbol_invalid")
         venue: Optional[str] = None
@@ -1675,6 +1738,7 @@ class CtpDirectWriteProvider:
         False).  A missing, failed or stale query leaves its facts unknown; a
         session change while reading makes every fact unknown.
         """
+        self._check_access()
         names = _permission_symbols(symbols)
         venues_given = _permission_venues(exchange_ids, names)
         if type(include_rates) is not bool:
@@ -1808,6 +1872,7 @@ class CtpDirectWriteProvider:
 
     def account_reference(self) -> Optional[str]:
         """Hash-only fingerprint of the bound broker/investor (never the raw id)."""
+        self._check_access()
         trader = self._trader()
         fingerprint = getattr(trader, "_account_fingerprint", None)
         return str(fingerprint) if fingerprint else None
@@ -1815,13 +1880,15 @@ class CtpDirectWriteProvider:
     @property
     def dropped_events(self) -> int:
         """Cumulative returns lost before any poll (queue overflow, projection failure)."""
+        self._check_access()
         with self._events_lock:
             return self._dropped_events
 
-    def close(self) -> None:
+    def close(self) -> Any:
         # Stop the background readback for good (a reused provider falls back
         # to the write-path readback).  Joined without ``_lock``: the monitor
         # only tries that lock for one interval and its readback polls stop.
+        self._check_access(allow_closed=True)
         with self._monitor_lock:
             self._monitor_closed = True
             thread, stop = self._monitor_thread, self._monitor_stop
@@ -1836,8 +1903,14 @@ class CtpDirectWriteProvider:
             try:
                 trader.remove_execution_listener(self._on_native_return)
             except Exception:
-                pass
+                if self._owner_thread_only:
+                    return False
         self._listening_trader = None
+        if self._owner_thread_only:
+            self._settlement_ticket = None
+            self._owner_closed = True
+            return True
+        return None
 
 
 def _settlement_readback_monitor(provider_ref: Any, stop: threading.Event) -> None:

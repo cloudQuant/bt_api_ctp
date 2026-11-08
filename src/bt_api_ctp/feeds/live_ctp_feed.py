@@ -1642,7 +1642,29 @@ class CtpRequestData(Feed):
                 or str(self.md_front or "").strip() != self._execution_bound_md_front
                 or str(self.broker_id or "").strip() != self._execution_bound_broker_id
                 or str(self.user_id or "").strip() != self._execution_bound_user_id
-                or state.get("armed") is not False
+            ):
+                raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
+            sdk_active = self.sdk_write_admission_active()
+            if (
+                sdk_active is not False
+                or self._sdk_write_admission_active is not False
+                or state.get("sdk_write_admission") is not False
+                or state.get("environment_profile") == ctp_client.SDK_ADMITTED_PROFILE
+            ):
+                if (
+                    sdk_active is not True
+                    or self._sdk_write_admission_active is not True
+                    or state.get("sdk_write_admission") is not True
+                    or state.get("armed") is not True
+                    or state.get("environment_profile") != ctp_client.SDK_ADMITTED_PROFILE
+                    or state.get("runtime_simnow_credential_binding_configured") is not False
+                    or state.get("runtime_simnow_write_verifier_configured") is not False
+                ):
+                    raise ctp_client.CtpExecutionGateError("ctp_simnow_credential_binding_rejected")
+                method(capability, symbol, exchange_id)
+                return
+            if (
+                state.get("armed") is not False
                 or state.get("runtime_simnow_credential_binding_configured") is not True
                 or state.get("runtime_simnow_write_verifier_configured") is not True
             ):
@@ -1915,6 +1937,15 @@ class CtpRequestData(Feed):
         **kwargs,
     ):
         execution_capability = kwargs.pop("_execution_capability", None)
+        if (
+            self._sdk_write_admission_active is True or self.sdk_write_admission_active() is True
+        ) and any(
+            kwargs.get(name) is not None
+            for name in (
+                "runtime_order_id", "managed_intent_id", "runtime_action_id", "managed_cancel_intent_id"
+            )
+        ):
+            raise ctp_client.CtpExecutionGateError("ctp_sdk_managed_identity_forbidden")
         exchange_id = kwargs.get("exchange_id", "")
         self._ensure_execution_permitted(execution_capability, symbol, exchange_id)
         if not _is_exact_ctp_order_ref(client_order_id):
@@ -2032,6 +2063,15 @@ class CtpRequestData(Feed):
 
     def _cancel_order_native(self, symbol, order_id=None, extra_data=None, **kwargs):
         execution_capability = kwargs.pop("_execution_capability", None)
+        if (
+            self._sdk_write_admission_active is True or self.sdk_write_admission_active() is True
+        ) and any(
+            kwargs.get(name) is not None
+            for name in (
+                "runtime_order_id", "managed_intent_id", "runtime_action_id", "managed_cancel_intent_id"
+            )
+        ):
+            raise ctp_client.CtpExecutionGateError("ctp_sdk_managed_identity_forbidden")
         exchange_id = kwargs.get("exchange_id", "")
         runtime_order_id = kwargs.get("runtime_order_id")
         managed_intent_id = kwargs.get("managed_intent_id")

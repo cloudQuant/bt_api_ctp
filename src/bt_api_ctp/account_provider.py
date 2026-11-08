@@ -518,6 +518,60 @@ class CtpReadOnlyAccountSessionProvider:
             raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
         return _build_observation(account_key, results, self._utc_clock())
 
+    def borrow_request_feed(self) -> object:
+        """Borrow the exact current feed after source and account revalidation.
+
+        This never connects or creates a replacement trader. A changed native
+        session must first pass ``refresh_session`` on the owner thread.
+        """
+        self._check_owner()
+        from bt_api_ctp.ctp.client import TraderClient
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        feed, trader, account = self._request_feed, self._trader, self._account_key
+        if (
+            type(feed) is not CtpRequestDataFuture
+            or type(trader) is not TraderClient
+            or type(account) is not AccountKey
+            or feed.trader_client is not trader
+        ):
+            raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED")
+        scope = feed.get_query_session_scope()
+        self._validate_scope(scope, trader, account)
+        if not _same_session_scope(self._session_scope, scope):
+            raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
+        return feed
+
+    def refresh_session(self) -> None:
+        """Bind future reads to a freshly validated session of the same trader."""
+        self._check_owner()
+        from bt_api_ctp.ctp.client import TraderClient
+        from bt_api_ctp.feeds.live_ctp_feed import CtpRequestDataFuture
+
+        feed, trader, account = self._request_feed, self._trader, self._account_key
+        if (
+            type(feed) is not CtpRequestDataFuture
+            or type(trader) is not TraderClient
+            or type(account) is not AccountKey
+            or feed.trader_client is not trader
+            or self._execution_settings is not None
+        ):
+            raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED")
+        scope = feed.get_query_session_scope()
+        self._validate_scope(scope, trader, account)
+        previous = self._session_scope
+        if (
+            type(previous) is not _QuerySessionScope
+            or scope.issuer is not previous.issuer
+            or scope.account_fingerprint != previous.account_fingerprint
+            or scope.broker_id != previous.broker_id
+            or scope.investor_id != previous.investor_id
+            or scope.connection_generation < previous.connection_generation
+        ):
+            raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
+        self._session_scope = scope
+        self._native_connection_generation = scope.connection_generation
+
     def close(self) -> bool:
         """Stop the exact native trader; false leaves its reference in custody."""
 
@@ -561,6 +615,21 @@ class CtpReadOnlyAccountSessionProvider:
             self._account_key = None
             return True
         attempt = self._startup_attempt
+        if type(attempt) is CtpNativeStartupAttempt and attempt.phase == "factory_uncertain":
+            # A retained factory attempt may resolve, but must remain the same
+            # exact client and attempt before a later receipt can release it.
+            try:
+                current_attempt = trader.native_startup_attempt
+            except Exception:
+                return False
+            if (
+                type(current_attempt) is CtpNativeStartupAttempt
+                and current_attempt.phase == "api_created"
+                and current_attempt.api_attempt_id == attempt.api_attempt_id
+                and current_attempt._client_binding is attempt._client_binding
+            ):
+                attempt = current_attempt
+                self._startup_attempt = attempt
         if type(attempt) is CtpNativeStartupAttempt:
             # Generation-zero cleanup is an additive startup-specific API.
             # Keep the established stop_and_wait() return contract for every
@@ -570,6 +639,23 @@ class CtpReadOnlyAccountSessionProvider:
             stop_and_wait = getattr(trader, "stop_and_wait", None)
         if not callable(stop_and_wait):
             return False
+        # A reconnect may advance the same native trader's generation after
+        # the initial scope. Bind the stop to the current exact client before
+        # issuing it; the old query scope is never relabeled.
+        expected_stop_generation = self._native_connection_generation
+        from bt_api_ctp.ctp.client import TraderClient
+        if type(trader) is TraderClient and attempt is None and self._native_owner_created is True:
+            try:
+                current_generation = trader.connection_generation
+            except Exception:
+                return False
+            if (
+                type(current_generation) is not int
+                or current_generation <= 0
+                or (expected_stop_generation is not None and current_generation < expected_stop_generation)
+            ):
+                return False
+            expected_stop_generation = current_generation
         try:
             receipt = stop_and_wait(timeout=self._stop_timeout_seconds)
         except Exception:
@@ -617,7 +703,7 @@ class CtpReadOnlyAccountSessionProvider:
             if type(self._session_scope) is _QuerySessionScope
             else None
         )
-        expected_generation = self._native_connection_generation or scope_generation
+        expected_generation = expected_stop_generation or scope_generation
         if not _native_stop_confirmed(receipt, expected_generation=expected_generation):
             return False
         self._native_connection_generation = receipt.connection_generation

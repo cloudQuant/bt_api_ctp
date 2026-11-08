@@ -8049,6 +8049,19 @@ class TraderClient:
         managed_cancel_intent_id: str | None = None,
     ) -> _CtpRuntimeSimNowWriteAuthorization | None:
         if (
+            self._execution_gate_environment_profile == SDK_ADMITTED_PROFILE
+            or self._direct_sim_admission_is_current_locked()
+        ) and any(
+            value is not None
+            for value in (
+                runtime_order_id,
+                managed_intent_id,
+                runtime_action_id,
+                managed_cancel_intent_id,
+            )
+        ):
+            raise CtpExecutionGateError("ctp_sdk_managed_identity_forbidden")
+        if (
             self._is_simnow_write_restricted_locked()
             and not self._direct_sim_admission_is_current_locked()
         ):

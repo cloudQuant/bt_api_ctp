@@ -452,3 +452,34 @@ The existing policy treating a trusted empty result or earlier ConfirmDate as
 UNCONFIRMED is unchanged; its actual venue date and query-coverage semantics
 remain unverified. Native auto_settlement_confirm remains disabled. Tests using
 a real Python TraderClient and fake native API are not real-account evidence.
+
+### Iteration 63 single-session Gateway composition
+
+`CtpGatewaySession` creates no native resources in its constructor. On its owning
+process/thread, the account reader creates and retains one TD client; the direct
+provider borrows that exact client with implicit connection and its background
+settlement monitor disabled. One quote provider lazily creates the shared MD
+client. Trusted factories must return fresh objects with the exact configured
+account, front and flow bindings; already-started foreign resources are rejected
+without being adopted or stopped. The current account profile supports SimNow.
+
+The account scope equals `AccountKey.account_key_id`. Same-client reconnection
+requires refreshing the account reader's scope; earlier query results keep their
+original generation and cannot be relabeled. This local refresh is not a complete
+service reconnect/reconciliation policy. In particular, SDK owner maintenance
+currently stops the service on a refresh failure.
+
+Closing seals borrowed providers against new public operations and retains
+unconfirmed native resources for another owner-thread cleanup attempt. Native
+stop receipts, not `disconnect()` or a coordinator close call, establish stop
+completion. Public market subscription handles carry immutable identity and key
+information; queues, streams and mutable source state remain provider-owned.
+This prevents ordinary public-handle calls from bypassing the owner lifecycle;
+it is not a sandbox against arbitrary Python access to private state. The SDK
+keeps the account guard until the whole session confirms closure. Tests using
+synthetic native objects do not prove real native shutdown or account behavior.
+
+For explicit-front profiles, SDK direct admission remains distinct from the
+legacy managed approval contract. Both Feed and the final Trader write gate
+reject non-null managed order/action identities in SDK direct requests; choosing
+an address profile never authorizes a write or bypasses either mode's checks.

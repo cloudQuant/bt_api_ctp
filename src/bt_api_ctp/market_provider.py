@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import threading
 import time
+import weakref
 from collections import deque
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -97,6 +99,7 @@ class CtpQuoteV2MarketProviderError(RuntimeError):
             "INVALID_CTP_MARKET_KEY",
             "UNSUPPORTED_CTP_MARKET_KEY",
             "CTP_MARKET_OWNER_THREAD_REQUIRED",
+            "CTP_MARKET_OWNER_CLOSING",
             "CTP_MARKET_STARTUP_CLEANUP_PENDING",
             "CTP_MARKET_STREAM_FACTORY_FAILED",
             "CTP_MARKET_STREAM_INVALID",
@@ -227,20 +230,36 @@ class _CtpQuoteV2Fanout:
             target.put(item, block=False)
 
 
-@dataclass
+@dataclass(frozen=True, eq=False)
 class CtpQuoteV2MarketHandle:
-    """One exact Hub key/registration projected from the owner's MD session."""
+    """Opaque identity for one subscription; native resources remain private."""
 
     key: MarketSubscriptionKey
     generation: str
+
+
+@dataclass
+class _HandleState:
+    key: MarketSubscriptionKey
+    generation: str
+    public_handle: CtpQuoteV2MarketHandle | None
     queue: BoundedCtpQuoteV2Queue
     stream: CtpMarketStream
     source_scope: CtpQuoteClockSourceScope
-    owner_token: object
     active: bool = True
     source_epoch_reset_pending: bool = False
     source_epoch_reset_epoch: str | None = None
     last_hub_epoch: str | None = None
+
+
+@dataclass(frozen=True)
+class _InactiveHandle:
+    """Identity-only tombstone: it cannot retain a stopped native session."""
+
+    active: bool = False
+
+
+_INACTIVE_HANDLE = _InactiveHandle()
 
 
 @dataclass
@@ -343,9 +362,14 @@ class CtpQuoteV2MarketProvider:
         self._connect_timeout_seconds = float(connect_timeout_seconds)
         self._stop_timeout_seconds = float(stop_timeout_seconds)
         self._owner_thread_id = threading.get_ident()
-        self._owner_token = object()
-        self._active_handles: dict[int, CtpQuoteV2MarketHandle] = {}
-        self._handles_by_symbol: dict[str, CtpQuoteV2MarketHandle] = {}
+        self._owner_thread = threading.current_thread()
+        self._owner_pid = os.getpid()
+        self._close_only = False
+        self._known_handles: weakref.WeakKeyDictionary[
+            CtpQuoteV2MarketHandle, _HandleState | _InactiveHandle
+        ] = weakref.WeakKeyDictionary()
+        self._active_handles: dict[int, _HandleState] = {}
+        self._handles_by_symbol: dict[str, _HandleState] = {}
         self._stream: CtpMarketStream | None = None
         self._fanout: _CtpQuoteV2Fanout | None = None
         self._native_client: object | None = None
@@ -360,6 +384,7 @@ class CtpQuoteV2MarketProvider:
 
     @property
     def diagnostics(self) -> dict[str, int]:
+        self._check_owner()
         return {
             "pending_start_cleanup": len(self._pending_start_cleanup),
             "active_handles": len(self._active_handles),
@@ -389,15 +414,11 @@ class CtpQuoteV2MarketProvider:
 
     def unsubscribe(self, handle: object) -> bool:
         self._check_owner()
-        if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
-        ):
+        handle = self._state_for_handle(handle)
+        if handle is None:
             return False
         if not handle.active:
             return True
-        if self._active_handles.get(id(handle)) is not handle:
-            return False
         recovery = self._source_recovery
         if recovery is not None:
             # While the native stop or start is in flight the recovery owns
@@ -435,10 +456,7 @@ class CtpQuoteV2MarketProvider:
         )
         if not stopped:
             return False
-        handle.active = False
-        handle.queue.clear()
-        self._active_handles.pop(id(handle), None)
-        self._handles_by_symbol.pop(handle.key.instrument.native_symbol, None)
+        self._remove_handle(handle)
         self._reset_active_stream()
         return native_stop_confirmed
 
@@ -451,7 +469,7 @@ class CtpQuoteV2MarketProvider:
         for a later owner-thread retry.
         """
 
-        self._check_owner()
+        self._check_owner(allow_closing=True)
         stream = self._stream
         recovery = self._source_recovery
         recovery_stop_confirmed = False
@@ -510,8 +528,7 @@ class CtpQuoteV2MarketProvider:
             if not stopped:
                 return False
             for handle in tuple(self._active_handles.values()):
-                handle.active = False
-                handle.queue.clear()
+                self._remove_handle(handle)
             self._active_handles.clear()
             self._handles_by_symbol.clear()
             self._reset_active_stream()
@@ -560,7 +577,7 @@ class CtpQuoteV2MarketProvider:
         )
 
     def _unsubscribe_during_recovery(
-        self, handle: CtpQuoteV2MarketHandle, recovery: _SourceRecovery
+        self, handle: _HandleState, recovery: _SourceRecovery
     ) -> bool:
         """Release one of several channels once the old stop is settled."""
 
@@ -595,12 +612,8 @@ class CtpQuoteV2MarketProvider:
         self._check_owner()
         if type(limit) is not int or not 1 <= limit <= MAX_CTP_PROVIDER_POLL_LIMIT:
             raise CtpQuoteV2MarketProviderError("INVALID_CTP_MARKET_PROVIDER_CONFIG")
-        if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
-            or not handle.active
-            or self._active_handles.get(id(handle)) is not handle
-        ):
+        handle = self._state_for_handle(handle)
+        if handle is None or not handle.active:
             return ()
         stream = handle.stream
         if self._source_recovery is not None:
@@ -647,11 +660,10 @@ class CtpQuoteV2MarketProvider:
         epoch: str,
     ) -> MarketSourceDescriptor | None:
         self._check_owner()
+        handle = self._state_for_handle(handle)
         if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
+            handle is None
             or not handle.active
-            or self._active_handles.get(id(handle)) is not handle
             or handle.key != key
             or handle.generation != generation
             or type(stream_id) is not str
@@ -688,12 +700,8 @@ class CtpQuoteV2MarketProvider:
         """Typed optional Gateway hook for a confirmed provider source restart."""
 
         self._check_owner()
-        if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
-            or not handle.active
-            or self._active_handles.get(id(handle)) is not handle
-        ):
+        handle = self._state_for_handle(handle)
+        if handle is None or not handle.active:
             return False
         recovery = self._source_recovery
         return bool(
@@ -721,12 +729,8 @@ class CtpQuoteV2MarketProvider:
         """
 
         self._check_owner()
-        if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
-            or not handle.active
-            or self._active_handles.get(id(handle)) is not handle
-        ):
+        handle = self._state_for_handle(handle)
+        if handle is None or not handle.active:
             return None
         recovery = self._source_recovery
         if recovery is None or recovery.state == "reset_pending":
@@ -756,11 +760,10 @@ class CtpQuoteV2MarketProvider:
         """Accept only the Hub epoch bound to this exact current handle."""
 
         self._check_owner()
+        handle = self._state_for_handle(handle)
         if (
-            type(handle) is not CtpQuoteV2MarketHandle
-            or handle.owner_token is not self._owner_token
+            handle is None
             or not handle.active
-            or self._active_handles.get(id(handle)) is not handle
             or type(epoch) is not str
             or not epoch
         ):
@@ -939,17 +942,21 @@ class CtpQuoteV2MarketProvider:
         stream: CtpMarketStream,
         scope: CtpQuoteClockSourceScope,
     ) -> CtpQuoteV2MarketHandle:
-        handle = CtpQuoteV2MarketHandle(
-            key=key,
-            generation=generation,
-            queue=callback_queue,
-            stream=stream,
-            source_scope=scope,
-            owner_token=self._owner_token,
-        )
-        self._active_handles[id(handle)] = handle
-        self._handles_by_symbol[key.instrument.native_symbol] = handle
+        handle = CtpQuoteV2MarketHandle(key=key, generation=generation)
+        state = _HandleState(key, generation, handle, callback_queue, stream, scope)
+        self._known_handles[handle] = state
+        self._active_handles[id(handle)] = state
+        self._handles_by_symbol[key.instrument.native_symbol] = state
         return handle
+
+    def _state_for_handle(self, handle: object) -> _HandleState | _InactiveHandle | None:
+        if type(handle) is not CtpQuoteV2MarketHandle:
+            return None
+        state = self._known_handles.get(handle)
+        if state is not None and state.active:
+            if state.public_handle is not handle or self._active_handles.get(id(handle)) is not state:
+                return None
+        return state
 
     def _begin_source_recovery(self, stream: CtpMarketStream) -> None:
         if (
@@ -1659,10 +1666,14 @@ class CtpQuoteV2MarketProvider:
             handle.source_epoch_reset_pending = False
             handle.source_epoch_reset_epoch = None
 
-    def _remove_handle(self, handle: CtpQuoteV2MarketHandle) -> None:
+    def _remove_handle(self, handle: _HandleState) -> None:
         handle.active = False
         handle.queue.clear()
-        self._active_handles.pop(id(handle), None)
+        public_handle = handle.public_handle
+        self._active_handles.pop(id(public_handle), None)
+        if public_handle is not None:
+            self._known_handles[public_handle] = _INACTIVE_HANDLE
+        handle.public_handle = None
         self._handles_by_symbol.pop(handle.key.instrument.native_symbol, None)
 
     def _reset_active_stream(self) -> None:
@@ -1822,14 +1833,20 @@ class CtpQuoteV2MarketProvider:
         if pending:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_STARTUP_CLEANUP_PENDING")
 
-    def _check_owner(self) -> None:
-        if threading.get_ident() != self._owner_thread_id:
+    def _begin_close(self) -> None:
+        self._check_owner(allow_closing=True)
+        self._close_only = True
+
+    def _check_owner(self, *, allow_closing: bool = False) -> None:
+        if os.getpid() != self._owner_pid or threading.current_thread() is not self._owner_thread:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_OWNER_THREAD_REQUIRED")
+        if self._close_only and not allow_closing:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_OWNER_CLOSING")
 
 
 def _project_native_tick(
     item: object,
-    handle: CtpQuoteV2MarketHandle,
+    handle: _HandleState,
     *,
     local_message_loss: bool = False,
 ) -> MarketProviderEvent:
