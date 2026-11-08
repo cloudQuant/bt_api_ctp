@@ -112,6 +112,12 @@ class _FakeNativeQueryField:
         "InstrumentID",
         "ExchangeID",
         "OrderSysID",
+        "InsertTimeStart",
+        "InsertTimeEnd",
+        "InvestUnitID",
+        "CurrencyID",
+        "BizType",
+        "AccountID",
         "TradeID",
         "TradeTimeStart",
         "TradeTimeEnd",
@@ -146,6 +152,8 @@ class _FakeNativeQueryField:
     def __getattribute__(self, name):
         if name in object.__getattribute__(self, "_QUERY_FIELD_NAMES"):
             behavior = object.__getattribute__(self, "_behavior")
+            if behavior == ("alter", name):
+                return "unexpected"
             if behavior == "missing_getter" and name == "OrderSysID":
                 raise AttributeError(name)
             if behavior == "numeric_missing_getter" and name == "InputPrice":
@@ -194,6 +202,9 @@ class _FakeQueryApi:
     def ReqQryInvestorPosition(self, field, request_id):
         return self._submit("positions", field, request_id)
 
+    def ReqQryTradingAccount(self, field, request_id):
+        return self._submit("account", field, request_id)
+
     def ReqQryOptionInstrTradeCost(self, field, request_id):
         return self._submit("option_trade_cost", field, request_id)
 
@@ -208,6 +219,7 @@ def _query_client_with_fake_native_api(monkeypatch, *, behavior=None, field_type
         "orders": "CThostFtdcQryOrderField",
         "trades": "CThostFtdcQryTradeField",
         "positions": "CThostFtdcQryInvestorPositionField",
+        "account": "CThostFtdcQryTradingAccountField",
         "instruments": "CThostFtdcQryInstrumentField",
     }[field_type]
     monkeypatch.setattr(
@@ -244,6 +256,9 @@ def test_query_source_records_exact_order_target_filters_and_explicit_names():
         "InstrumentID": "rb2610",
         "ExchangeID": "SHFE",
         "OrderSysID": "SYS-17",
+        "InsertTimeStart": "",
+        "InsertTimeEnd": "",
+        "InvestUnitID": "",
     }
     assert captured["request_intent_filters"] == expected_intent
     native_field = captured["request_filter_field"]
@@ -286,7 +301,10 @@ def test_query_source_captures_intent_and_native_getter_readback_before_send(mon
     expected = (
         ("BrokerID", "9999"),
         ("ExchangeID", "SHFE"),
+        ("InsertTimeEnd", ""),
+        ("InsertTimeStart", ""),
         ("InstrumentID", "rb2610"),
+        ("InvestUnitID", ""),
         ("InvestorID", "investor-1"),
         ("OrderSysID", "SYS-17"),
     )
@@ -307,7 +325,10 @@ def test_unfiltered_order_query_readback_matches_main_consumer_empty_scope(monke
     expected = (
         ("BrokerID", "9999"),
         ("ExchangeID", ""),
+        ("InsertTimeEnd", ""),
+        ("InsertTimeStart", ""),
         ("InstrumentID", ""),
+        ("InvestUnitID", ""),
         ("InvestorID", "investor-1"),
         ("OrderSysID", ""),
     )
@@ -336,9 +357,44 @@ def test_trade_and_position_sources_capture_only_consumer_filter_keys(monkeypatc
         monkeypatch, field_type="positions"
     )
     positions = position_client.query_positions_result(timeout=0.1)
-    expected_positions = (("BrokerID", "9999"), ("InvestorID", "investor-1"))
+    expected_positions = (
+        ("BrokerID", "9999"), ("ExchangeID", ""), ("InstrumentID", ""),
+        ("InvestUnitID", ""), ("InvestorID", "investor-1"),
+    )
     assert positions.complete is True
     assert position_api.source_at_dispatch.request_filters == expected_positions
+
+
+def test_account_native_query_records_default_currency_business_and_account(monkeypatch):
+    client, api = _query_client_with_fake_native_api(monkeypatch, field_type="account")
+    result = client.query_account_result(timeout=0.1)
+    expected = (
+        ("AccountID", ""), ("BizType", "\x00"), ("BrokerID", "9999"),
+        ("CurrencyID", ""), ("InvestorID", "investor-1"),
+    )
+    assert result.complete is True
+    assert api.source_at_dispatch.request_intent_filters == expected
+    assert api.source_at_dispatch.request_filters == expected
+    assert api.field_values_at_dispatch == dict(expected)
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [("account", field) for field in ("AccountID", "BizType", "CurrencyID")]
+    + [("positions", field) for field in ("ExchangeID", "InstrumentID", "InvestUnitID")]
+    + [("orders", field) for field in (
+        "ExchangeID", "InstrumentID", "InvestUnitID", "OrderSysID",
+        "InsertTimeStart", "InsertTimeEnd",
+    )],
+)
+def test_full_scope_native_filter_mismatch_never_submits(monkeypatch, kind, field):
+    client, api = _query_client_with_fake_native_api(
+        monkeypatch, field_type=kind, behavior=("alter", field)
+    )
+    result = getattr(client, f"query_{kind}_result")(timeout=0.1)
+    assert result.complete is False
+    assert result.query_source is None
+    assert api.calls == []
 
 
 @pytest.mark.parametrize(

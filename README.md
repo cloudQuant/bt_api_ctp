@@ -483,3 +483,20 @@ For explicit-front profiles, SDK direct admission remains distinct from the
 legacy managed approval contract. Both Feed and the final Trader write gate
 reject non-null managed order/action identities in SDK direct requests; choosing
 an address profile never authorizes a write or bypasses either mode's checks.
+
+### Iteration 63 account query scope evidence
+
+`native_account_query_filters` defines the complete current native filter set
+for account, position and order queries. Query source evidence records both the
+intended values and actual request-structure readback, including empty currency,
+investment-unit, instrument and time filters and the native NUL business-type
+default. Filtered consumers use the same provider-owned contract with their
+explicit values; SDK consumers do not maintain a second CTP field list.
+
+The account reader requires exact default-scope evidence, no additional filters
+or row limits, and matching BrokerID/InvestorID on every position and order row.
+These checks prove the observed request scope, not venue-wide business/currency
+coverage. The current account reader still rejects active orders without a
+usable opaque observation identity and does not provide a proven average price
+for nonzero positions. No missing fact is replaced with an empty table or a
+guessed price. Real venue/date/coverage validation remains separate.

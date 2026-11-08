@@ -67,7 +67,7 @@ def _position_api(client, seen, rows):
 
     def submit(field, request_id):
         seen.append({name: getattr(field, name) for name in (
-            "BrokerID", "InvestorID", "InstrumentID", "ExchangeID"
+            "BrokerID", "InvestorID", "InstrumentID", "ExchangeID", "InvestUnitID"
         )})
         for index, row in enumerate(rows):
             spi.OnRspQryInvestorPosition(row, None, request_id, index == len(rows) - 1)
@@ -89,7 +89,7 @@ def test_trader_filtered_position_query_writes_filter_into_native_request():
     )
     assert result.complete is True
     assert seen == [
-        {"BrokerID": "9999", "InvestorID": "offline", "InstrumentID": "rb2701", "ExchangeID": "SHFE"}
+        {"BrokerID": "9999", "InvestorID": "offline", "InstrumentID": "rb2701", "ExchangeID": "SHFE", "InvestUnitID": ""}
     ]
     filters = dict(result.query_source.request_filters)
     assert filters["InstrumentID"] == "rb2701"
@@ -103,12 +103,15 @@ def test_trader_unfiltered_position_query_is_unchanged():
     result = client.query_positions_result(timeout=0.05)
     assert result.complete is True and result.records == ()
     assert seen == [
-        {"BrokerID": "9999", "InvestorID": "offline", "InstrumentID": "", "ExchangeID": ""}
+        {"BrokerID": "9999", "InvestorID": "offline", "InstrumentID": "", "ExchangeID": "", "InvestUnitID": ""}
     ]
-    # Request evidence of the whole-account call names only the account fields.
+    # The source proves the native default scope, including empty filters.
     assert dict(result.query_source.request_filters) == {
         "BrokerID": "9999",
         "InvestorID": "offline",
+        "InstrumentID": "",
+        "ExchangeID": "",
+        "InvestUnitID": "",
     }
 
 

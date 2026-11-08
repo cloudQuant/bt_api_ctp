@@ -85,6 +85,7 @@ from bt_api_ctp.order_action import CtpOrderActionEvidence
 from bt_api_ctp.query import (
     QUERY_COMPLETION_ORIGINS,
     QueryResult,
+    native_account_query_filters,
     _attach_query_source,
     _new_query_session_scope,
     _new_query_source,
@@ -11404,11 +11405,10 @@ class TraderClient:
         deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryTradingAccountField()
-        intent_filters = {
-            "BrokerID": self._bound_broker_id,
-            "InvestorID": self._bound_user_id,
-        }
         try:
+            intent_filters = native_account_query_filters(
+                "account", broker_id=self._bound_broker_id, investor_id=self._bound_user_id
+            )
             for name, value in intent_filters.items():
                 setattr(field, name, value)
         except Exception:
@@ -11464,15 +11464,11 @@ class TraderClient:
                 include_query_source=False,
             )
         field = CThostFtdcQryInvestorPositionField()
-        intent_filters = {
-            "BrokerID": self._bound_broker_id,
-            "InvestorID": self._bound_user_id,
-        }
-        if instrument_id:
-            intent_filters["InstrumentID"] = instrument_id
-        if exchange_id:
-            intent_filters["ExchangeID"] = exchange_id
         try:
+            intent_filters = native_account_query_filters(
+                "positions", broker_id=self._bound_broker_id, investor_id=self._bound_user_id,
+                instrument_id=instrument_id, exchange_id=exchange_id,
+            )
             for name, value in intent_filters.items():
                 setattr(field, name, value)
         except Exception:
@@ -11513,14 +11509,12 @@ class TraderClient:
         deadline_monotonic: float | None = None,
     ) -> QueryResult[Any]:
         field = CThostFtdcQryOrderField()
-        intent_filters = {
-            "BrokerID": self._bound_broker_id,
-            "InvestorID": self._bound_user_id,
-            "InstrumentID": str(instrument_id or ""),
-            "ExchangeID": str(exchange_id or ""),
-            "OrderSysID": str(order_sys_id or ""),
-        }
         try:
+            intent_filters = native_account_query_filters(
+                "orders", broker_id=self._bound_broker_id, investor_id=self._bound_user_id,
+                instrument_id=str(instrument_id or ""), exchange_id=str(exchange_id or ""),
+                order_sys_id=str(order_sys_id or ""),
+            )
             for name, value in intent_filters.items():
                 setattr(field, name, value)
         except Exception:

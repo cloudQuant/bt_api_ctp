@@ -55,6 +55,7 @@ from bt_api_ctp.query import (
     _QUERY_SOURCE_SEAL,
     _QuerySource,
     QueryResult,
+    native_account_query_filters,
     _query_records_digest,
 )
 from bt_api_ctp.registered_sim_session import (
@@ -1175,13 +1176,12 @@ class CtpProviderQueryService(ProviderQueryPort):
                 "exchange_id": exchange or "",
                 "order_sys_id": "",
             }
-            native = {
-                "BrokerID": self._session.broker_id,
-                "InvestorID": self._session.investor_id,
-                "InstrumentID": arguments["instrument_id"],
-                "ExchangeID": arguments["exchange_id"],
-                "OrderSysID": "",
-            }
+            native = native_account_query_filters(
+                "orders", broker_id=self._session.broker_id,
+                investor_id=self._session.investor_id,
+                instrument_id=arguments["instrument_id"],
+                exchange_id=arguments["exchange_id"],
+            )
             return _PreparedQuery(
                 request,
                 "query_orders_result",
@@ -1253,7 +1253,10 @@ class CtpProviderQueryService(ProviderQueryPort):
             return _PreparedQuery(
                 request,
                 "query_account_result",
-                {"BrokerID": self._session.broker_id, "InvestorID": self._session.investor_id},
+                native_account_query_filters(
+                    "account", broker_id=self._session.broker_id,
+                    investor_id=self._session.investor_id,
+                ),
                 {},
             )
 
@@ -1265,7 +1268,10 @@ class CtpProviderQueryService(ProviderQueryPort):
             return _PreparedQuery(
                 request,
                 "query_positions_result",
-                {"BrokerID": self._session.broker_id, "InvestorID": self._session.investor_id},
+                native_account_query_filters(
+                    "positions", broker_id=self._session.broker_id,
+                    investor_id=self._session.investor_id,
+                ),
                 {},
             )
 
@@ -1318,7 +1324,12 @@ class CtpProviderQueryService(ProviderQueryPort):
             }
             if family == "orders":
                 arguments["order_sys_id"] = ""
-                native["OrderSysID"] = ""
+                native = native_account_query_filters(
+                    "orders", broker_id=self._session.broker_id,
+                    investor_id=self._session.investor_id,
+                    instrument_id=arguments["instrument_id"],
+                    exchange_id=arguments["exchange_id"],
+                )
                 return _PreparedQuery(request, "query_orders_result", native, arguments)
             if family == "trades":
                 arguments.update({"trade_id": "", "start_time": "", "end_time": ""})

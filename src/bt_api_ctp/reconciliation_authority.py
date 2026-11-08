@@ -41,6 +41,7 @@ from bt_api_ctp.query import (
     _QUERY_SOURCE_SEAL,
     _query_records_digest,
     QueryResult,
+    native_account_query_filters,
     _QuerySource,
 )
 from bt_api_ctp.registered_sim_session import (
@@ -770,17 +771,12 @@ class CtpReconciliationAuthority(ProviderReconciliationAuthority):
         ):
             return False
         expected_filters = {
-            "positions": {
-                "BrokerID": binding.broker_id,
-                "InvestorID": binding.investor_id,
-            },
-            "orders": {
-                "BrokerID": binding.broker_id,
-                "ExchangeID": "",
-                "InstrumentID": "",
-                "InvestorID": binding.investor_id,
-                "OrderSysID": "",
-            },
+            "positions": native_account_query_filters(
+                "positions", broker_id=binding.broker_id, investor_id=binding.investor_id
+            ),
+            "orders": native_account_query_filters(
+                "orders", broker_id=binding.broker_id, investor_id=binding.investor_id
+            ),
             "trades": {
                 "BrokerID": binding.broker_id,
                 "ExchangeID": "",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,12 +73,16 @@ class _Feed:
             ),
             "positions": (
                 {
+                    "BrokerID": "broker-test",
+                    "InvestorID": "investor-test",
                     "InstrumentID": "IF2612",
                     "ExchangeID": "CFFEX",
                     "PosiDirection": "2",
                     "Position": 2,
                 },
                 {
+                    "BrokerID": "broker-test",
+                    "InvestorID": "investor-test",
                     "InstrumentID": "IF2612",
                     "ExchangeID": "CFFEX",
                     "PosiDirection": "2",
@@ -86,6 +91,8 @@ class _Feed:
             ),
             "orders": (
                 {
+                    "BrokerID": "broker-test",
+                    "InvestorID": "investor-test",
                     "OrderStatus": "1",
                     "Direction": "1",
                     "CombOffsetFlag": "1",
@@ -160,6 +167,7 @@ class _Feed:
             complete=True,
             records=tuple(rows),
         )
+        filters = _full_account_filters(query_name)
         source = _new_query_source(
             issuer=self._trader,
             request_type=query_name,
@@ -169,6 +177,8 @@ class _Feed:
             trading_day="20261017",
             broker_id="broker-test",
             investor_id="investor-test",
+            request_intent_filters=filters,
+            request_filters=filters,
             started_at_utc=_STARTED,
             completed_at_utc=_COMPLETED,
             started_monotonic=100.0,
@@ -179,6 +189,17 @@ class _Feed:
         if self.mutate_source_after_query:
             rows[0]["Balance"] = 999.0
         return result
+
+
+def _full_account_filters(query_name: str) -> tuple[tuple[str, str], ...]:
+    filters = {"BrokerID": "broker-test", "InvestorID": "investor-test"}
+    if query_name == "account":
+        filters.update(CurrencyID="", BizType="\x00", AccountID="")
+    if query_name in ("positions", "orders"):
+        filters.update(InstrumentID="", ExchangeID="", InvestUnitID="")
+    if query_name == "orders":
+        filters.update(OrderSysID="", InsertTimeStart="", InsertTimeEnd="")
+    return tuple(sorted(filters.items()))
 
 
 def _provider(feed: _Feed) -> CtpReadOnlyAccountSessionProvider:
@@ -256,6 +277,203 @@ def test_ctp_account_provider_rejects_active_order_without_observation_binding()
     provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
     with pytest.raises(CtpAccountSessionProviderError, match="ORDER_OBSERVATION_IDENTITY_UNAVAILABLE"):
         provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("query_name", ["account", "positions", "orders"])
+@pytest.mark.parametrize("field", ["request_intent_filters", "request_filters"])
+@pytest.mark.parametrize("fault", ["missing", "foreign_account", "filtered"])
+def test_full_account_read_rejects_unproved_or_filtered_native_request(
+    monkeypatch, query_name: str, field: str, fault: str
+) -> None:
+    feed = _Feed()
+    feed.rows["orders"] = ()
+    original = feed._query
+
+    def query(name, timeout):
+        result = original(name, timeout)
+        if name != query_name:
+            return result
+        values = dict(getattr(result.query_source, field))
+        if fault == "missing":
+            values.pop("InvestorID")
+        elif fault == "foreign_account":
+            values["BrokerID"] = "different-broker"
+        else:
+            values["InstrumentID"] = "IF2612"
+        source = replace(result.query_source, **{field: tuple(sorted(values.items()))})
+        return _attach_query_source(result, source)
+
+    monkeypatch.setattr(feed, "_query", query)
+    provider = _provider(feed)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_SOURCE_UNTRUSTED"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("query_name", ["account", "positions", "orders"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_intent_parameters", (("Other", 1.0),)),
+        ("request_parameters", (("Other", 1.0),)),
+        ("explicit_request_filters", ("InvestorID",)),
+    ],
+)
+def test_full_account_read_rejects_additional_request_scope(
+    monkeypatch, query_name: str, field: str, value: object
+) -> None:
+    feed = _Feed()
+    feed.rows["orders"] = ()
+    original = feed._query
+
+    def query(name, timeout):
+        result = original(name, timeout)
+        if name == query_name:
+            result = _attach_query_source(result, replace(result.query_source, **{field: value}))
+        return result
+
+    monkeypatch.setattr(feed, "_query", query)
+    provider = _provider(feed)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_SOURCE_UNTRUSTED"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize(
+    ("query_name", "native_field", "nonempty"),
+    [
+        ("account", "CurrencyID", "CNY"),
+        ("account", "BizType", "1"),
+        ("account", "AccountID", "other-account"),
+        ("positions", "ExchangeID", "CFFEX"),
+        ("positions", "InstrumentID", "IF2612"),
+        ("positions", "InvestUnitID", "unit"),
+        ("orders", "ExchangeID", "CFFEX"),
+        ("orders", "InstrumentID", "IF2612"),
+        ("orders", "OrderSysID", "order"),
+        ("orders", "InsertTimeStart", "09:00:00"),
+        ("orders", "InsertTimeEnd", "10:00:00"),
+        ("orders", "InvestUnitID", "unit"),
+    ],
+)
+@pytest.mark.parametrize("fault", ["missing", "filtered"])
+def test_full_account_read_checks_every_native_scope_field(
+    monkeypatch, query_name: str, native_field: str, nonempty: str, fault: str
+) -> None:
+    feed = _Feed()
+    feed.rows["orders"] = ()
+    original = feed._query
+
+    def query(name, timeout):
+        result = original(name, timeout)
+        if name == query_name:
+            filters = dict(result.query_source.request_filters)
+            if fault == "missing":
+                del filters[native_field]
+            else:
+                filters[native_field] = nonempty
+            values = tuple(sorted(filters.items()))
+            result = _attach_query_source(result, replace(
+                result.query_source, request_filters=values, request_intent_filters=values
+            ))
+        return result
+
+    monkeypatch.setattr(feed, "_query", query)
+    provider = _provider(feed)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_SOURCE_UNTRUSTED"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("query_name", ["positions", "orders"])
+@pytest.mark.parametrize("field", ["BrokerID", "InvestorID"])
+@pytest.mark.parametrize("fault", ["missing", "foreign"])
+def test_full_account_read_rejects_foreign_or_unidentified_native_rows(
+    query_name: str, field: str, fault: str
+) -> None:
+    feed = _Feed()
+    # Terminal orders are otherwise ignored, but still require account identity.
+    feed.rows["orders"][0]["OrderStatus"] = "5"
+    if fault == "missing":
+        del feed.rows[query_name][0][field]
+    else:
+        feed.rows[query_name][0][field] = "other"
+    provider = _provider(feed)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+def test_full_account_read_accepts_empty_complete_position_and_order_results() -> None:
+    feed = _Feed()
+    feed.rows["positions"] = feed.rows["orders"] = ()
+    provider = _provider(feed)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    observation = provider.read_account(generation="service-gen-1", timeout=2.0)
+    assert observation.positions_complete is True and observation.positions == ()
+    assert observation.open_orders_complete is True and observation.open_orders == ()
+
+
+@pytest.mark.parametrize(
+    ("family", "native_family"),
+    [("account", "account"), ("positions", "positions"),
+     ("orders", "orders"), ("open_orders", "orders")],
+)
+def test_query_service_uses_exact_complete_native_scope(family, native_family) -> None:
+    from bt_api_ctp.query_service import CtpProviderQueryService, _native_filter_map_matches
+
+    service = object.__new__(CtpProviderQueryService)
+    service._session = SimpleNamespace(
+        broker_id="broker-test", investor_id="investor-test", environment="simnow",
+        trading_day="20261017",
+    )
+    service._observation_route_ready = True
+    request = SimpleNamespace(family=family, filters={}, require_complete_scope=True)
+    prepared = service._prepare(request)
+    expected = dict(_full_account_filters(native_family))
+    assert prepared.blocker is None and prepared.native_filters == expected
+    assert _native_filter_map_matches(tuple(sorted(expected.items())), expected)
+    altered = dict(expected)
+    altered.pop("InvestUnitID" if native_family != "account" else "BizType")
+    assert not _native_filter_map_matches(tuple(sorted(altered.items())), expected)
+
+
+@pytest.mark.parametrize("family", ["positions", "orders"])
+def test_reconciliation_accepts_full_scope_and_rejects_missing_filter(family) -> None:
+    import time
+    from bt_api_ctp.reconciliation_authority import CtpReconciliationAuthority
+
+    issuer = object()
+    current_time = datetime.now(timezone.utc)
+    monotonic = time.monotonic()
+    binding = SimpleNamespace(
+        _issuer=issuer, _source_tags=None, _captured_monotonic=monotonic - 1,
+        connection_generation=7, account_fingerprint=_FINGERPRINT,
+        trading_day="20261017", broker_id="broker-test", investor_id="investor-test",
+    )
+    result = QueryResult(
+        request_type=family, request_id=1, connection_generation=7,
+        account_fingerprint=_FINGERPRINT, started_at_utc=current_time,
+        completed_at_utc=current_time, is_last_seen=True, error_code=0,
+        error_message="", timed_out=False, complete=True, records=(), submit_code=0,
+        first_completion_origin="success", completion_origin="success",
+    )
+    filters = _full_account_filters(family)
+    source = _new_query_source(
+        issuer=issuer, request_type=family, request_id=1,
+        account_fingerprint=_FINGERPRINT, connection_generation=7,
+        trading_day="20261017", broker_id="broker-test", investor_id="investor-test",
+        started_at_utc=current_time, completed_at_utc=current_time,
+        started_monotonic=monotonic, completed_monotonic=monotonic,
+        records_sha256=_query_records_digest(()), request_filters=filters,
+        request_intent_filters=filters,
+    )
+    authority = object.__new__(CtpReconciliationAuthority)
+    authority._binding = binding
+    assert authority._validate_query_result(_attach_query_source(result, source), family)
+    narrowed = tuple(pair for pair in filters if pair[0] != "InvestUnitID")
+    altered = replace(source, request_filters=narrowed, request_intent_filters=narrowed)
+    assert not authority._validate_query_result(_attach_query_source(result, altered), family)
 
 
 def test_ctp_account_provider_keeps_interrupted_startup_uncertain_until_receipt() -> None:

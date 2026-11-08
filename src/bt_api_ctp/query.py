@@ -164,6 +164,42 @@ def _query_records_digest(records: Iterable[Any]) -> str:
     return sha256(serialized).hexdigest()
 
 
+def native_account_query_filters(
+    request_type: str,
+    *,
+    broker_id: str,
+    investor_id: str,
+    instrument_id: str = "",
+    exchange_id: str = "",
+    order_sys_id: str = "",
+) -> dict[str, str]:
+    """Exact CTP query fields for the default account/position/order scope.
+
+    The NUL business type and empty currency retain native defaults; they do
+    not establish venue-wide business or currency coverage.
+    """
+    values = (broker_id, investor_id, instrument_id, exchange_id, order_sys_id)
+    if any(type(value) is not str for value in values):
+        raise TypeError("native query filters must be exact strings")
+    filters = {"BrokerID": broker_id, "InvestorID": investor_id}
+    if request_type == "account":
+        if instrument_id or exchange_id or order_sys_id:
+            raise ValueError("unexpected account query filter")
+        filters.update(CurrencyID="", BizType="\x00", AccountID="")
+    elif request_type == "positions":
+        if order_sys_id:
+            raise ValueError("unexpected position query filter")
+        filters.update(ExchangeID=exchange_id, InvestUnitID="", InstrumentID=instrument_id)
+    elif request_type == "orders":
+        filters.update(
+            ExchangeID=exchange_id, InvestUnitID="", InstrumentID=instrument_id,
+            OrderSysID=order_sys_id, InsertTimeStart="", InsertTimeEnd="",
+        )
+    else:
+        raise ValueError("unsupported account query type")
+    return filters
+
+
 @dataclass(frozen=True)
 class _QuerySource:
     """Typed provenance issued by one live ``TraderClient`` query lane.

@@ -62,6 +62,7 @@ from bt_api_ctp.query import (
     _QUERY_MONOTONIC_CLOCK_DOMAIN,
     _QUERY_SOURCE_SEAL,
     QueryResult,
+    native_account_query_filters,
     _query_records_digest,
     _QuerySessionScope,
     _QuerySource,
@@ -500,6 +501,7 @@ class CtpReadOnlyAccountSessionProvider:
                 scope=baseline_scope,
                 now_monotonic=query_finished,
             )
+            self._validate_account_query_scope(result, query_name, baseline_scope)
             results[query_name] = result
         finished = self._monotonic()
         if not isfinite(finished) or finished > deadline:
@@ -808,6 +810,34 @@ class CtpReadOnlyAccountSessionProvider:
         except Exception:
             raise CtpAccountSessionProviderError("QUERY_SOURCE_UNTRUSTED") from None
         if current_digest != source.records_sha256:
+            raise CtpAccountSessionProviderError("QUERY_SOURCE_UNTRUSTED")
+
+    @staticmethod
+    def _validate_account_query_scope(
+        result: QueryResult[Any], query_name: str, scope: _QuerySessionScope
+    ) -> None:
+        """Require native default scope evidence for this account snapshot.
+
+        This covers the reader's future/futures view; CTP default business and
+        currency semantics are not themselves proof of venue-wide coverage.
+        """
+        try:
+            filters = native_account_query_filters(
+                query_name, broker_id=scope.broker_id, investor_id=scope.investor_id
+            )
+        except (TypeError, ValueError):
+            raise CtpAccountSessionProviderError("QUERY_SOURCE_UNTRUSTED")
+        expected = tuple(sorted(filters.items()))
+        source = result.query_source
+        if (
+            source.request_intent_filters != expected
+            or source.request_filters != expected
+            or source.request_intent_parameters != ()
+            or source.request_parameters != ()
+            or source.explicit_request_filters != ()
+            or source.record_limit is not None
+            or source.record_limit_exceeded is not False
+        ):
             raise CtpAccountSessionProviderError("QUERY_SOURCE_UNTRUSTED")
 
     def _check_owner(self, *, allow_unbound: bool = False) -> None:
@@ -1396,6 +1426,12 @@ def _build_observation(
             )
         if not balances:
             raise ValueError
+        for row in (*position_rows, *order_rows):
+            if (
+                _text(_field(row, "InvestorID")) != account_key.account_id
+                or _text(_field(row, "BrokerID")) != account_key.subaccount_id
+            ):
+                raise ValueError
         positions = _project_positions(position_rows, observed_at)
         open_orders = _project_open_orders(order_rows, observed_at)
         valuation = None
