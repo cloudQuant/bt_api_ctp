@@ -44,7 +44,7 @@ def is_ctp_native_loaded() -> bool:
     return bool(get_ctp_native_diagnostics()["native_loaded"])
 
 
-__version__ = "2.0.4+iteration41.i9"
+__version__ = "2.1.0.dev63"
 __all__ = [
     "QueryResult",
     "CtpOrderActionEvidence",

@@ -473,3 +473,11 @@ def test_unrepresentable_request_fails_before_any_reservation():
         assert info.value.code == "ctp_direct_request_unrepresentable"
     assert trader._next == 40  # no OrderRef consumed
     assert provider._reservations == {}
+
+
+def test_direct_error_policy_declares_ctp_submit_uncertainty():
+    from bt_api_ctp.direct_write_provider import CtpDirectWriteProvider
+
+    policy = CtpDirectWriteProvider.direct_write_error_policy
+    assert policy.place_unknown_codes == frozenset({"ctp_direct_submit_outcome_unknown"})
+    assert policy.cancel_unknown_codes == frozenset()

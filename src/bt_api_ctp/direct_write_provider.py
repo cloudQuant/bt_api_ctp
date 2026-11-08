@@ -43,6 +43,7 @@ from bt_api_base.direct_write_protocol import (
     DirectPositionFact,
     DirectSubmitResult,
     DirectWriteError,
+    DirectWriteErrorPolicy,
     NativeOrderIdentity,
     SettlementStatus,
     WriteGrant,
@@ -478,6 +479,11 @@ def project_ctp_execution_event(
 
 class CtpDirectWriteProvider:
     """Direct write port for one CTP route (one ``CtpRequestDataFuture``)."""
+
+    direct_write_error_policy = DirectWriteErrorPolicy(
+        place_unknown_codes=frozenset({"ctp_direct_submit_outcome_unknown"}),
+        cancel_unknown_codes=frozenset(),
+    )
 
     # Venue fact for the SDK direct write coordinator: CTP execution ids
     # (OrderRef, FrontID/SessionID, OrderSysID, TradeID) are unique only within
