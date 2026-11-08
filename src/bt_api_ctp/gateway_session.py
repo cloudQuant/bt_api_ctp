@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from bt_api_base.account_protocol import AccountKey
+from bt_api_base.market_protocol import MarketInstrumentKey
 
 from bt_api_ctp.account_provider import CtpReadOnlyAccountSessionProvider
 from bt_api_ctp.ctp.client import TraderClient
@@ -43,18 +44,27 @@ class CtpGatewaySession:
 
     The factories are trusted, but their returned objects are checked before
     either native start. This class does not provide authority or authentication.
+    The optional observation issuer is borrowed and never closed by this
+    session; its paired instrument catalog is limited to futures snapshots.
     """
 
     def __init__(self, account_key: AccountKey, request_feed_factory: Callable[[], object],
                  stream_factory: Callable[[Any, Any], object], *, trusted_flow_root: object,
                  flow_account_scope: str, source_ref: str, entitlement_ref: str,
                  connect_timeout_seconds: float = 30.0, stop_timeout_seconds: float = 3.0,
-                 queue_capacity: int = 1024) -> None:
+                 queue_capacity: int = 1024, observation_issuer: object | None = None,
+                 observation_instruments: tuple[MarketInstrumentKey, ...] | None = None) -> None:
         if (type(account_key) is not AccountKey or account_key.provider != "ctp"
                 or account_key.venue != "simnow" or account_key.environment != "simnow"
                 or not account_key.subaccount_id or not callable(request_feed_factory)
                 or not callable(stream_factory) or trusted_flow_root is None
-                or flow_account_scope != account_key.account_key_id):
+                or flow_account_scope != account_key.account_key_id
+                or (observation_issuer is None) != (observation_instruments is None)
+                or (observation_instruments is not None and (
+                    type(observation_instruments) is not tuple
+                    or any(type(key) is not MarketInstrumentKey or key.product_type != "future"
+                           for key in observation_instruments)
+                ))):
             raise CtpGatewaySessionError("INVALID_CONFIGURATION")
         self._owner_pid = os.getpid()
         self._owner_thread = threading.current_thread()
@@ -74,7 +84,9 @@ class CtpGatewaySession:
         self._account_binding: str | None = None
         self._direct: CtpDirectWriteProvider | None = None
         self._reader = CtpReadOnlyAccountSessionProvider(
-            self._checked_feed, stop_timeout_seconds=self._stop_timeout
+            self._checked_feed, stop_timeout_seconds=self._stop_timeout,
+            account_observation_issuer=observation_issuer,
+            account_observation_instruments=observation_instruments,
         )
         self._market = CtpQuoteV2MarketProvider(
             stream_factory=self._checked_stream, source_ref=source_ref,

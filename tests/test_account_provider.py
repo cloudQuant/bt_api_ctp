@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 from bt_api_base.account_protocol import AccountKey
+from bt_api_base.market_protocol import MarketInstrumentKey
+
+from test_account_provider_execution_observations import HmacIssuer
 
 from bt_api_ctp.account_provider import (
     CtpAccountSessionProviderError,
@@ -38,7 +41,9 @@ _ACCOUNT_KEY = AccountKey(
 )
 _STARTED = datetime(2026, 10, 17, 1, 29, tzinfo=timezone.utc)
 _COMPLETED = datetime(2026, 10, 17, 1, 30, tzinfo=timezone.utc)
-_FINGERPRINT = "a" * 64
+_FINGERPRINT = "a" * 16
+_SOURCE_TAGS = ("source", "epoch", "api", "spi", 1, 7)
+_INSTRUMENT = MarketInstrumentKey("ctp", "CFFEX", "simnow", "future", "IF2612", "IF2612")
 
 
 class _Trader:
@@ -94,6 +99,7 @@ class _Feed:
                     "BrokerID": "broker-test",
                     "InvestorID": "investor-test",
                     "OrderStatus": "1",
+                    "ContingentCondition": "1",
                     "Direction": "1",
                     "CombOffsetFlag": "1",
                     "VolumeTotalOriginal": 3,
@@ -136,6 +142,7 @@ class _Feed:
             read_only_ready=True,
             captured_at_utc=_COMPLETED,
             captured_monotonic=100.0,
+            source_tags=_SOURCE_TAGS,
         )
 
     def query_account_result(self, *, timeout: float):
@@ -202,11 +209,12 @@ def _full_account_filters(query_name: str) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(filters.items()))
 
 
-def _provider(feed: _Feed) -> CtpReadOnlyAccountSessionProvider:
+def _provider(feed: _Feed, **settings) -> CtpReadOnlyAccountSessionProvider:
     return CtpReadOnlyAccountSessionProvider(
         lambda: feed,
         monotonic_clock=lambda: 102.0,
         utc_clock=lambda: datetime(2026, 10, 17, 2, 0, tzinfo=timezone.utc),
+        **settings,
     )
 
 
@@ -276,6 +284,147 @@ def test_ctp_account_provider_rejects_active_order_without_observation_binding()
     provider = _provider(_Feed())
     provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
     with pytest.raises(CtpAccountSessionProviderError, match="ORDER_OBSERVATION_IDENTITY_UNAVAILABLE"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+def _connected_snapshot(feed, issuer, instruments=(_INSTRUMENT,), **settings):
+    provider = _provider(feed, execution_observation_issuer=issuer,
+                         execution_instruments=instruments, **settings)
+    provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    return provider
+
+
+def test_active_order_uses_stable_opaque_id_without_strategy_attribution() -> None:
+    issuer = HmacIssuer()
+    feed = _Feed()
+    provider = _connected_snapshot(feed, issuer)
+    first = provider.read_account(generation="service-gen-1", timeout=2.0)
+    again = provider.read_account(generation="service-gen-1", timeout=2.0)
+    other = _connected_snapshot(_Feed(), issuer).read_account(
+        generation="service-gen-1", timeout=2.0
+    )
+    order = first.open_orders[0]
+    assert order.order_id == again.open_orders[0].order_id == other.open_orders[0].order_id
+    assert order.order_id.startswith("sdk-order-observation-v1-")
+    assert order.client_order_id is None
+    assert (order.status, order.quantity, order.filled_quantity) == ("partially_filled", "3", "1")
+    assert order.resource.product_type == order.instrument.product_type == "future"
+    public = str(first.to_dict())
+    for value in ("sys-order-1", "client-order-1", "FrontID", "SessionID", "OrderRef"):
+        assert value not in public
+
+
+@pytest.mark.parametrize("fault", ["day", "account", "broker", "catalog", "missing", "time", "duplicate", "option"])
+def test_active_order_any_unprojectable_row_blocks_complete_snapshot(fault):
+    feed = _Feed()
+    row = feed.rows["orders"][0]
+    instruments = (_INSTRUMENT,)
+    if fault == "day": row["TradingDay"] = "20261018"
+    elif fault == "account": row["InvestorID"] = "other"
+    elif fault == "broker": row["BrokerID"] = "other"
+    elif fault == "catalog": row["InstrumentID"] = "UNKNOWN"
+    elif fault == "missing": del row["Direction"]
+    elif fault == "time": row["InsertTime"] = "invalid"
+    elif fault == "duplicate": feed.rows["orders"] = (row, dict(row))
+    else:
+        instruments = (replace(_INSTRUMENT, product_type="option"),)
+    provider = _connected_snapshot(feed, HmacIssuer(), instruments)
+    with pytest.raises(CtpAccountSessionProviderError):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("status", ["0", "2", "4", "5"])
+def test_terminal_order_is_not_reported_as_open(status):
+    feed = _Feed()
+    feed.rows["orders"][0]["OrderStatus"] = status
+    feed.rows["orders"][0]["VolumeTraded"] = {"0": 3, "2": 1, "4": 0, "5": 1}[status]
+    observation = _connected_snapshot(feed, HmacIssuer()).read_account(
+        generation="service-gen-1", timeout=2.0
+    )
+    assert observation.open_orders_complete is True and observation.open_orders == ()
+
+
+@pytest.mark.parametrize(("status", "filled"), [("0", 0), ("2", 0), ("2", 3), ("4", 1), ("5", 4)])
+@pytest.mark.parametrize("configured", [True, False])
+def test_invalid_terminal_order_status_quantity_blocks_snapshot(status, filled, configured):
+    feed = _Feed()
+    feed.rows["orders"][0].update(OrderStatus=status, VolumeTraded=filled)
+    provider = _connected_snapshot(feed, HmacIssuer()) if configured else _provider(feed)
+    if not configured:
+        provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_terminal_order_from_other_trading_day_blocks_snapshot(configured):
+    feed = _Feed()
+    feed.rows["orders"][0].update(OrderStatus="0", VolumeTraded=3, TradingDay="20261016")
+    provider = _connected_snapshot(feed, HmacIssuer()) if configured else _provider(feed)
+    if not configured:
+        provider.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("condition", [None, "2", "3", "4"])
+def test_condition_orders_cannot_be_published_as_plain_orders(condition):
+    feed = _Feed()
+    row = feed.rows["orders"][0]
+    if condition is None:
+        del row["ContingentCondition"]
+    else:
+        row["ContingentCondition"] = condition
+    provider = _connected_snapshot(feed, HmacIssuer())
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+@pytest.mark.parametrize("status", ["b", "c"])
+def test_triggered_or_pending_condition_orders_are_not_reported_as_plain_orders(status):
+    feed = _Feed()
+    feed.rows["orders"][0]["OrderStatus"] = status
+    provider = _connected_snapshot(feed, HmacIssuer())
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
+        provider.read_account(generation="service-gen-1", timeout=2.0)
+
+
+def test_snapshot_never_invokes_managed_resolver():
+    feed = _Feed()
+    def fail(*args):
+        raise AssertionError("managed resolver must not be called by account snapshot")
+    provider = _connected_snapshot(feed, HmacIssuer(), execution_order_resolver=fail,
+                                   execution_scope_ref="strategy-test")
+    order = provider.read_account(generation="service-gen-1", timeout=2.0).open_orders[0]
+    assert order.client_order_id is None
+
+
+def test_explicit_account_snapshot_issuer_takes_priority_over_execution_issuer():
+    feed = _Feed()
+    snapshot_issuer = HmacIssuer(b"account-observation-test-key")
+    reader = _provider(
+        feed,
+        execution_observation_issuer=HmacIssuer(b"event-observation-test-key"),
+        execution_instruments=(_INSTRUMENT,),
+        account_observation_issuer=snapshot_issuer,
+        account_observation_instruments=(_INSTRUMENT,),
+    )
+    reader.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    combined = reader.read_account(generation="service-gen-1", timeout=2.0).open_orders[0].order_id
+    separate = _provider(_Feed(), account_observation_issuer=snapshot_issuer,
+                         account_observation_instruments=(_INSTRUMENT,))
+    separate.connect(account_key=_ACCOUNT_KEY, generation="service-gen-1", timeout=2.0)
+    assert combined == separate.read_account(generation="service-gen-1", timeout=2.0).open_orders[0].order_id
+    assert reader._execution is not None and separate._execution is None
+    assert separate.read_execution_observations is None
+
+
+@pytest.mark.parametrize(("status", "filled"), [("1", 0), ("3", 1)])
+def test_active_native_status_and_quantity_conflict_blocks_snapshot(status, filled):
+    feed = _Feed()
+    feed.rows["orders"][0].update(OrderStatus=status, VolumeTraded=filled)
+    provider = _connected_snapshot(feed, HmacIssuer())
+    with pytest.raises(CtpAccountSessionProviderError, match="QUERY_ROW_INVALID"):
         provider.read_account(generation="service-gen-1", timeout=2.0)
 
 
@@ -436,6 +585,36 @@ def test_query_service_uses_exact_complete_native_scope(family, native_family) -
     altered = dict(expected)
     altered.pop("InvestUnitID" if native_family != "account" else "BizType")
     assert not _native_filter_map_matches(tuple(sorted(altered.items())), expected)
+
+
+@pytest.mark.parametrize("condition", ["1", "2", None])
+def test_query_service_open_order_projection_never_hides_unsupported_conditions(condition):
+    from bt_api_base.query_protocol import QueryCompleteness, QueryRequest
+    from bt_api_ctp.query_service import CtpProviderQueryService
+
+    feed = _Feed()
+    if condition is None:
+        del feed.rows["orders"][0]["ContingentCondition"]
+    else:
+        feed.rows["orders"][0]["ContingentCondition"] = condition
+    reader = _connected_snapshot(feed, HmacIssuer())
+    projector = reader._execution_projector(reader._session_scope, _ACCOUNT_KEY,
+                                             managed_correlation=False)
+    service = object.__new__(CtpProviderQueryService)
+    service._session = projector._session
+    service._execution_query_projector = projector
+    result = feed.query_orders_result(timeout=1)
+    request = QueryRequest("request-test", "open_orders")
+    snapshot, _ = service._project_snapshot(
+        request, result, ((result, dict(_full_account_filters("orders"))),),
+        {("CFFEX", "IF2612"): "future"},
+    )
+    if condition == "1":
+        assert snapshot.completeness is QueryCompleteness.COMPLETE
+        assert snapshot.scope_complete is True and len(snapshot.records) == 1
+    else:
+        assert snapshot.completeness is QueryCompleteness.PARTIAL
+        assert snapshot.scope_complete is False and snapshot.blockers
 
 
 @pytest.mark.parametrize("family", ["positions", "orders"])

@@ -496,7 +496,19 @@ explicit values; SDK consumers do not maintain a second CTP field list.
 The account reader requires exact default-scope evidence, no additional filters
 or row limits, and matching BrokerID/InvestorID on every position and order row.
 These checks prove the observed request scope, not venue-wide business/currency
-coverage. The current account reader still rejects active orders without a
-usable opaque observation identity and does not provide a proven average price
-for nonzero positions. No missing fact is replaced with an empty table or a
-guessed price. Real venue/date/coverage validation remains separate.
+coverage. `CtpGatewaySession` accepts paired `observation_issuer` and
+`observation_instruments` values. It borrows this issuer without closing it and
+uses the existing query projector for future-account snapshots. This snapshot
+configuration creates no execution-event queue and retains same-client scope
+refresh; actual execution-observation mode keeps its existing refresh fence.
+
+Supported active orders receive opaque issuer IDs, never raw native identifiers
+or inferred strategy ownership. Full-row account/day checks and status/quantity
+consistency precede filtering; unknown instruments, unsupported conditional
+orders and projection blockers reject the whole snapshot. Without an issuer,
+active orders remain unavailable rather than becoming an empty result. Reopening
+the same issuer preserves IDs only for equal canonical native identity inputs;
+it does not merge an evolving native identity or provide cancellation authority.
+The reader still supplies no proven cost basis or average price for nonzero
+positions and does not guess currency. Real venue/date/coverage validation
+remains separate.

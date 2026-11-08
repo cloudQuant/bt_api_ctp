@@ -6,8 +6,11 @@ import threading
 import pytest
 from bt_api_base.account_protocol import AccountKey
 from bt_api_base.direct_write_protocol import DirectWriteError
+from bt_api_base.market_protocol import MarketInstrumentKey
 
 from bt_api_ctp.ctp.client import CtpNativeStopReceipt, TraderClient
+from bt_api_ctp.ctp.ctp_structs_order import CThostFtdcOrderField
+from bt_api_ctp.account_provider import CtpAccountSessionProviderError, CtpReadOnlyAccountSessionProvider
 from bt_api_ctp.feeds import live_ctp_feed
 from bt_api_ctp.feeds.live_ctp_feed import CtpMarketStream, CtpRequestDataFuture
 from bt_api_ctp.gateway_session import CtpGatewaySession, CtpGatewaySessionError
@@ -15,6 +18,7 @@ from bt_api_ctp.market_provider import CtpQuoteV2MarketProviderError
 from bt_api_ctp.trusted_flow import flow_binding, trusted_flow
 from test_iter62_settlement_readback_on_write import _NativeApi, _login
 from test_market_provider import _ENTITLEMENT_REF, _SOURCE_REF, _SyntheticMdClient, _key
+from test_account_provider_execution_observations import HmacIssuer
 
 KEY = AccountKey(provider="ctp", venue="simnow", environment="simnow", account_id="account", subaccount_id="9999")
 TD = "tcp://offline-neutral-td.invalid:30001"
@@ -124,6 +128,119 @@ def test_one_trader_one_market_and_two_symbols_share_session(prepared):
     assert len(stops) == 1
     with pytest.raises(DirectWriteError, match="provider_closed"):
         direct.session_generation()
+
+
+def test_account_snapshot_active_order_uses_one_real_trader_with_fake_native(prepared, monkeypatch):
+    create, _, _, feeds, natives, _, stops, _ = prepared
+    class BorrowedIssuer(HmacIssuer):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+        def close(self):
+            self.close_calls += 1
+    issuer = BorrowedIssuer()
+    instrument = MarketInstrumentKey("ctp", "CFFEX", "simnow", "future", "IF2612", "IF2612")
+    session = create(observation_issuer=issuer, observation_instruments=(instrument,))
+    session.connect(generation="g", timeout=1)
+    trader, native = feeds[0].trader_client, natives[0]
+    calls = []
+    account = dict(AccountID="account", BrokerID="9999", CurrencyID="CNY", Balance=1000, Available=800)
+    order = dict(BrokerID="9999", InvestorID="account", InstrumentID="IF2612", ExchangeID="CFFEX",
+                 TradingDay="20261106", OrderSysID="SYS1", OrderStatus="1", Direction="0", ContingentCondition="1",
+                 CombOffsetFlag="0", VolumeTotalOriginal=3, VolumeTraded=1, OrderPriceType="2",
+                 LimitPrice=4001, InsertDate="20261106", InsertTime="00:00:00")
+    native_order = CThostFtdcOrderField()
+    for name, value in order.items():
+        setattr(native_order, name, value)
+    def responder(kind, rows):
+        def submit(_field, request_id):
+            calls.append(kind)
+            for row in rows:
+                trader._handle_query_callback(kind, row, None, request_id, False)
+            trader._handle_query_callback(kind, None, None, request_id, True)
+            return 0
+        return submit
+    monkeypatch.setattr(native, "ReqQryTradingAccount", responder("account", [account]), raising=False)
+    monkeypatch.setattr(native, "ReqQryInvestorPosition", responder("positions", []), raising=False)
+    monkeypatch.setattr(native, "ReqQryOrder", responder("orders", [native_order]), raising=False)
+    result = session.read_account(generation="g", timeout=1)
+    assert calls == ["account", "positions", "orders"]
+    assert len(feeds) == len(natives) == 1
+    assert result.open_orders_complete and len(result.open_orders) == 1
+    assert result.open_orders[0].client_order_id is None
+    assert result.open_orders[0].order_id.startswith("sdk-order-observation-v1-")
+    assert "SYS1" not in str(result.to_dict())
+    assert session.close() is True and len(stops) == 1
+    assert issuer.close_calls == 0
+    assert issuer.issue_order_observation_id("ctp", "simnow", "scope", "identity")
+
+
+def test_snapshot_only_observer_refresh_rebinds_without_execution_queue(prepared, monkeypatch):
+    create, _, _, feeds, natives, _, _, _ = prepared
+    instrument = MarketInstrumentKey("ctp", "CFFEX", "simnow", "future", "IF2612", "IF2612")
+    session = create(observation_issuer=HmacIssuer(), observation_instruments=(instrument,))
+    session.connect(generation="g", timeout=1)
+    trader, native = feeds[0].trader_client, natives[0]
+    account = dict(AccountID="account", BrokerID="9999", CurrencyID="CNY", Balance=1000, Available=800)
+    order = dict(BrokerID="9999", InvestorID="account", InstrumentID="IF2612", ExchangeID="CFFEX",
+                 TradingDay="20261106", OrderSysID="SYS1", OrderStatus="3", Direction="0", ContingentCondition="1",
+                 CombOffsetFlag="0", VolumeTotalOriginal=3, VolumeTraded=0, OrderPriceType="2",
+                 LimitPrice=4001, InsertDate="20261106", InsertTime="00:00:00")
+    def responder(kind, rows):
+        def submit(_field, request_id):
+            for row in rows:
+                trader._handle_query_callback(kind, row, None, request_id, False)
+            trader._handle_query_callback(kind, None, None, request_id, True)
+            return 0
+        return submit
+    monkeypatch.setattr(native, "ReqQryTradingAccount", responder("account", [account]), raising=False)
+    monkeypatch.setattr(native, "ReqQryInvestorPosition", responder("positions", []), raising=False)
+    monkeypatch.setattr(native, "ReqQryOrder", responder("orders", [order]), raising=False)
+    before = session.read_account(generation="g", timeout=1).open_orders[0].order_id
+    assert session._reader.read_execution_observations is None
+    assert session._reader.confirm_execution_observations is None
+    assert session._reader._execution is None
+    _login(trader, native, session_id=20)
+    with pytest.raises(Exception):
+        session.read_account(generation="g", timeout=1)
+    session.refresh_session()
+    after = session.read_account(generation="g", timeout=1).open_orders[0].order_id
+    assert before == after
+    assert session._reader._execution is None
+    assert session.close() is True
+
+
+def test_execution_observer_refresh_stays_blocked_with_generation_queue(prepared):
+    _, feed_factory, _, feeds, natives, _, _, _ = prepared
+    instrument = MarketInstrumentKey("ctp", "CFFEX", "simnow", "future", "IF2612", "IF2612")
+    reader = CtpReadOnlyAccountSessionProvider(
+        feed_factory, execution_observation_issuer=HmacIssuer(), execution_instruments=(instrument,)
+    )
+    reader.connect(account_key=KEY, generation="g", timeout=1)
+    original_scope, original_queue = reader._session_scope, reader._execution
+    trader = feeds[0].trader_client
+    _login(trader, natives[0], session_id=20)
+    with pytest.raises(CtpAccountSessionProviderError, match="SESSION_SCOPE_UNTRUSTED"):
+        reader.refresh_session()
+    assert reader._session_scope is original_scope and reader._execution is original_queue
+    assert callable(reader.read_execution_observations)
+    assert reader.close() is True
+
+
+@pytest.mark.parametrize("issuer,instruments", [(HmacIssuer(), None), (None, ())])
+def test_observation_configuration_requires_issuer_and_instruments_together(prepared, issuer, instruments):
+    create, _, _, feeds, natives, _, _, _ = prepared
+    with pytest.raises(Exception):
+        create(observation_issuer=issuer, observation_instruments=instruments)
+    assert feeds == [] and natives == []
+
+
+def test_observation_configuration_rejects_option_catalog_before_native_start(prepared):
+    create, _, _, feeds, natives, _, _, _ = prepared
+    instrument = MarketInstrumentKey("ctp", "CFFEX", "simnow", "option", "IO2612-C-4000", "IO2612-C-4000")
+    with pytest.raises(CtpGatewaySessionError, match="INVALID_CONFIGURATION"):
+        create(observation_issuer=HmacIssuer(), observation_instruments=(instrument,))
+    assert feeds == [] and natives == []
 
 
 @pytest.mark.parametrize("fault", ["account", "flow", "connected", "environment", "scope"])

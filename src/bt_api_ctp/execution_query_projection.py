@@ -328,11 +328,9 @@ class CtpExecutionQueryProjector:
 
         for row in rows:
             try:
-                status_code = _optional_text(_field(row, "OrderStatus"))
+                status_code = _snapshot_order_status(row, self._session.trading_day)
                 if status_code in _TERMINAL_ORDER_STATUSES:
                     continue
-                if status_code not in _ACTIVE_ORDER_STATUSES:
-                    raise _ProjectionIssue("open_order_status_unrecognized")
 
                 instrument = self._instrument(row, catalog_types, filters)
                 exchange_id = _required_text(_field(row, "ExchangeID"))
@@ -776,6 +774,31 @@ class CtpExecutionQueryProjector:
         ):
             return None, "managed_order_correlation_unavailable"
         return correlation.client_order_id, None
+
+
+def _snapshot_order_status(row: Any, trading_day: str) -> str:
+    """Validate every query row before omitting terminal orders from a snapshot."""
+    status = _optional_text(_field(row, "OrderStatus"))
+    if status not in _ACTIVE_ORDER_STATUSES | _TERMINAL_ORDER_STATUSES:
+        raise _ProjectionIssue("open_order_status_unrecognized")
+    if _required_text(_field(row, "TradingDay")) != trading_day:
+        raise _ProjectionIssue("open_order_trading_day_mismatch")
+    quantity = _integer(_field(row, "VolumeTotalOriginal"))
+    filled = _integer(_field(row, "VolumeTraded"))
+    if quantity <= 0 or filled < 0 or filled > quantity:
+        raise _ProjectionIssue("open_order_quantity_invalid")
+    if (
+        (status == "0" and filled != quantity)
+        or (status in {"1", "2"} and not 0 < filled < quantity)
+        or (status in {"3", "4"} and filled != 0)
+    ):
+        raise _ProjectionIssue("open_order_status_quantity_conflict")
+    if status in _ACTIVE_ORDER_STATUSES:
+        if status in {"b", "c"} or _required_text(_field(row, "ContingentCondition")) != "1":
+            raise _ProjectionIssue("open_order_condition_unsupported")
+        if filled >= quantity:
+            raise _ProjectionIssue("open_order_quantity_invalid")
+    return status
 
 
 def native_hedge_flag(hedge_class: str) -> str | None:

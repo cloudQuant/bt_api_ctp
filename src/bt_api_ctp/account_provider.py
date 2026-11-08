@@ -189,6 +189,10 @@ class CtpReadOnlyAccountSessionProvider:
     both supplied. ``execution_order_resolver`` (trusted application code,
     with ``execution_scope_ref``) maps a native order reference to an issued
     ``OrderCorrelation``; without it every order stays ``unresolved``.
+    ``account_observation_issuer`` and ``account_observation_instruments``
+    instead enable snapshot order IDs only: no execution queue is created,
+    and same-trader session refresh remains available. When both configurations
+    are present the account-specific one supplies snapshot IDs.
     """
 
     def __init__(
@@ -203,6 +207,8 @@ class CtpReadOnlyAccountSessionProvider:
         execution_order_resolver: Callable[[str, MarketInstrumentKey], object] | None = None,
         execution_scope_ref: str | None = None,
         execution_query_interval_seconds: float = 1.0,
+        account_observation_issuer: object | None = None,
+        account_observation_instruments: tuple[MarketInstrumentKey, ...] | None = None,
     ) -> None:
         if not callable(request_feed_factory):
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
@@ -212,6 +218,9 @@ class CtpReadOnlyAccountSessionProvider:
             execution_order_resolver,
             execution_scope_ref,
             execution_query_interval_seconds,
+        )
+        self._account_observation_settings = _execution_settings(
+            account_observation_issuer, account_observation_instruments, None, None, 1.0
         )
         self._execution: _ExecutionGeneration | None = None
         self._execution_counters: dict[str, int] = {}
@@ -357,10 +366,13 @@ class CtpReadOnlyAccountSessionProvider:
         if self._request_feed is not None:
             raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
         settings = self._execution_settings
-        if settings is not None and any(
+        configured = tuple(
+            item for item in (settings, self._account_observation_settings) if item is not None
+        )
+        if any(
             key.environment != account_key.environment
             or not account_venue_contains_instrument_venue(account_key, key.venue)
-            for key in settings.instruments
+            for item in configured for key in item.instruments
         ):
             # An authorized instrument outside this account realm can never
             # produce a valid observation; refuse before any native work.
@@ -518,7 +530,18 @@ class CtpReadOnlyAccountSessionProvider:
             raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
         if service_generation != self._service_generation:
             raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
-        return _build_observation(account_key, results, self._utc_clock())
+        settings = self._account_observation_settings or self._execution_settings
+        projector = (
+            self._execution_projector(
+                baseline_scope, account_key, managed_correlation=False, settings=settings
+            )
+            if settings is not None else None
+        )
+        return _build_observation(
+            account_key, results, self._utc_clock(), projector=projector,
+            catalog=settings.catalog if settings is not None else None,
+            trading_day=baseline_scope.trading_day,
+        )
 
     def borrow_request_feed(self) -> object:
         """Borrow the exact current feed after source and account revalidation.
@@ -986,14 +1009,18 @@ class CtpReadOnlyAccountSessionProvider:
             observed_at=observed_at,
         )
 
-    def _execution_projector(self, scope: object, account_key: AccountKey) -> Any:
+    def _execution_projector(
+        self, scope: object, account_key: AccountKey, *, managed_correlation: bool = True,
+        settings: _ExecutionSettings | None = None,
+    ) -> Any:
         from bt_api_ctp.execution_query_projection import CtpExecutionQueryProjector
         from bt_api_ctp.registered_sim_session import (
             CtpQuerySessionBindingError,
             _bind_validated_query_scope,
         )
 
-        settings = self._execution_settings
+        if settings is None:
+            settings = self._execution_settings
         if settings is None:
             raise CtpAccountSessionProviderError("EXECUTION_OBSERVATIONS_UNAVAILABLE")
         try:
@@ -1006,8 +1033,8 @@ class CtpReadOnlyAccountSessionProvider:
                 observation_issuer=settings.issuer,
                 ledger_environment=account_key.environment,
                 account_ref=account_key.account_key_id,
-                scope_ref=settings.scope_ref,
-                managed_order_resolver=settings.order_resolver,
+                scope_ref=settings.scope_ref if managed_correlation else None,
+                managed_order_resolver=settings.order_resolver if managed_correlation else None,
             )
         except (TypeError, ValueError):
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION") from None
@@ -1380,6 +1407,10 @@ def _build_observation(
     account_key: AccountKey,
     results: Mapping[str, QueryResult[Any]],
     utc_clock: datetime,
+    *,
+    projector: Any = None,
+    catalog: Mapping[tuple[str, str], str] | None = None,
+    trading_day: str,
 ) -> AccountObservation:
     if type(utc_clock) is not datetime or utc_clock.utcoffset() != timedelta(0):
         raise CtpAccountSessionProviderError("QUERY_ROW_INVALID")
@@ -1432,8 +1463,11 @@ def _build_observation(
                 or _text(_field(row, "BrokerID")) != account_key.subaccount_id
             ):
                 raise ValueError
+        for row in order_rows:
+            if _text(_field(row, "TradingDay")) != trading_day:
+                raise ValueError
         positions = _project_positions(position_rows, observed_at)
-        open_orders = _project_open_orders(order_rows, observed_at)
+        open_orders = _project_open_orders(order_rows, observed_at, projector, catalog, trading_day)
         valuation = None
         if len(account_rows) == 1:
             row = account_rows[0]
@@ -1527,89 +1561,44 @@ def _project_positions(rows: tuple[Any, ...], observed_at: str) -> tuple[Account
     return tuple(projected)
 
 
-def _project_open_orders(rows: tuple[Any, ...], observed_at: str) -> tuple[AccountOpenOrder, ...]:
-    projected: list[AccountOpenOrder] = []
-    seen_ids: set[str] = set()
-    for row in rows:
-        status_code = _text(_field(row, "OrderStatus"))
-        if status_code in _TERMINAL_ORDER_STATUS:
-            continue
-        if status_code not in _ACTIVE_ORDER_STATUS:
-            raise ValueError
-        # This legacy process provider has no SDK-issued order-observation
-        # route/issuer binding.  The public AccountOpenOrder DTO must not carry
-        # CTP OrderSysID, FrontID, SessionID, or OrderRef as its identifiers.
-        # Until the trusted SDK context is propagated into this process, an
-        # active order makes this observation unavailable instead of leaking
-        # native identity or claiming that the order set is empty.
-        raise CtpAccountSessionProviderError(
-            "ORDER_OBSERVATION_IDENTITY_UNAVAILABLE"
-        )
-        direction = _text(_field(row, "Direction"))
-        if direction not in {"0", "1"}:
-            raise ValueError
-        offset = _text(_field(row, "CombOffsetFlag"))
-        if type(offset) is not str or len(offset) != 1 or offset not in "0123456":
-            raise ValueError
-        side = "buy" if direction == "0" else "sell"
-        position_side = (
-            ("long" if side == "buy" else "short")
-            if offset == "0"
-            else ("short" if side == "buy" else "long")
-        )
-        quantity = _integer(_field(row, "VolumeTotalOriginal"))
-        filled = _integer(_field(row, "VolumeTraded"))
-        if quantity <= 0 or filled < 0 or filled >= quantity:
-            raise ValueError
-        instrument_id = _text(_field(row, "InstrumentID"))
-        exchange_id = _text(_field(row, "ExchangeID"))
-        order_id = _order_id(row)
-        if order_id in seen_ids:
-            raise ValueError
-        seen_ids.add(order_id)
-        order_type_code = _text(_field(row, "OrderPriceType"))
-        order_type = {"1": "ctp_any_price", "2": "limit"}.get(order_type_code)
-        if order_type is None:
-            raise ValueError
-        limit_price = (
-            _decimal_text(_field(row, "LimitPrice")) if order_type_code == "2" else None
-        )
-        if limit_price is not None and Decimal(limit_price) <= 0:
-            raise ValueError
-        client_order_id = _optional_text(_field(row, "OrderRef"))
-        projected.append(
-            AccountOpenOrder(
-                resource=_RESOURCE,
-                instrument=MarketInstrumentKey(
-                    provider="ctp",
-                    venue=exchange_id,
-                    environment="simnow",
-                    product_type="future",
-                    instrument_id=instrument_id,
-                    native_symbol=instrument_id,
-                ),
-                order_id=order_id,
-                side=side,
-                position_side=position_side,
-                order_type=order_type,
-                status="partially_filled" if filled else "open",
-                quantity=str(quantity),
-                filled_quantity=str(filled),
-                qty_unit="contract",
-                created_at_utc=_ctp_datetime_utc(
-                    _field(row, "InsertDate"), _field(row, "InsertTime")
-                ),
-                observed_at_utc=observed_at,
-                client_order_id=client_order_id,
-                limit_price=limit_price,
-                stop_price=None,
-                price_currency=None,
-                reduce_only=None,
-            )
-        )
-    if len(projected) > 2048:
+def _project_open_orders(
+    rows: tuple[Any, ...],
+    observed_at: str,
+    projector: Any,
+    catalog: Mapping[tuple[str, str], str] | None,
+    trading_day: str,
+) -> tuple[AccountOpenOrder, ...]:
+    if projector is None:
+        if not rows:
+            return ()
+        from bt_api_ctp.execution_query_projection import _snapshot_order_status
+
+        for row in rows:
+            status = _text(_field(row, "OrderStatus"))
+            if status in _ACTIVE_ORDER_STATUS:
+                raise CtpAccountSessionProviderError("ORDER_OBSERVATION_IDENTITY_UNAVAILABLE")
+            if status not in _TERMINAL_ORDER_STATUS:
+                raise ValueError
+            _snapshot_order_status(row, trading_day)
+        return ()
+    records, blockers = projector.project_open_orders(
+        rows, observed_at=observed_at, catalog_types=catalog, filters={}
+    )
+    if blockers:
         raise ValueError
-    return tuple(projected)
+    result = tuple(AccountOpenOrder.from_dict(record) for record in records)
+    if (
+        len(result) > 2048
+        or len({order.order_id for order in result}) != len(result)
+        or any(
+            order.resource != _RESOURCE
+            or order.instrument.product_type != "future"
+            or order.client_order_id is not None
+            for order in result
+        )
+    ):
+        raise ValueError
+    return result
 
 
 def _field(row: Any, name: str) -> Any:
@@ -1656,18 +1645,6 @@ def _integer(value: Any) -> int:
     if number != number.to_integral_value():
         raise ValueError
     return int(number)
-
-
-def _order_id(row: Any) -> str:
-    exchange_id = _text(_field(row, "ExchangeID"))
-    system_id = _optional_text(_field(row, "OrderSysID"))
-    if system_id is not None:
-        return f"{exchange_id}:{system_id}"
-    order_ref = _text(_field(row, "OrderRef"))
-    front_id = _integer(_field(row, "FrontID"))
-    session_id = _integer(_field(row, "SessionID"))
-    trading_day = _text(_field(row, "TradingDay"))
-    return f"{exchange_id}:{trading_day}:{front_id}:{session_id}:{order_ref}"
 
 
 def _ctp_datetime_utc(date_value: Any, time_value: Any) -> str:
