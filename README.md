@@ -631,3 +631,15 @@ bound Feed, Trader, API/SPI and account/configuration. It returns `ready`,
 the query-state lock was unavailable; it is not evidence of source health. An
 untrusted or replaced binding raises instead of being classified as a reconnect.
 A ready result is a point-in-time observation, not a trading authorization.
+
+## Iteration 63 natural trade date projection (R30)
+
+The source-bound Gateway trade projection now emits GatewayReturnFact v4 and
+preserves the native TradeDate as optional trade_date. Callback and query paths
+use their existing sealed rows and source fences. Missing or empty native dates
+remain unknown; nonempty invalid calendar values are rejected. TradingDay does
+not supply a substitute natural date. TradeTime remains separate, and the change
+does not establish a UTC timestamp, clock freshness or actual per-fill fees.
+Order, cancel-error and placement-error fact versions keep their prior contracts.
+The changed projection requires the matching Base/Gateway/SDK protocol versions;
+local synthetic validation does not establish real-account behavior.

@@ -291,12 +291,15 @@ def project_gateway_return(
             quantity = _native_int(_field(row, "Volume"), optional=False, positive=True)
             price = _price(_field(row, "Price"), optional=False)
             trade_time = _text(_field(row, "TradeTime"), optional=True)
+            trade_date = _text(_field(row, "TradeDate"), optional=True)
             fact = GatewayReturnFact(
                 kind=DirectExecutionEventKind.TRADE,
+                schema_version=4,
                 trade_key=(day, exchange, symbol, trade_id),
                 trade_quantity=quantity,
                 trade_price=price,
                 trade_time=trade_time,
+                trade_date=trade_date,
                 **common,
             )
         return CtpGatewayReturnProjection(fact, binding, venue_identity)
