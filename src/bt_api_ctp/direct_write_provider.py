@@ -2061,10 +2061,7 @@ class CtpDirectWriteProvider:
             raise DirectWriteError("ctp_settlement_observation_invalid")
         self._check_settlement_thread()
         if self._owner_thread_only and not self._allow_implicit_connect:
-            # Gateway confirmation needs a source-complete settlement claim at
-            # the final native gate.  A provider callback or a grant alone is
-            # not evidence that every revocation/source writer participates.
-            raise DirectWriteError("ctp_gateway_settlement_claim_unavailable")
+            return self._confirm_gateway_settlement(grant, verifier, observation)
         from bt_api_ctp.ctp import client as ctp_client
 
         with self._lock:
@@ -2140,6 +2137,124 @@ class CtpDirectWriteProvider:
                 self._note_trading_ready(trader)
                 return SettlementStatus.CONFIRMED
             return SettlementStatus.UNKNOWN
+
+    def _confirm_gateway_settlement(
+        self, grant: WriteGrant, verifier: WriteGrantVerifier, observation: SettlementObservation
+    ) -> SettlementStatus:
+        """Gateway decision A: confirm without holding the provider over native I/O.
+
+        The Gateway owner has already persisted the daily attempt marker and
+        made its final owner-thread claim (the attempt is in flight). Here the
+        exact observation ticket and grant are validated and consumed under the
+        provider lock; the lock is released before the native confirmation and
+        its server readback, which may block. An in-flight token excludes
+        concurrent settlement observation or confirmation meanwhile. The
+        trader still rechecks the exact observation under its own state lock
+        immediately before the native request. Only a readback proving this
+        account and trading day confirmed returns CONFIRMED.
+        """
+        from bt_api_ctp.ctp import client as ctp_client
+
+        with self._lock:
+            binding = getattr(grant, "settlement_binding", None)
+            if (
+                self._gateway_settlement_inflight is not None
+                or self._owner_closing or self._owner_closed
+                or type(observation) is not SettlementObservation
+                or type(binding) is not SettlementWriteBinding
+                or binding.observation is not observation
+                or observation.status is not SettlementStatus.UNCONFIRMED
+                or type(binding.marker_id) is not str
+                or not binding.marker_id
+                or binding.marker_id != binding.marker_id.strip()
+                or len(binding.marker_id) > 256
+                or getattr(grant, "exchange_name", None) != CTP_DIRECT_WRITE_EXCHANGE
+                or getattr(grant, "operation", None) is not WriteOperation.SETTLEMENT_CONFIRM
+                or getattr(grant, "session_generation", None) != observation.session_generation
+                or not self.validate_settlement_observation(observation)
+            ):
+                raise DirectWriteError("ctp_settlement_observation_invalid")
+            trader = self._trader()
+            if self._settlement_ticket is None or trader is not self._settlement_ticket.trader:
+                raise DirectWriteError("ctp_settlement_observation_invalid")
+            session = self._session_fields(trader)
+            verifier.consume(
+                grant,
+                exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+                operation=WriteOperation.SETTLEMENT_CONFIRM,
+                session_generation=session["connection_generation"],
+                settlement_binding=binding,
+            )
+            capability = self._admitted_capability(trader)
+            state = trader.get_execution_gate_state()
+            if isinstance(state, dict) and state.get("armed") is True:
+                trader.disarm_execution_gate(capability, "ctp_direct_settlement")
+            token = object()
+            self._gateway_settlement_inflight = token
+
+        owner_thread = threading.get_ident()
+        owner_pid = os.getpid()
+        marker_id = binding.marker_id
+        ticket = self._settlement_ticket
+        from bt_api_ctp.registered_sim_session import validate_query_session
+        from bt_api_ctp.store_account_session import _valid_settlement_result
+
+        def check() -> None:
+            # The trader calls this under its state lock. Never take the
+            # provider lock here: the readback monitor orders provider ->
+            # trader state, so this recheck reads the pinned ticket instead.
+            if os.getpid() != owner_pid or threading.get_ident() != owner_thread:
+                raise ctp_client.CtpExecutionGateError("ctp_settlement_observation_invalid")
+            if (
+                getattr(grant, "settlement_binding", None) is not binding
+                or binding.observation is not observation
+                or binding.marker_id != marker_id
+                or self._gateway_settlement_inflight is not token
+                or self._owner_closing or self._owner_closed
+                or self._settlement_ticket is not ticket
+                or ticket.consumed
+                or ticket.observation is not observation
+                or ticket.pid != os.getpid()
+                or time.monotonic() >= ticket.expires_at
+                or self._feed.trader_client is not ticket.trader
+            ):
+                raise ctp_client.CtpExecutionGateError("ctp_settlement_observation_invalid")
+            native = ticket.trader
+            with native._query_state_lock:
+                if not (
+                    native._api is ticket.api
+                    and native._spi is ticket.spi
+                    and native._session_native_api is ticket.api
+                    and native._settlement_observation_epoch == ticket.epoch
+                    and native.auto_settlement_confirm is False
+                    and validate_query_session(native, ticket.binding,
+                                               now_monotonic=time.monotonic())
+                    and _valid_settlement_result(ticket.result, ticket.binding)
+                ):
+                    raise ctp_client.CtpExecutionGateError("ctp_settlement_observation_invalid")
+
+        def consume() -> None:
+            check()
+            ticket.consumed = True
+
+        try:
+            check()
+            ready = trader.confirm_settlement_for_sdk_admission(
+                capability, observation_check=check, observation_consume=consume, timeout=15.0
+            )
+        except ctp_client.CtpExecutionGateError as exc:
+            raise DirectWriteError(
+                getattr(exc, "code", None) or "ctp_direct_settlement_failed", str(exc)
+            ) from None
+        finally:
+            with self._lock:
+                if self._gateway_settlement_inflight is token:
+                    self._gateway_settlement_inflight = None
+        with self._lock:
+            if ready and self._feed.trader_client is trader and not self._owner_closing:
+                self._note_trading_ready(trader)
+                return SettlementStatus.CONFIRMED
+        return SettlementStatus.UNKNOWN
 
     # ------------------------------------------------------------------
     # returns

@@ -173,8 +173,13 @@ def _gateway_partial_source_change(coordinator):
         raise
     else:
         try:
-            # Partial callbacks alone can never publish a READY source.
-            coordinator.finish_change(token, "UNAVAILABLE")
+            # READY only after the owner composition sealed coverage; the
+            # provider still rechecks its session under its lock natively.
+            finish = getattr(coordinator, "finish_change_current", None)
+            if callable(finish):
+                finish(token)
+            else:
+                coordinator.finish_change(token, "UNAVAILABLE")
         except Exception:
             try:
                 coordinator.poison_domain("session_source")

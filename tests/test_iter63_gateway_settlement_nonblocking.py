@@ -120,7 +120,17 @@ def test_gateway_reentrant_observation_never_issues_second_query():
         provider.close()
 
 
-def test_gateway_confirmation_rejects_without_complete_claim_authority():
+def test_gateway_confirmation_releases_provider_lock_over_native_and_consumes_grant():
+    """Decision A: the Gateway owner already holds the marker and its claim.
+
+    The provider validates and consumes the grant under its lock, then calls
+    native without holding it; the observation ticket is single use.
+    """
+    import threading
+    from types import SimpleNamespace
+
+    from bt_api_base.direct_write_protocol import SettlementStatus, WriteAdmissionDenied
+
     old_provider, client, native = _real_setup()
     old_provider.close()
     _login(client, native, session_id=20)
@@ -129,6 +139,32 @@ def test_gateway_confirmation_rejects_without_complete_claim_authority():
         old_provider._feed, owner_thread_only=True, background_settlement_readback=False,
         allow_implicit_connect=False,
     )
+    # Same stand-in for the feed's SDK admission step as the helper setup.
+    provider._admitted_capability = old_provider._admitted_capability
+    seen = {}
+
+    def confirm(_field, request_id):
+        native.calls.append("confirm_settlement")
+        acquired = []
+
+        def probe():
+            ok = provider._lock.acquire(timeout=1.0)
+            if ok:
+                provider._lock.release()  # an RLock must be released by its owner
+            acquired.append(ok)
+
+        worker = threading.Thread(target=probe)
+        worker.start()
+        worker.join(2.0)
+        seen["provider_lock_free"] = acquired == [True]
+        seen["inflight"] = provider._gateway_settlement_inflight is not None
+        native.confirmation_day = TODAY
+        client._spi.OnRspSettlementInfoConfirm(
+            SimpleNamespace(BrokerID="9999", InvestorID="account", ConfirmDate=TODAY),
+            SimpleNamespace(ErrorID=0, ErrorMsg=""), request_id, True)
+        return 0
+
+    native.ReqSettlementInfoConfirm = confirm
     try:
         observation = provider.observe_settlement()
         binding = SettlementWriteBinding(observation, "synthetic-marker")
@@ -137,12 +173,22 @@ def test_gateway_confirmation_rejects_without_complete_claim_authority():
             "CTP___FUTURE", WriteOperation.SETTLEMENT_CONFIRM,
             observation.session_generation, settlement_binding=binding,
         )
-        with pytest.raises(DirectWriteError, match="ctp_gateway_settlement_claim_unavailable"):
-            provider.confirm_settlement(grant, admission, observation=observation)
-        assert "confirm_settlement" not in native.calls
-        admission.consume(
-            grant, exchange_name="CTP___FUTURE", operation=WriteOperation.SETTLEMENT_CONFIRM,
-            session_generation=observation.session_generation, settlement_binding=binding,
+        status = provider.confirm_settlement(grant, admission, observation=observation)
+        assert status is SettlementStatus.CONFIRMED
+        assert native.calls.count("confirm_settlement") == 1
+        assert seen == {"provider_lock_free": True, "inflight": True}
+        assert provider._gateway_settlement_inflight is None
+        with pytest.raises(WriteAdmissionDenied):
+            admission.consume(
+                grant, exchange_name="CTP___FUTURE", operation=WriteOperation.SETTLEMENT_CONFIRM,
+                session_generation=observation.session_generation, settlement_binding=binding,
+            )
+        again = admission.issue(
+            "CTP___FUTURE", WriteOperation.SETTLEMENT_CONFIRM,
+            observation.session_generation, settlement_binding=binding,
         )
+        with pytest.raises(DirectWriteError, match="ctp_settlement_observation_invalid"):
+            provider.confirm_settlement(again, admission, observation=observation)
+        assert native.calls.count("confirm_settlement") == 1
     finally:
         provider.close()
