@@ -21,6 +21,8 @@ from bt_api_execution.store import (
     _is_local_queue_receipt_id,
 )
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _RUNTIME_ID = re.compile(r"^bt-managed-v1:[0-9a-f]{64}$", re.ASCII)
 _ORDER_REF = re.compile(r"^[0-9]{12}$", re.ASCII)
@@ -140,8 +142,7 @@ class CtpManagedPreparedDispatch:
                 or not self.cancel_target_order_sys_id
                 or type(self.cancel_target_front_id) is not int
                 or self.cancel_target_front_id <= 0
-                or type(self.cancel_target_session_id) is not int
-                or self.cancel_target_session_id <= 0
+                or not is_ctp_session_id(self.cancel_target_session_id)
             ):
                 raise ContractValidationError("cancel requires a complete exact native target")
         if (
@@ -161,8 +162,7 @@ class CtpManagedPreparedDispatch:
             or not self.session_generation_id
             or type(self.dispatch_front_id) is not int
             or self.dispatch_front_id <= 0
-            or type(self.dispatch_session_id) is not int
-            or self.dispatch_session_id <= 0
+            or not is_ctp_session_id(self.dispatch_session_id)
             or type(self.native_request_id) is not int
             or not (1 <= self.native_request_id <= 2_147_483_647)
         ):

@@ -26,6 +26,7 @@ import threading
 from collections.abc import Mapping
 from typing import Any, Dict, Optional, Tuple
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
 from bt_api_ctp.query_facts import (
     SDK_CLIENT_MODULE_NAMES,
     SHA256_PATTERN,
@@ -97,7 +98,7 @@ def expected_session(value: Any) -> Dict[str, Any]:
     if (front_id is None) != (session_id is None):
         raise RegisteredSimSessionIdentityError("registered-sim expected session identity is invalid")
     if front_id is not None and (
-        not is_positive_int(front_id) or not is_positive_int(session_id)
+        not is_positive_int(front_id) or not is_ctp_session_id(session_id)
     ):
         raise RegisteredSimSessionIdentityError("registered-sim expected session identity is invalid")
     result = {
@@ -306,7 +307,7 @@ def session_identity(client: Any) -> Dict[str, Any]:
             else None
         ),
         "front_id": front_id if is_positive_int(front_id) else None,
-        "session_id": session_id if is_positive_int(session_id) else None,
+        "session_id": session_id if is_ctp_session_id(session_id) else None,
     }
 
 

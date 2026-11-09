@@ -137,6 +137,7 @@ from .ctp_structs_query import (
     CThostFtdcQryTradingCodeField,
 )
 from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 _logger = logging.getLogger(__name__)
 
@@ -162,8 +163,11 @@ def _gateway_partial_source_change(coordinator):
     try:
         yield
     except BaseException:
+        # A failed source operation is not a coordination fault: the epoch
+        # already moved, so end UNAVAILABLE and let the next successful
+        # change publish again. Only failing to finish closes the domain.
         try:
-            coordinator.poison(token)
+            coordinator.finish_change(token, "UNAVAILABLE")
         except Exception:
             try:
                 coordinator.poison_domain("session_source")
@@ -1206,8 +1210,7 @@ def _validate_managed_cancel_target_values(
         or not exchange_id.isascii()
         or type(front_id) is not int
         or front_id <= 0
-        or type(session_id) is not int
-        or session_id <= 0
+        or not is_ctp_session_id(session_id)
     ):
         raise CtpExecutionGateError("ctp_execution_gate_managed_cancel_target_incomplete")
 
@@ -1227,8 +1230,7 @@ def _validate_managed_cancel_native_fields(
         or identity.front_id is None
         or identity.front_id <= 0
         or type(snapshot.session_id_value) is not int
-        or identity.session_id is None
-        or identity.session_id <= 0
+        or not is_ctp_session_id(identity.session_id)
         or type(snapshot.order_action_ref_value) is not int
         or snapshot.order_action_ref_value != request_id
         or _CTP_MANAGED_ORDER_REF_RE.fullmatch(identity.order_ref) is None
@@ -4821,8 +4823,7 @@ def _managed_native_binding_payload(
         if (
             type(envelope.get("cancel_target_front_id")) is not int
             or envelope["cancel_target_front_id"] <= 0
-            or type(envelope.get("cancel_target_session_id")) is not int
-            or envelope["cancel_target_session_id"] <= 0
+            or not is_ctp_session_id(envelope.get("cancel_target_session_id"))
             or envelope.get("order_ref") != envelope.get("cancel_target_order_ref")
             or any(
                 type(envelope.get(name)) is not str

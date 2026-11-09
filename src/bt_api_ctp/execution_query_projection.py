@@ -36,6 +36,7 @@ from bt_api_ctp.account_provider import (
     _utc_text,
 )
 from bt_api_ctp.registered_sim_session import CtpQuerySessionBinding
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 _OFFSET_EFFECTS = {
     "0": "open",
@@ -599,7 +600,7 @@ class CtpExecutionQueryProjector:
             session_id = _integer(_field(row, "SessionID"))
         except Exception:
             front_id = session_id = 0
-        if local_id is not None and front_id > 0 and session_id > 0:
+        if local_id is not None and front_id > 0 and is_ctp_session_id(session_id):
             return _private_identity(
                 "order",
                 identity_kind="local",
@@ -611,7 +612,7 @@ class CtpExecutionQueryProjector:
                 order_local_id=local_id,
             )
         order_ref = _optional_text(_field(row, "OrderRef"))
-        if order_ref is None or front_id <= 0 or session_id <= 0:
+        if order_ref is None or front_id <= 0 or not is_ctp_session_id(session_id):
             raise _ProjectionIssue("order_identity_unavailable")
         return _private_identity(
             "order",

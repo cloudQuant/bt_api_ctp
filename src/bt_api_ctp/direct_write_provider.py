@@ -66,6 +66,7 @@ from bt_api_ctp.trading_permission_facts import (
     PermissionFact,
     TradingPermissionFacts,
 )
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 __all__ = (
     "CTP_DIRECT_WRITE_EXCHANGE",
@@ -1499,8 +1500,7 @@ class CtpDirectWriteProvider:
         if (
             type(front) is not int
             or not 0 < front < 2**31
-            or type(session) is not int
-            or not 0 < session < 2**31
+            or not is_ctp_session_id(session)
             or type(generation) is not int
             or not 0 < generation < 2**63
             or type(day) is not str
@@ -1579,8 +1579,7 @@ class CtpDirectWriteProvider:
                 ref
                 and type(front) is int
                 and 0 < front < 2**31
-                and type(session) is int
-                and 0 < session < 2**31
+                and is_ctp_session_id(session)
             )
             venue_target = bool(
                 type(native_id) is str and native_id and native_id == native_id.strip()

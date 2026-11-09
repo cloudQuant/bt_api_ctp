@@ -42,6 +42,7 @@ from bt_api_ctp.registered_sim_session import (
     capture_query_session,
     validate_query_session,
 )
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 _UTC = timezone.utc
 _CHINA = timezone(timedelta(hours=8))
@@ -979,7 +980,7 @@ def _native_order_identity(row: Any, binding: CtpQuerySessionBinding) -> tuple[A
     session_id = _integer(_field(row, "SessionID"))
     if (
         front_id <= 0
-        or session_id <= 0
+        or not is_ctp_session_id(session_id)
         or len(trading_day) != 8
         or not trading_day.isdigit()
     ):

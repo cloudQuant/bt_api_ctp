@@ -41,6 +41,8 @@ from bt_api_execution.store import (
     SqliteExecutionStore,
 )
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 _SOURCE_BINDING_TYPE = "bt_api_ctp.trader_callback_source.v1"
 _LIFECYCLE_BINDING_TYPE = "ctp_native_callback_lifecycle_binding.v1"
 _BOUND_ENVELOPE_TYPE = "ctp_lifecycle_bound_native_callback_envelope.v1"
@@ -254,7 +256,9 @@ def _capture_logged_in_source(native_trader_client: object) -> _NativeSourceFact
             ):
                 raise _contract_error("invalid logged-in trading session facts")
             front_id = _positive_int(client._front_id, "login FrontID")
-            session_id = _positive_int(client._session_id, "login SessionID")
+            session_id = client._session_id
+            if not is_ctp_session_id(session_id):
+                raise _contract_error("invalid source login SessionID")
             sequence = client._callback_source_sequence
             if type(sequence) is not int or sequence < 0:
                 raise _contract_error("invalid callback source sequence baseline")

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Iterator
+from bt_api_ctp.native_session_id import is_ctp_session_id, parse_ctp_session_id
 
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
@@ -80,8 +81,7 @@ class CtpNativeSessionIdentity:
         if self.front_id is not None and (
             type(self.front_id) is not int
             or self.front_id <= 0
-            or type(self.session_id) is not int
-            or self.session_id <= 0
+            or not is_ctp_session_id(self.session_id)
         ):
             raise CtpNativeOrderAuthorityError("ctp_native_session_ids_invalid")
 
@@ -1198,7 +1198,7 @@ class CtpRegisteredSimNativeAuthority:
             order_ref = _callback_text(payload, "OrderRef")
             status = _callback_text(payload, "OrderStatus").lower()
             front_id = _callback_positive_int(payload, "FrontID")
-            session_id = _callback_positive_int(payload, "SessionID")
+            session_id = _callback_session_id(payload)
             status_map = _order_status_map()
         except Exception:
             self._latch_callback_unknown(None, identity_incomplete=True)
@@ -1690,6 +1690,16 @@ def _callback_text(payload: Any, name: str) -> str:
     except Exception:
         return ""
     return value.strip() if type(value) is str else ""
+
+
+def _callback_session_id(payload: Any) -> int | None:
+    """CTP SessionID is signed; accept any nonzero 32-bit value."""
+    try:
+        value = payload.get("SessionID") if isinstance(payload, Mapping) else getattr(
+            payload, "SessionID")
+    except Exception:
+        return None
+    return parse_ctp_session_id(value)
 
 
 def _callback_positive_int(payload: Any, name: str) -> int | None:

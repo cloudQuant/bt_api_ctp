@@ -9,6 +9,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 _SOURCE_RE = re.compile(r"ctp-query-source-v1:[0-9a-f]{64}\Z", re.ASCII)
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 _SOURCE_FIELDS = frozenset({"schema", "source_ref", "source_tags_digest", "login_request_id"})
@@ -118,8 +120,9 @@ def cancel_attempt_key(
         or not day.isdigit()
         or any(
             type(v) is not int or not 0 < v < 2**31
-            for v in (front, session, request_id, action_ref)
+            for v in (front, request_id, action_ref)
         )
+        or not is_ctp_session_id(session)
     ):
         raise ValueError("INVALID_CANCEL_SOURCE")
     material = [

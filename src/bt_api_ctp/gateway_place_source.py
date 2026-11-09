@@ -14,6 +14,7 @@ from bt_api_ctp.gateway_cancel_source import (
     capture_cancel_source_locked,
     validate_cancel_source_binding,
 )
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 
 def validate_place_source_binding(binding: object) -> dict:
@@ -52,7 +53,8 @@ def place_attempt_key(
         or len(day) != 8
         or not day.isascii()
         or not day.isdigit()
-        or any(type(v) is not int or not 0 < v < 2**31 for v in (front, session, request_id))
+        or any(type(v) is not int or not 0 < v < 2**31 for v in (front, request_id))
+        or not is_ctp_session_id(session)
         or type(order_ref) is not str
         or len(order_ref) != 12
         or not order_ref.isascii()

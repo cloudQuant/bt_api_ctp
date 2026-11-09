@@ -3,6 +3,8 @@
 The caller retains target identity, session, source and authorization checks.
 """
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 
 def validate_ctp_cancel_target_fields(target, request_payload, *, error_type):
     if (
@@ -18,8 +20,7 @@ def validate_ctp_cancel_target_fields(target, request_payload, *, error_type):
         or target.order_sys_id != target.order_sys_id.strip()
         or type(target.front_id) is not int
         or target.front_id <= 0
-        or type(target.session_id) is not int
-        or target.session_id <= 0
+        or not is_ctp_session_id(target.session_id)
     ):
         raise error_type("invalid exact CTP cancel target")
     expected = {

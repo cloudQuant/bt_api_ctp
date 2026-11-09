@@ -27,6 +27,8 @@ from functools import wraps
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 _MAX_ID_BYTES = 128
 _MAX_STRING_BYTES = 2048
 _MAX_RECORD_BYTES = 32 * 1024
@@ -1453,8 +1455,7 @@ def validate_expected_prelogin_step(
         and front_id.value > 0
         and session_id is not None
         and session_id.present
-        and type(session_id.value) is int
-        and session_id.value > 0
+        and is_ctp_session_id(session_id.value)
     )
 
 

@@ -8,6 +8,7 @@ import math
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from bt_api_ctp.native_session_id import is_ctp_session_id
 
 
 CTP_MANAGED_RISK_ORDER_SCHEMA = "ctp-managed-risk-order-v1"
@@ -989,7 +990,7 @@ def validate_ctp_terminal_evidence(
         or type(evidence.get("front_id")) is not int
         or evidence["front_id"] < 0
         or type(evidence.get("session_id")) is not int
-        or evidence["session_id"] < 0
+        or not (evidence["session_id"] == 0 or is_ctp_session_id(evidence["session_id"]))
         or any(
             type(evidence.get(name)) is not int or evidence[name] <= 0
             for name in (

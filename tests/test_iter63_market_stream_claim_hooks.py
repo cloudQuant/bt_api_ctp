@@ -345,8 +345,10 @@ def test_no_join_release_is_confirmed_before_client_detach(monkeypatch):
         value.disconnect()
     assert value._md_client is original
     assert value.state is ConnectionState.ERROR
-    with pytest.raises(DispatchClaimError, match="DOMAIN_POISONED"):
-        coordinator.begin_change("session_source")
+    # The failed stop ended the change UNAVAILABLE (not a permanent poison).
+    assert coordinator._domains["session_source"][4] is False
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.capture()
     with pytest.raises(RuntimeError, match="client_not_detached"):
         value.connect()
     released.set()
