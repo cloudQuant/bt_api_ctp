@@ -148,6 +148,616 @@ def test_commit_then_one_native_send_with_original_ids_and_no_locks(system):
         provider.submit_prepared_order(prepared, object(), verifier)
 
 
+def test_native_market_recheck_runs_after_grant_before_native_insert(system):
+    provider, trader, native = system
+    prepared = provider.prepare_order(order())
+    verifier = Verifier()
+    calls = []
+
+    def recheck():
+        assert verifier.calls == 1
+        assert trader._query_state_lock._is_owned()
+        assert not native.calls
+        calls.append("recheck")
+
+    result = provider.submit_prepared_order(
+        prepared, object(), verifier, native_market_recheck=recheck)
+    assert result.sent is True and calls == ["recheck"] and len(native.calls) == 1
+
+
+@pytest.mark.parametrize("recheck", [lambda: False, lambda: (_ for _ in ()).throw(RuntimeError()), 42])
+def test_native_market_recheck_failure_is_definitely_unsent(system, recheck):
+    provider, trader, native = system
+    prepared = provider.prepare_order(order())
+    result = provider.submit_prepared_order(
+        prepared, object(), Verifier(), native_market_recheck=recheck)
+    assert result.sent is False and result.error_code == "ctp_prepared_place_not_sent"
+    assert not native.calls
+    assert trader.get_order_insert_evidence(
+        prepared.request_fields["RequestID"], order_ref=prepared.identity.client_order_id
+    ) is None
+
+
+def test_native_market_recheck_cannot_change_source_before_insert(system):
+    provider, trader, native = system
+    prepared = provider.prepare_order(order())
+
+    def recheck():
+        trader._spi._native_spi_source_id = "changed"
+
+    result = provider.submit_prepared_order(
+        prepared, object(), Verifier(), native_market_recheck=recheck)
+    assert result.sent is False and result.error_code == "ctp_prepared_place_not_sent"
+    assert not native.calls
+
+
+def test_async_disconnect_before_native_send_preserves_generation_and_blocks_send(system):
+    provider, trader, native = system
+    prepared = provider.prepare_order(order())
+    generation = trader.connection_generation
+    callback = threading.Thread(target=trader._spi.OnFrontDisconnected, args=(0,))
+    callback.start()
+    callback.join(timeout=2)
+    assert not callback.is_alive()
+    assert trader.connection_generation == generation
+    assert provider.submit_prepared_order(prepared, object(), Verifier()).sent is False
+    assert not native.calls
+
+
+def test_async_disconnect_can_finish_while_synthetic_native_insert_is_inflight(system):
+    provider, trader, native = system
+    prepared = provider.prepare_order(order())
+    entered, release, disconnected = threading.Event(), threading.Event(), threading.Event()
+    generation = trader.connection_generation
+    spi = trader._spi
+
+    def hung_insert(field, request_id):
+        native.calls.append((field, request_id))
+        entered.set()
+        if not release.wait(2):
+            raise RuntimeError("synthetic insert did not resume")
+        return 0
+
+    def disconnect():
+        if entered.wait(2):
+            spi.OnFrontDisconnected(0)
+            disconnected.set()
+        release.set()
+
+    native.ReqOrderInsert = hung_insert
+    worker = threading.Thread(target=disconnect)
+    worker.start()
+    try:
+        result = provider.submit_prepared_order(prepared, object(), Verifier())
+    finally:
+        release.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive() and disconnected.is_set()
+    assert trader.connection_generation == generation
+    assert len(native.calls) == 1 and result.sent is True
+
+
+def _test_td_claim_coordinator(trader):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    coordinator = GatewayDispatchClaimCoordinator._for_test("synthetic-account", "owner-1")
+    for domain in ("registry", "market", "parent_facts", "control", "session_source", "risk"):
+        token = coordinator.begin_change(domain)
+        coordinator.finish_change(token, "NOT_SELECTED" if domain == "risk" else "READY")
+    trader._bind_gateway_td_dispatch_coordinator(
+        coordinator, account_scope="synthetic-account", service_generation="owner-1")
+    return coordinator
+
+
+def _candidate_for_test(coordinator):
+    from bt_api_py.gateway_dispatch_claim import DispatchCommandBinding
+    import time
+
+    binding = DispatchCommandBinding(
+        account="synthetic-account", owner_generation="owner-1", journal_id="j",
+        strategy="s", principal="p", run_id="r", request_key="request",
+        reservation_id="reservation", payload_digest="a" * 64,
+        native_identity_digest="b" * 64, marker_ref="marker")
+    first, second = coordinator.capture(), coordinator.capture()
+    return coordinator.prepare(binding, first, second, deadline_ns=time.monotonic_ns() + 1_000_000_000)
+
+
+def test_td_callback_invalidates_candidate_before_locked_disconnect_mutation(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    original_begin, original_finish = coordinator.begin_change, coordinator.finish_change
+    transitions = []
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append("begin")
+        return original_begin(domain)
+
+    def finish(token, status):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append(status)
+        return original_finish(token, status)
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(coordinator, "finish_change", finish)
+    generation = trader.connection_generation
+    worker = threading.Thread(target=trader._spi.OnFrontDisconnected, args=(0,))
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive() and transitions == ["begin", "UNAVAILABLE"]
+    assert not trader._connected and trader.connection_generation == generation
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+def test_td_disconnect_after_claim_does_not_wait_for_hung_native(system):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    provider, trader, native = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    prepared = provider.prepare_order(order())
+    entered, release, disconnected = threading.Event(), threading.Event(), threading.Event()
+    spi = trader._spi
+
+    def native_insert(field, request_id):
+        native.calls.append((field, request_id))
+        entered.set()
+        if not release.wait(2):
+            raise RuntimeError("synthetic insert did not resume")
+        return 0
+
+    def disconnect():
+        if entered.wait(2):
+            spi.OnFrontDisconnected(0)
+            disconnected.set()
+        release.set()
+
+    native.ReqOrderInsert = native_insert
+    worker = threading.Thread(target=disconnect)
+    worker.start()
+    try:
+        result = provider.submit_prepared_order(
+            prepared, object(), Verifier(), native_market_recheck=lambda: coordinator.try_claim(candidate))
+    finally:
+        release.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive() and disconnected.is_set()
+    assert result.sent is True and len(native.calls) == 1
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.capture()
+
+
+def test_closed_td_coordinator_does_not_suppress_real_disconnect_cleanup(system):
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    coordinator.close()
+    trader._spi.OnFrontDisconnected(0)
+    assert trader._connected is False and trader._session_native_api is None
+
+
+def test_td_connected_callback_finishes_invalidation_before_native_auth(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    called = []
+
+    def auth(*_args):
+        assert not trader._query_state_lock._is_owned()
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.capture()
+        called.append(True)
+
+    monkeypatch.setattr(trader, "_submit_authenticate", auth)
+    trader._spi.OnFrontConnected()
+    assert called == [True]
+
+
+def test_td_auth_and_login_callbacks_invalidate_before_mutation_and_external_calls(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    events = []
+
+    def submit_login(_api, _generation, _request_id, _field):
+        assert not trader._query_state_lock._is_owned()
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.capture()
+        events.append("submit_login")
+
+    monkeypatch.setattr(trader, "_submit_user_login", submit_login)
+    with trader._query_state_lock:
+        trader._authentication_state = "authenticating"
+        trader._authentication_request_id = 47
+        trader._authentication_connection_generation = trader.connection_generation
+    trader._spi.OnRspAuthenticate(None, SimpleNamespace(ErrorID=0), 47, True)
+    assert events == ["submit_login"]
+    login_id = trader._login_request_id
+
+    def on_login(_response):
+        assert not trader._query_state_lock._is_owned()
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.capture()
+        events.append("login_callback")
+
+    trader.on_login = on_login
+    trader._spi.OnRspUserLogin(
+        SimpleNamespace(BrokerID=trader._bound_broker_id, UserID=trader._bound_user_id,
+                        FrontID=1, SessionID=2, TradingDay="20261010", MaxOrderRef="7"),
+        SimpleNamespace(ErrorID=0), login_id, True)
+    assert trader._trading_day == "20261010"
+    assert events == ["submit_login", "login_callback"]
+
+
+@pytest.mark.parametrize("kind", ["authenticate", "login"])
+def test_td_submit_refusal_invalidates_after_native_return_without_lock_inversion(system, monkeypatch, kind):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, native = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    original_begin = coordinator.begin_change
+    transitions = []
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append(domain)
+        return original_begin(domain)
+
+    def native_refusal(*_args, **_kwargs):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append("native")
+        return -1
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(trader, "_invoke_session_native_request", native_refusal)
+    generation = trader.connection_generation
+    if kind == "authenticate":
+        trader._authentication_state = "authenticating"
+        trader._authentication_request_id = 8
+        trader._authentication_connection_generation = generation
+        trader._submit_authenticate(native, generation, 8, object())
+        assert trader._authentication_state == "failed"
+    else:
+        trader._login_state = "logging_in"
+        trader._login_request_id = 8
+        trader._login_connection_generation = generation
+        trader._submit_user_login(native, generation, 8, object())
+        assert trader._login_state == "failed"
+    assert transitions == ["native", "session_source"]
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+def test_td_retry_timer_invalidates_before_state_change_and_native_submit(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, native = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    retry_token = object()
+    trader._session_retry_token = retry_token
+    trader._authentication_state = "failed"
+    seen = []
+
+    def submit(*_args):
+        assert not trader._query_state_lock._is_owned()
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.try_claim(candidate)
+        seen.append(True)
+
+    monkeypatch.setattr(trader, "_submit_authenticate", submit)
+    trader._session_retry_due(retry_token, trader.connection_generation,
+                              "authenticate", native, trader._spi)
+    assert seen == [True] and trader._authentication_state == "authenticating"
+
+
+def test_td_settlement_response_invalidates_before_state_mutation(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    trader._settlement_state = "confirming"
+    trader._settlement_request_id = 123
+    trader._settlement_connection_generation = trader.connection_generation
+    trader._settlement_account_fingerprint = trader._account_fingerprint
+    trader._settlement_trading_day = trader._trading_day
+    original_begin = coordinator.begin_change
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        return original_begin(domain)
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    trader._spi.OnRspSettlementInfoConfirm(
+        SimpleNamespace(BrokerID=trader._bound_broker_id, InvestorID=trader._bound_user_id,
+                        ConfirmDate=trader._trading_day), SimpleNamespace(ErrorID=0), 123, True)
+    assert trader._settlement_state == "confirmed" and trader._ready is False
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+@pytest.mark.parametrize("operation", ["stop", "abort", "uninitialized"])
+def test_td_lifecycle_changes_invalidate_outside_state_lock_and_native_cleanup(system, monkeypatch, operation):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, native = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    original_begin, original_finish = coordinator.begin_change, coordinator.finish_change
+    trace = []
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        trace.append("begin")
+        return original_begin(domain)
+
+    def finish(token, status):
+        assert not trader._query_state_lock._is_owned()
+        trace.append(status)
+        return original_finish(token, status)
+
+    def cleanup(*_args, **_kwargs):
+        assert not trader._query_state_lock._is_owned()
+        assert trace[-1] == "UNAVAILABLE"
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.try_claim(candidate)
+        trace.append("native_cleanup")
+        return True
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(coordinator, "finish_change", finish)
+    monkeypatch.setattr(trader, "_release_native_api_immediately", cleanup)
+    if operation == "stop":
+        assert trader._stop_native_session() is True
+    elif operation == "abort":
+        monkeypatch.setattr(trader, "_is_start_current_locked", lambda *_args: True)
+        assert trader._abort_startup(native, trader._spi, 1) is True
+    else:
+        monkeypatch.setattr(trader, "_stop_native_session", cleanup)
+        assert trader._stop_uninitialized_native_api(native, spi=trader._spi) is True
+    assert trace == ["begin", "UNAVAILABLE", "native_cleanup"]
+
+
+def test_unlocked_td_api_replacement_invalidates_before_native_source_changes(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    original_begin, original_finish = coordinator.begin_change, coordinator.finish_change
+    transitions = []
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append("begin")
+        return original_begin(domain)
+
+    def finish(token, status):
+        assert not trader._query_state_lock._is_owned()
+        transitions.append(status)
+        return original_finish(token, status)
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(coordinator, "finish_change", finish)
+    replacement = object()
+    trader._api = replacement
+    assert trader._api is replacement and trader._spi is None
+    assert transitions == ["begin", "UNAVAILABLE"]
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+def test_td_start_reservation_invalidates_before_gate_revocation(system, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError
+
+    _, trader, _ = system
+    trader._api = None
+    coordinator = _test_td_claim_coordinator(trader)
+    candidate = _candidate_for_test(coordinator)
+    original_begin = coordinator.begin_change
+
+    def begin(domain):
+        assert not trader._query_state_lock._is_owned()
+        return original_begin(domain)
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    assert trader._reserve_start_generation() > 0
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+def test_md_connection_and_login_callbacks_invalidate_outside_md_lock(monkeypatch):
+    from bt_api_ctp.ctp.client import MdClient, _MdSpi
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError, GatewayDispatchClaimCoordinator
+
+    client = MdClient("tcp://offline.invalid:1", "9999", "account", "unused")
+    spi = _MdSpi(client)
+    coordinator = GatewayDispatchClaimCoordinator._for_test("synthetic-account", "owner-1")
+    for domain in ("registry", "market", "parent_facts", "control", "session_source", "risk"):
+        token = coordinator.begin_change(domain)
+        coordinator.finish_change(token, "NOT_SELECTED" if domain == "risk" else "READY")
+    client._bind_gateway_md_dispatch_coordinator(
+        coordinator, account_scope="synthetic-account", service_generation="owner-1")
+    original_begin, original_finish = coordinator.begin_change, coordinator.finish_change
+    transitions = []
+
+    def begin(domain):
+        assert not client._state_lock._is_owned()
+        transitions.append("begin")
+        return original_begin(domain)
+
+    def finish(token, status):
+        assert not client._state_lock._is_owned()
+        transitions.append(status)
+        return original_finish(token, status)
+
+    def external_callback(*_args):
+        assert not client._state_lock._is_owned()
+        assert transitions[-1] == "UNAVAILABLE"
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.capture()
+        transitions.append("callback")
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(coordinator, "finish_change", finish)
+    client.on_login = external_callback
+    client.on_disconnect = external_callback
+    spi.OnFrontConnected()
+    request_id = client._login_request_id
+    spi.OnRspUserLogin(SimpleNamespace(BrokerID="9999", UserID="account", TradingDay="20261009"),
+                       SimpleNamespace(ErrorID=0), request_id, True)
+    assert client._loggedin is True
+    generation = client._connection_generation
+    worker = threading.Thread(target=spi.OnFrontDisconnected, args=(0,))
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive() and not client._connected
+    assert client._connection_generation == generation
+    assert transitions == ["begin", "UNAVAILABLE", "begin", "UNAVAILABLE", "callback",
+                           "begin", "UNAVAILABLE", "callback"]
+
+
+def test_md_login_refusal_invalidates_after_native_return(monkeypatch):
+    from bt_api_ctp.ctp.client import MdClient, _MdSpi
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError, GatewayDispatchClaimCoordinator
+
+    client = MdClient("tcp://offline.invalid:1", "9999", "account", "unused")
+    native = object()
+    spi = _MdSpi(client, native_api=native)
+    client._api, client._spi = native, spi
+    client._connection_generation = 1
+    client._connected = True
+    client._login_request_pending = True
+    client._login_request_id = 4
+    client._login_request_generation = 1
+    coordinator = GatewayDispatchClaimCoordinator._for_test("synthetic-account", "owner-1")
+    for domain in ("registry", "market", "parent_facts", "control", "session_source", "risk"):
+        token = coordinator.begin_change(domain)
+        coordinator.finish_change(token, "NOT_SELECTED" if domain == "risk" else "READY")
+    client._bind_gateway_md_dispatch_coordinator(
+        coordinator, account_scope="synthetic-account", service_generation="owner-1")
+    candidate = _candidate_for_test(coordinator)
+    original_begin = coordinator.begin_change
+    trace = []
+
+    def begin(domain):
+        assert not client._state_lock._is_owned()
+        trace.append("begin")
+        return original_begin(domain)
+
+    def refuse(*_args):
+        assert not client._state_lock._is_owned()
+        trace.append("native")
+        return -1
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(client, "_invoke_native_request", refuse)
+    client._submit_md_login(native, spi, 1, 4, object())
+    assert trace == ["native", "begin"] and not client._connected
+    with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+        coordinator.try_claim(candidate)
+
+
+@pytest.mark.parametrize("operation", ["reserve_start", "stop", "abort"])
+def test_md_lifecycle_publishes_invalidation_before_native_cleanup(monkeypatch, operation):
+    from bt_api_ctp.ctp.client import MdClient, _MdSpi
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError, GatewayDispatchClaimCoordinator
+
+    client = MdClient("tcp://offline.invalid:1", "9999", "account", "unused")
+    coordinator = GatewayDispatchClaimCoordinator._for_test("synthetic-account", "owner-1")
+    for domain in ("registry", "market", "parent_facts", "control", "session_source", "risk"):
+        token = coordinator.begin_change(domain)
+        coordinator.finish_change(token, "NOT_SELECTED" if domain == "risk" else "READY")
+    client._bind_gateway_md_dispatch_coordinator(
+        coordinator, account_scope="synthetic-account", service_generation="owner-1")
+    candidate = _candidate_for_test(coordinator)
+    original_begin, original_finish = coordinator.begin_change, coordinator.finish_change
+    trace = []
+
+    def begin(domain):
+        assert not client._state_lock._is_owned()
+        trace.append("begin")
+        return original_begin(domain)
+
+    def finish(token, status):
+        assert not client._state_lock._is_owned()
+        trace.append(status)
+        return original_finish(token, status)
+
+    def cleanup(*_args):
+        assert not client._state_lock._is_owned()
+        assert trace[-1] == "UNAVAILABLE"
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.try_claim(candidate)
+        trace.append("native_cleanup")
+        return True
+
+    monkeypatch.setattr(coordinator, "begin_change", begin)
+    monkeypatch.setattr(coordinator, "finish_change", finish)
+    monkeypatch.setattr(client, "_release_native_api_immediately", cleanup)
+    if operation == "reserve_start":
+        assert client._reserve_start_generation() > 0
+        assert trace == ["begin", "UNAVAILABLE"]
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.try_claim(candidate)
+        return
+    api = object()
+    spi = _MdSpi(client, native_api=api)
+    client._api, client._spi = api, spi
+    if operation == "stop":
+        assert client._stop_native_session() is True
+    else:
+        monkeypatch.setattr(client, "_is_start_current_locked", lambda *_args: True)
+        assert client._abort_startup(api, spi, 1) is True
+    assert trace == ["begin", "UNAVAILABLE", "native_cleanup"]
+
+
+def test_md_subscription_native_hang_does_not_hold_coordinator_or_state_lock(monkeypatch):
+    from bt_api_ctp.ctp.client import MdClient
+    from bt_api_py.gateway_dispatch_claim import DispatchClaimError, GatewayDispatchClaimCoordinator
+
+    client = MdClient("tcp://offline.invalid:1", "9999", "account", "unused")
+    client._api, client._loggedin = object(), True
+    coordinator = GatewayDispatchClaimCoordinator._for_test("synthetic-account", "owner-1")
+    for domain in ("registry", "market", "parent_facts", "control", "session_source", "risk"):
+        token = coordinator.begin_change(domain)
+        coordinator.finish_change(token, "NOT_SELECTED" if domain == "risk" else "READY")
+    client._bind_gateway_md_dispatch_coordinator(
+        coordinator, account_scope="synthetic-account", service_generation="owner-1")
+    entered, release = threading.Event(), threading.Event()
+    completed = []
+
+    def native(*_args):
+        assert not client._state_lock._is_owned()
+        entered.set()
+        if not release.wait(2):
+            raise RuntimeError("synthetic subscription did not resume")
+        return 0
+
+    monkeypatch.setattr(client, "_invoke_native_request", native)
+    worker = threading.Thread(target=lambda: completed.append(client.subscribe_additional(["IF9999"])))
+    worker.start()
+    try:
+        assert entered.wait(1)
+        with pytest.raises(DispatchClaimError, match="DOMAIN_UNAVAILABLE"):
+            coordinator.capture()
+        token = coordinator.begin_change("control")
+        coordinator.finish_change(token, "UNAVAILABLE")
+        assert client._state_lock.acquire(timeout=1)
+        client._state_lock.release()
+    finally:
+        release.set()
+        worker.join(timeout=2)
+    assert not worker.is_alive() and completed == [("IF9999",)]
+
+
 def test_forgery_revoke_and_native_exception(system):
     provider, _, native = system
     prepared = provider.prepare_order(order())

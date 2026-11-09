@@ -586,6 +586,11 @@ class CtpDirectWriteProvider:
         self._cancel_reservations: dict[str, _PreparedCancelTicket] = {}
         self._place_reservations: dict[str, _PreparedPlaceTicket] = {}
         self._settlement_ticket: _SettlementObservationTicket | None = None
+        # Gateway settlement I/O can block in native code beyond the Python
+        # query timeout.  Reserve a single operation without holding _lock
+        # while entering native code.  Ordinary direct mode retains its
+        # existing serialization and readback behavior.
+        self._gateway_settlement_inflight: object | None = None
         self._cycle_id = f"ctp-direct-{uuid4().hex}"
         self._strategy_identity_sha256 = hashlib.sha256(
             f"ctp-direct-host|{self._cycle_id}".encode("utf-8")
@@ -1302,7 +1307,8 @@ class CtpDirectWriteProvider:
             del self._place_reservations[prepared.reservation_id]
 
     def submit_prepared_order(
-        self, prepared: PreparedPlaceRequest, grant: WriteGrant, verifier: WriteGrantVerifier
+        self, prepared: PreparedPlaceRequest, grant: WriteGrant, verifier: WriteGrantVerifier,
+        *, native_market_recheck=None,
     ) -> DirectSubmitResult:
         self._prepared_cancel_access()
         from bt_api_ctp.ctp import client as ctp_client
@@ -1315,6 +1321,8 @@ class CtpDirectWriteProvider:
         trader = ticket.trader
         outcome = ctp_client._CtpNativeRequestDispatchOutcome()
         try:
+            if native_market_recheck is not None and not callable(native_market_recheck):
+                raise ValueError("invalid native market recheck")
             with trader._query_state_lock:
                 if (
                     self._cancel_session_locked(trader) != ticket.session
@@ -1383,6 +1391,10 @@ class CtpDirectWriteProvider:
                     session_generation=prepared.session_generation,
                 )
                 check_source_and_fields()
+                if native_market_recheck is not None:
+                    if native_market_recheck() is False:
+                        raise ValueError("native market recheck failed")
+                    check_source_and_fields()
 
             ret = trader.submit_order_insert(
                 field,
@@ -1846,11 +1858,95 @@ class CtpDirectWriteProvider:
         observation = self.observe_settlement()
         return SettlementStatus.UNKNOWN if observation is None else observation.status
 
+    def _observe_gateway_settlement(self) -> SettlementObservation | None:
+        """Read a gateway observation without holding the provider over I/O."""
+        from bt_api_ctp.ctp.client import TraderClient
+
+        with self._lock:
+            if self._gateway_settlement_inflight is not None:
+                return None
+            self._settlement_ticket = None
+            try:
+                trader = self._trader()
+                if type(trader) is not TraderClient or self._feed.trader_client is not trader:
+                    return None
+                before = trader.get_session_state()
+                if not isinstance(before, dict) or before.get("read_only_ready") is not True:
+                    return None
+                token = object()
+                self._gateway_settlement_inflight = token
+            except Exception:
+                return None
+
+        try:
+            status, evidence = TraderClient._read_direct_settlement_status(
+                trader, timeout=_SETTLEMENT_READBACK_TIMEOUT, _include_evidence=True
+            )
+            after = trader.get_session_state()
+            with self._lock:
+                identity_fields = (
+                    "connection_generation", "account_fingerprint", "trading_day",
+                    "front_id", "session_id",
+                )
+                if (
+                    self._gateway_settlement_inflight is not token
+                    or self._owner_closing or self._owner_closed
+                    or self._feed.trader_client is not trader
+                    or not isinstance(after, dict)
+                    or after.get("read_only_ready") is not True
+                    or any(before.get(name) != after.get(name) for name in identity_fields)
+                    or status not in ("confirmed", "unconfirmed")
+                    or evidence is None
+                ):
+                    return None
+                if (
+                    status == "confirmed"
+                    and after.get("trading_ready") is True
+                    and after.get("settlement_readback_verified") is True
+                    and after.get("settlement_proof_source") == "confirmation_query"
+                    and after.get("settlement_proof_query_request_id") is not None
+                    and after.get("settlement_connection_generation") == after.get("connection_generation")
+                    and after.get("settlement_account_fingerprint") == after.get("account_fingerprint")
+                    and after.get("settlement_trading_day") == after.get("trading_day")
+                ):
+                    self._note_trading_ready(trader)
+                elif status != "unconfirmed":
+                    return None
+                binding, result, api, spi, epoch = evidence
+                source = result.query_source
+                if source is None or source.trusted_expires_monotonic is None:
+                    return None
+                observation = SettlementObservation(
+                    exchange_name=CTP_DIRECT_WRITE_EXCHANGE,
+                    account_binding=binding.account_fingerprint,
+                    trading_day=binding.trading_day,
+                    session_generation=binding.connection_generation,
+                    status=SettlementStatus.CONFIRMED if status == "confirmed" else SettlementStatus.UNCONFIRMED,
+                    observation_id=uuid4().hex,
+                )
+                self._settlement_ticket = _SettlementObservationTicket(
+                    observation, observation.status, observation.observation_id,
+                    trader, binding, result, api, spi, epoch, os.getpid(),
+                    min(source.trusted_expires_monotonic, time.monotonic() + 30.0),
+                )
+                if not self.validate_settlement_observation(observation):
+                    self._settlement_ticket = None
+                    return None
+                return observation
+        except Exception:
+            return None
+        finally:
+            with self._lock:
+                if self._gateway_settlement_inflight is token:
+                    self._gateway_settlement_inflight = None
+
     def observe_settlement(self) -> SettlementObservation | None:
         """Return only this provider's latest source-bound settlement observation."""
         if os.getpid() != self._settlement_owner_pid:
             return None
         self._check_settlement_thread()
+        if self._owner_thread_only and not self._allow_implicit_connect:
+            return self._observe_gateway_settlement()
         from bt_api_ctp.ctp.client import TraderClient
 
         with self._lock:
@@ -1964,6 +2060,11 @@ class CtpDirectWriteProvider:
         if os.getpid() != self._settlement_owner_pid:
             raise DirectWriteError("ctp_settlement_observation_invalid")
         self._check_settlement_thread()
+        if self._owner_thread_only and not self._allow_implicit_connect:
+            # Gateway confirmation needs a source-complete settlement claim at
+            # the final native gate.  A provider callback or a grant alone is
+            # not evidence that every revocation/source writer participates.
+            raise DirectWriteError("ctp_gateway_settlement_claim_unavailable")
         from bt_api_ctp.ctp import client as ctp_client
 
         with self._lock:

@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from math import isfinite
 from sys import float_info
 from typing import Any
@@ -2671,6 +2672,66 @@ class CtpRequestData(Feed):
         return self._trader.query_option_instrument_commission_rate_result(*args, **kwargs)
 
 
+class _GatewayStreamPreflightRejection(RuntimeError):
+    """A preflight refusal made before changing stream or provider state."""
+
+
+def _gateway_market_stream_writer(method):
+    """Invalidate partial MD stream state before taking its callback lock.
+
+    Nested stream methods on the same thread share their outer token.  No
+    coordinator mutex is held while the underlying stream method runs.  This
+    is only a partial writer hook and never enables a production claim.
+    """
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        # Installation and writer entry are mutually exclusive only for this
+        # short bookkeeping section, never for callbacks or native I/O.
+        with self._gateway_md_install_lock:
+            binding = self._gateway_md_stream_binding
+            self._gateway_md_active_writers += 1
+        try:
+            local = self._gateway_md_writer_local
+            if binding is None or getattr(local, "depth", 0):
+                return method(self, *args, **kwargs)
+            rejection = None
+            with ctp_client._gateway_partial_source_change(binding[0]):
+                local.depth = 1
+                try:
+                    try:
+                        return method(self, *args, **kwargs)
+                    except _GatewayStreamPreflightRejection as exc:
+                        rejection = exc
+                finally:
+                    local.depth = 0
+            raise rejection
+        finally:
+            with self._gateway_md_install_lock:
+                self._gateway_md_active_writers -= 1
+    return wrapped
+
+
+def _gateway_market_subscription_writer(method):
+    """Fence the startup snapshot without holding a lock over provider I/O."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._md_callback_lock:
+            bound = self._gateway_md_stream_binding is not None
+            if bound:
+                if self._gateway_md_starting is not None:
+                    raise _GatewayStreamPreflightRejection("ctp_gateway_md_start_in_progress")
+                if self._gateway_md_stopping is not None:
+                    raise _GatewayStreamPreflightRejection("ctp_gateway_md_stop_in_progress_or_uncertain")
+                self._gateway_md_subscription_writers += 1
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            if bound:
+                with self._md_callback_lock:
+                    self._gateway_md_subscription_writers -= 1
+    return wrapped
+
+
 class CtpMarketStream(BaseDataStream):
     def __init__(self, data_queue: Any = None, **kwargs: Any) -> None:
         super().__init__(data_queue, **kwargs)
@@ -2704,6 +2765,15 @@ class CtpMarketStream(BaseDataStream):
         self._observed_client_generation: int | None = None
         self._connection_generation = 0
         self._md_callback_lock = threading.RLock()
+        self._gateway_md_install_lock = threading.Lock()
+        self._gateway_md_active_writers = 0
+        self._gateway_md_stream_binding = None
+        self._gateway_md_writer_local = threading.local()
+        # A start can block in vendor code.  Keep its client owned and
+        # callbacks fenced instead of blocking disconnect on another lock.
+        self._gateway_md_starting = None
+        self._gateway_md_stopping = None
+        self._gateway_md_subscription_writers = 0
         self._md_client_token = 0
         # A callback closure receives this opaque capability only from
         # ``connect``.  Direct test seams and caller-invoked private methods
@@ -2776,6 +2846,34 @@ class CtpMarketStream(BaseDataStream):
         self._quote_v2_service_pending_addition_request_ids: set[int] = set()
         self._quote_v2_service_config_binding: tuple[Any, ...] | None = None
         self._register_quote_v2_topics(self.topics)
+
+    def _bind_gateway_md_stream_dispatch_coordinator(
+        self, coordinator, *, account_scope, service_generation
+    ) -> None:
+        """Bind partial invalidation before this stream creates its MD client.
+
+        This does not certify that all provider writers participate and cannot
+        make the shared coordinator ready for production dispatch.
+        """
+        from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+        if (type(coordinator) is not GatewayDispatchClaimCoordinator
+                or not coordinator.matches_owner(account_scope, service_generation)):
+            raise ValueError("ctp_gateway_md_stream_owner_mismatch")
+        rejection = None
+        with ctp_client._gateway_partial_source_change(coordinator):
+            with self._gateway_md_install_lock:
+                if self._gateway_md_active_writers:
+                    rejection = ValueError("ctp_gateway_md_stream_writer_active")
+                else:
+                    with self._md_callback_lock:
+                        if (self._gateway_md_stream_binding is not None or self._md_client is not None
+                                or self._has_connected_once or self.state is not ConnectionState.DISCONNECTED):
+                            rejection = ValueError("ctp_gateway_md_stream_already_started")
+                        else:
+                            self._gateway_md_stream_binding = (coordinator, account_scope, service_generation)
+        if rejection is not None:
+            raise rejection
 
     @staticmethod
     def _quote_v2_metadata(value: Any) -> dict[str, Any]:
@@ -2963,6 +3061,7 @@ class CtpMarketStream(BaseDataStream):
                 return None
             return scope
 
+    @_gateway_market_stream_writer
     def enable_quote_v2_service_readiness(self) -> bool:
         """Enable the stricter readiness gate for the managed market provider."""
 
@@ -3084,6 +3183,7 @@ class CtpMarketStream(BaseDataStream):
                 and self.get_quote_v2_service_ready_scope() is not None
             )
 
+    @_gateway_market_stream_writer
     def detach_quote_v2_client_for_recovery(self, expected_client: Any) -> bool:
         """Fence a disconnected client while retaining its exact native owner."""
 
@@ -3095,6 +3195,10 @@ class CtpMarketStream(BaseDataStream):
                 or expected_client is None
                 or self._md_client is not expected_client
                 or self._quote_v2_service_recovery_stopped_client is not None
+                or (self._gateway_md_stream_binding is not None and (
+                    self._gateway_md_starting is not None or self._gateway_md_stopping is not None
+                    or self._gateway_md_subscription_writers
+                ))
             ):
                 return False
             try:
@@ -3124,6 +3228,7 @@ class CtpMarketStream(BaseDataStream):
             self.state = ConnectionState.DISCONNECTED
             return True
 
+    @_gateway_market_stream_writer
     def reconnect_quote_v2_after_confirmed_stop(
         self,
         expected_client: Any,
@@ -3184,6 +3289,7 @@ class CtpMarketStream(BaseDataStream):
             self._quote_v2_service_recovery_stopped_generation = None
         return True
 
+    @_gateway_market_stream_writer
     def normalize_quote_v2_reconnect_construction_failure(
         self,
         expected_client: Any,
@@ -3251,6 +3357,7 @@ class CtpMarketStream(BaseDataStream):
             and receipt.connection_generation >= 0
         )
 
+    @_gateway_market_stream_writer
     def retain_quote_v2_stopped_client_for_retry(self, expected_client: Any, receipt: Any) -> bool:
         """Hold one confirmed-stopped client as the origin of a recovery retry.
 
@@ -3271,6 +3378,10 @@ class CtpMarketStream(BaseDataStream):
                 not self._quote_v2_service_readiness_enabled
                 or expected_client is None
                 or not self._confirmed_native_stop_receipt(receipt)
+                or (self._gateway_md_stream_binding is not None and (
+                    self._gateway_md_starting is not None or self._gateway_md_stopping is not None
+                    or self._gateway_md_subscription_writers
+                ))
             ):
                 return False
             generation = receipt.connection_generation
@@ -3314,6 +3425,7 @@ class CtpMarketStream(BaseDataStream):
             self.state = ConnectionState.ERROR
             return True
 
+    @_gateway_market_stream_writer
     def rearm_quote_v2_reconnect_after_confirmed_stop(
         self, expected_client: Any, receipt: Any
     ) -> bool:
@@ -3392,10 +3504,22 @@ class CtpMarketStream(BaseDataStream):
             clock_source_scope=scope,
         )
 
+    @_gateway_market_stream_writer
     def connect(self):
         with self._md_callback_lock:
+            gateway_binding = self._gateway_md_stream_binding
+            if gateway_binding is not None and self._gateway_md_starting is not None:
+                raise _GatewayStreamPreflightRejection("ctp_gateway_md_start_in_progress")
+            if gateway_binding is not None and self._gateway_md_subscription_writers:
+                raise _GatewayStreamPreflightRejection("ctp_gateway_md_subscription_in_progress")
+            if gateway_binding is not None and self._md_client is not None:
+                raise _GatewayStreamPreflightRejection("ctp_gateway_md_client_not_detached")
             if self._quote_v2_service_readiness_enabled:
                 if self._has_connected_once and not self._quote_v2_service_reconnect_authorized:
+                    if gateway_binding is not None:
+                        raise _GatewayStreamPreflightRejection(
+                            "ctp_market_reconnect_requires_confirmed_stop"
+                        )
                     raise RuntimeError("ctp_market_reconnect_requires_confirmed_stop")
                 self._quote_v2_service_reconnect_authorized = False
                 self._quote_v2_service_recovery_required = False
@@ -3500,16 +3624,56 @@ class CtpMarketStream(BaseDataStream):
                 )
             )
             instruments = list(self._quote_v2_subscription_metadata)
+            if gateway_binding is None:
+                # Preserve the existing direct/offline lifecycle until its own
+                # independently reviewed migration is selected.
+                if instruments:
+                    client.subscribe(instruments)
+                client.start(block=False, join_observer=False)
+                self._has_connected_once = True
+                return
+            self._gateway_md_starting = (client, client_token)
+
+        # The client's coordinator hooks acquire the shared short mutex. Never
+        # call them, subscribe or native start while holding the stream lock.
+        try:
+            bind = getattr(client, "_bind_gateway_md_dispatch_coordinator", None)
+            if not callable(bind):
+                raise RuntimeError("ctp_gateway_md_binding_unavailable")
+            bind(gateway_binding[0], account_scope=gateway_binding[1],
+                 service_generation=gateway_binding[2])
+            with self._md_callback_lock:
+                if not self._is_current_md_callback(client, client_token):
+                    raise RuntimeError("ctp_gateway_md_start_cancelled")
             if instruments:
                 client.subscribe(instruments)
-            # No Join observer: the vendor Join() returns only after Release(),
-            # and an observed generation defers Release until its Join returns,
-            # so its stop could never be proven (SimNow 2026-11-06: receipt still
-            # incomplete after 30 s; a no-Join generation released in 0.02 s and
-            # a Gateway subscription closed with upstream_released=True).
+            with self._md_callback_lock:
+                if not self._is_current_md_callback(client, client_token):
+                    raise RuntimeError("ctp_gateway_md_start_cancelled")
+                # Once start is attempted, recovery requires the exact stop
+                # receipt even when vendor start raises or the caller times out.
+                self._has_connected_once = True
+            # No Join observer: CTP Join returns only after Release, which
+            # would prevent this generation from proving a bounded stop.
             client.start(block=False, join_observer=False)
-            self._has_connected_once = True
+            with self._md_callback_lock:
+                if not self._is_current_md_callback(client, client_token):
+                    raise RuntimeError("ctp_gateway_md_start_cancelled")
+        except BaseException:
+            with self._md_callback_lock:
+                if self._md_client is client:
+                    self._managed_quote_v2_callback_capability = None
+                    self._managed_quote_clock_source_scope = None
+                    self._quote_v2_service_ready = False
+                    self.state = ConnectionState.ERROR
+            raise
+        finally:
+            with self._md_callback_lock:
+                starting = self._gateway_md_starting
+                if starting is not None and starting[0] is client and starting[1] == client_token:
+                    self._gateway_md_starting = None
 
+    @_gateway_market_stream_writer
     def _on_login(
         self,
         login_field,
@@ -3593,6 +3757,7 @@ class CtpMarketStream(BaseDataStream):
                 if fenced_token is not None and fenced_token != int(client_token or 0):
                     self._quote_v2_additions_fenced_client_token = None
 
+    @_gateway_market_stream_writer
     def _on_subscribe_response(
         self,
         specific_instrument,
@@ -3676,6 +3841,7 @@ class CtpMarketStream(BaseDataStream):
             if is_last:
                 self._quote_v2_service_completed_request_ids.add(request_id)
 
+    @_gateway_market_stream_writer
     def _on_tick(
         self,
         tick_field,
@@ -3860,6 +4026,7 @@ class CtpMarketStream(BaseDataStream):
             row.freeze()
             self.push_data(row)
 
+    @_gateway_market_stream_writer
     def _on_error(self, rsp_info, *, client: Any = None, client_token: int | None = None):
         with self._md_callback_lock:
             if client is not None and not self._is_current_md_callback(client, client_token):
@@ -3870,6 +4037,7 @@ class CtpMarketStream(BaseDataStream):
                 self._quote_v2_service_ready = False
             self.state = ConnectionState.ERROR
 
+    @_gateway_market_stream_writer
     def _on_login_failure(
         self, refusal: Any, *, client: Any = None, client_token: int | None = None
     ) -> None:
@@ -3899,6 +4067,7 @@ class CtpMarketStream(BaseDataStream):
             ):
                 self.state = ConnectionState.CONNECTING
 
+    @_gateway_market_stream_writer
     def _on_disconnect(
         self,
         reason,
@@ -3953,15 +4122,34 @@ class CtpMarketStream(BaseDataStream):
                 self._quote_v2_service_pending_addition_request_ids.clear()
             self.state = ConnectionState.ERROR
 
+    @_gateway_market_stream_writer
     def disconnect(self):
         with self._md_callback_lock:
             client = self._md_client
+            if (self._gateway_md_stream_binding is not None
+                    and self._gateway_md_starting is not None):
+                # Stop must not race an in-flight vendor start. Invalidate
+                # callbacks immediately and retain the exact client for an
+                # explicit cleanup after start returns; do not claim it stopped.
+                self._md_client_token += 1
+                self._managed_quote_v2_callback_capability = None
+                self._managed_quote_clock_source_scope = None
+                self._quote_v2_service_ready = False
+                self.state = ConnectionState.ERROR
+                raise RuntimeError("ctp_gateway_md_start_in_progress")
+            if self._gateway_md_stream_binding is not None and self._gateway_md_stopping is not None:
+                raise _GatewayStreamPreflightRejection("ctp_gateway_md_stop_in_progress_or_uncertain")
             # Invalidate before stopping so a callback already queued by the
             # old native client cannot enter after this lifecycle boundary.
             self._md_client_token += 1
             self._managed_quote_v2_callback_capability = None
             self._managed_quote_clock_source_scope = None
-            self._md_client = None
+            gateway_stop = self._gateway_md_stream_binding is not None and client is not None
+            if gateway_stop:
+                # Preserve exact ownership while stop is blocked or fails.
+                self._gateway_md_stopping = client
+            else:
+                self._md_client = None
             self._observed_client_generation = None
             self._quote_v2_service_ready = False
             self._quote_v2_service_acknowledged_symbols.clear()
@@ -3969,10 +4157,32 @@ class CtpMarketStream(BaseDataStream):
             self._quote_v2_service_completed_request_ids.clear()
             self._quote_v2_service_pending_addition_symbols.clear()
             self._quote_v2_service_pending_addition_request_ids.clear()
-            self.state = ConnectionState.DISCONNECTED
-        if client is not None:
+            self.state = ConnectionState.ERROR if gateway_stop else ConnectionState.DISCONNECTED
+        if gateway_stop:
+            # The no-Join stop can return before asynchronous Release.  Only
+            # this exact client's receipt may establish release, and all
+            # potentially blocking provider work stays outside our lock.
+            generation = client.connection_generation
+            receipt = client.stop_and_wait(timeout=0.0)
+            final_generation = client.connection_generation
+            with self._md_callback_lock:
+                if self._gateway_md_stopping is client and self._md_client is client:
+                    if (not self._confirmed_native_stop_receipt(receipt)
+                            or type(generation) is not int
+                            or final_generation != generation
+                            or receipt.connection_generation != generation):
+                        # A later explicit retry can observe the same client's
+                        # asynchronous release; never construct a replacement.
+                        self._gateway_md_stopping = None
+                        raise RuntimeError("ctp_gateway_md_stop_unconfirmed")
+                    self._gateway_md_stopping = None
+                    self._md_client = None
+                    self.state = ConnectionState.DISCONNECTED
+        elif client is not None:
             client.stop()
 
+    @_gateway_market_stream_writer
+    @_gateway_market_subscription_writer
     def subscribe_topics(self, topics):
         with self._md_callback_lock:
             previous = set(self._quote_v2_subscription_metadata)
@@ -4009,6 +4219,7 @@ class CtpMarketStream(BaseDataStream):
             self._fail_closed_quote_v2_subscription(additions)
             raise
 
+    @_gateway_market_stream_writer
     def _fail_closed_quote_v2_subscription(self, ambiguous_symbols=()) -> None:
         """Fence a shared managed MD session after an uncertain add request.
 
@@ -4032,6 +4243,8 @@ class CtpMarketStream(BaseDataStream):
                 self._quote_v2_service_ready = False
             self.state = ConnectionState.ERROR
 
+    @_gateway_market_stream_writer
+    @_gateway_market_subscription_writer
     def unsubscribe_topics(self, topics):
         """Unsubscribe exact registered symbols without stopping the MD session."""
 

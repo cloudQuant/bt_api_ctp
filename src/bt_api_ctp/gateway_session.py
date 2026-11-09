@@ -71,6 +71,13 @@ class _ConnectionOwner:
     connection_generation: int = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _MarketDispatchBinding:
+    coordinator: object = field(repr=False)
+    account_scope: str = field(repr=False)
+    service_generation: str = field(repr=False)
+
+
 _FEED_BINDING_FIELDS = (
     "broker_id", "user_id", "td_front", "md_front", "ctp_env_profile", "ctp_environment",
     "_execution_bound_broker_id", "_execution_bound_user_id", "_execution_bound_td_front",
@@ -142,6 +149,7 @@ class CtpGatewaySession:
         self._stop_timeout = _timeout(stop_timeout_seconds, 30.0)
         self._state = "new"
         self._service_generation: str | None = None
+        self._market_dispatch_binding: _MarketDispatchBinding | None = None
         self._requested_timeout = self._connect_timeout
         self._feed: CtpRequestDataFuture | None = None
         self._trader: TraderClient | None = None
@@ -162,6 +170,45 @@ class CtpGatewaySession:
     def _check_owner(self) -> None:
         if os.getpid() != self._owner_pid or threading.current_thread() is not self._owner_thread:
             raise CtpGatewaySessionError("WRONG_OWNER")
+
+    def _bind_gateway_md_stream_dispatch_coordinator(
+        self, coordinator, *, account_scope, service_generation
+    ) -> None:
+        """Bind partial MD invalidation before connecting this owner session.
+
+        The binding is not a provider coverage proof and cannot enable
+        dispatch. It is inherited only by a checked stream in this session.
+        """
+        from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+        self._check_owner()
+        if (self._state != "new" or self._market_dispatch_binding is not None
+                or type(coordinator) is not GatewayDispatchClaimCoordinator
+                or type(account_scope) is not str
+                or account_scope != self._account_key.account_key_id
+                or type(service_generation) is not str or not service_generation
+                or not coordinator.matches_owner(account_scope, service_generation)):
+            raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_INVALID")
+        self._assert_dispatch_coordinator_current(coordinator)
+        self._market_dispatch_binding = _MarketDispatchBinding(
+            coordinator, account_scope, service_generation)
+
+    @staticmethod
+    def _assert_dispatch_coordinator_current(coordinator) -> None:
+        """Reject closed/poisoned coordinators without ever publishing READY."""
+        token = None
+        try:
+            token = coordinator.begin_change("session_source")
+            coordinator.finish_change(token, "UNAVAILABLE")
+        except Exception:
+            try:
+                if token is not None:
+                    coordinator.poison(token)
+                else:
+                    coordinator.poison_domain("session_source")
+            except Exception:
+                pass
+            raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_UNAVAILABLE") from None
 
     def _require_connected(self) -> None:
         self._check_owner()
@@ -212,6 +259,29 @@ class CtpGatewaySession:
                 or stream.md_front != feed._execution_bound_md_front):
             raise CtpGatewaySessionError("MARKET_BINDING_INVALID")
         stream._trusted_flow.verify_root()
+        binding = self._market_dispatch_binding
+        if binding is not None:
+            if (type(binding) is not _MarketDispatchBinding
+                    or binding.account_scope != self._account_key.account_key_id
+                    or binding.service_generation != self._service_generation
+                    or not binding.coordinator.matches_owner(
+                        binding.account_scope, binding.service_generation)
+                    or getattr(stream, "_gateway_md_stream_binding", None) is not None):
+                raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_INVALID")
+            self._assert_dispatch_coordinator_current(binding.coordinator)
+            try:
+                CtpMarketStream._bind_gateway_md_stream_dispatch_coordinator(
+                    stream, binding.coordinator, account_scope=binding.account_scope,
+                    service_generation=binding.service_generation)
+            except Exception:
+                raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_UNAVAILABLE") from None
+            installed = getattr(stream, "_gateway_md_stream_binding", None)
+            if (type(installed) is not tuple or len(installed) != 3
+                    or installed[0] is not binding.coordinator
+                    or installed[1:] != (binding.account_scope, binding.service_generation)
+                    or self._market_dispatch_binding is not binding):
+                raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_INVALID")
+            self._assert_dispatch_coordinator_current(binding.coordinator)
         return stream
 
     def connect(self, *, generation: str, timeout: float) -> None:
@@ -220,6 +290,14 @@ class CtpGatewaySession:
             raise CtpGatewaySessionError("SESSION_ALREADY_STARTED")
         if type(generation) is not str or not generation or generation != generation.strip() or len(generation) > 256:
             raise CtpGatewaySessionError("INVALID_CONFIGURATION")
+        binding = self._market_dispatch_binding
+        if binding is not None:
+            if (type(binding) is not _MarketDispatchBinding
+                    or generation != binding.service_generation
+                    or binding.account_scope != self._account_key.account_key_id
+                    or not binding.coordinator.matches_owner(binding.account_scope, generation)):
+                raise CtpGatewaySessionError("MARKET_DISPATCH_BINDING_INVALID")
+            self._assert_dispatch_coordinator_current(binding.coordinator)
         budget = _timeout(timeout, 300.0)
         self._requested_timeout = budget
         self._state = "starting"
@@ -406,6 +484,33 @@ class CtpGatewaySession:
         reader._check_session()
         return reader
 
+    def read_market_login_clock(self, handle, *, key, generation, stream_id, epoch,
+                                max_age_seconds=300.0):
+        """Read a bounded TD clock bound to an actual current MD subscription.
+
+        The Gateway owner must obtain handle and epoch from its authorized hub;
+        they are not client-provided authentication or clock qualification.
+        """
+        from bt_api_ctp.gateway_clock_observation import read_market_login_clock
+
+        return read_market_login_clock(
+            self, handle, key=key, generation=generation, stream_id=stream_id,
+            epoch=epoch, max_age_seconds=max_age_seconds,
+        )
+
+    def read_market_tick_clock(self, handle, *, key, generation, stream_id, epoch,
+                               provider_sequence, provider_subscription_epoch,
+                               max_age_seconds=300.0, _internal=False):
+        """Read a source-bound native tick selected by the authorized Hub."""
+        from bt_api_ctp.gateway_clock_observation import read_market_tick_clock
+
+        return read_market_tick_clock(
+            self, handle, key=key, generation=generation, stream_id=stream_id,
+            epoch=epoch, provider_sequence=provider_sequence,
+            provider_subscription_epoch=provider_subscription_epoch,
+            max_age_seconds=max_age_seconds, _internal=_internal,
+        )
+
     def assert_return_record_current(self, record: CtpGatewayReturnRecord) -> None:
         """Validate an offered record against the exact current native session."""
         self._require_connected()
@@ -502,6 +607,7 @@ class CtpGatewaySession:
         except BaseException:
             pass
         if market_stopped and direct_stopped and account_stopped:
+            self._market_dispatch_binding = None
             self._connection_owner = None
             self._direct = None
             self._trader = None

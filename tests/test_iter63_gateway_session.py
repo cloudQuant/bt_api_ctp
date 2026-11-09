@@ -501,3 +501,123 @@ def test_close_waits_for_exact_md_wrapper_even_after_native_receipt(prepared, mo
     assert not stream._thread.is_alive()
     assert session.close() is True
     assert client.stop_wait_calls == 2 and len(stops) == 1
+
+
+def test_gateway_md_coordinator_binds_each_checked_stream_and_releases_on_close(prepared, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    create, _, _, _, _, streams, _, fake_md = prepared
+    coordinator = GatewayDispatchClaimCoordinator(KEY.account_key_id, "service-g1")
+    bound_clients = []
+
+    def fake_bind(self, candidate, *, account_scope, service_generation):
+        assert candidate is coordinator
+        assert candidate.matches_owner(account_scope, service_generation)
+        bound_clients.append(self)
+
+    monkeypatch.setattr(fake_md, "_bind_gateway_md_dispatch_coordinator", fake_bind, raising=False)
+    session = create()
+    session._bind_gateway_md_stream_dispatch_coordinator(
+        coordinator, account_scope=KEY.account_key_id, service_generation="service-g1")
+    session.connect(generation="service-g1", timeout=1)
+    market = session.market_provider
+    handle = market.subscribe(_key(), generation="market-g1")
+    assert streams[0]._gateway_md_stream_binding == (coordinator, KEY.account_key_id, "service-g1")
+    assert bound_clients == [fake_md.instances[0]]
+    assert market.unsubscribe(handle) is True
+    second = market.subscribe(_key(), generation="market-g2")
+    assert second is not handle and len(streams) == len(bound_clients) == 2
+    assert streams[1]._gateway_md_stream_binding == (coordinator, KEY.account_key_id, "service-g1")
+    _close_after_bounded_md_wrapper_exit(session, market, session.direct_provider)
+    assert session._market_dispatch_binding is None
+    assert coordinator.matches_owner(KEY.account_key_id, "service-g1")
+
+
+@pytest.mark.parametrize("fault", ["account", "generation", "duplicate", "closed"])
+def test_gateway_md_coordinator_rejects_invalid_binding_before_td_start(prepared, fault):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    create, _, _, feeds, natives, _, _, _ = prepared
+    coordinator = GatewayDispatchClaimCoordinator(KEY.account_key_id, "service-g1")
+    session = create()
+    if fault == "closed":
+        coordinator.close()
+    options = dict(account_scope=KEY.account_key_id, service_generation="service-g1")
+    if fault == "account":
+        options["account_scope"] = "different"
+    if fault == "generation":
+        session._bind_gateway_md_stream_dispatch_coordinator(coordinator, **options)
+        with pytest.raises(Exception, match="MARKET_DISPATCH_BINDING_INVALID"):
+            session.connect(generation="service-g2", timeout=1)
+    elif fault == "duplicate":
+        session._bind_gateway_md_stream_dispatch_coordinator(coordinator, **options)
+        with pytest.raises(Exception, match="MARKET_DISPATCH_BINDING_INVALID"):
+            session._bind_gateway_md_stream_dispatch_coordinator(coordinator, **options)
+    else:
+        with pytest.raises(Exception, match="MARKET_DISPATCH_BINDING_"):
+            session._bind_gateway_md_stream_dispatch_coordinator(coordinator, **options)
+    assert feeds == [] and natives == []
+    assert session.close() is True
+
+
+def test_gateway_md_coordinator_closed_after_connect_blocks_native_md_start(prepared):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    create, _, _, _, _, streams, _, fake_md = prepared
+    coordinator = GatewayDispatchClaimCoordinator(KEY.account_key_id, "service-g1")
+    session = create()
+    session._bind_gateway_md_stream_dispatch_coordinator(
+        coordinator, account_scope=KEY.account_key_id, service_generation="service-g1")
+    session.connect(generation="service-g1", timeout=1)
+    coordinator.close()
+    with pytest.raises(CtpQuoteV2MarketProviderError, match="CTP_MARKET_STREAM_FACTORY_FAILED"):
+        session.market_provider.subscribe(_key(), generation="market-g1")
+    assert len(streams) == 1 and streams[0]._md_client is None and fake_md.instances == []
+    assert session.close() is True and session._market_dispatch_binding is None
+
+
+def test_gateway_md_source_validation_precedes_coordinator_binding(prepared, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    create, _, stream_factory, _, _, streams, _, fake_md = prepared
+    called = []
+
+    def bad_stream(key, queue):
+        return stream_factory(key, queue, user_id="other")
+
+    def unexpected_bind(*_args, **_kwargs):
+        called.append(True)
+        raise AssertionError("untrusted stream reached coordinator binding")
+
+    monkeypatch.setattr(CtpMarketStream, "_bind_gateway_md_stream_dispatch_coordinator", unexpected_bind)
+    coordinator = GatewayDispatchClaimCoordinator(KEY.account_key_id, "service-g1")
+    session = create(stream=bad_stream)
+    session._bind_gateway_md_stream_dispatch_coordinator(
+        coordinator, account_scope=KEY.account_key_id, service_generation="service-g1")
+    session.connect(generation="service-g1", timeout=1)
+    with pytest.raises(CtpQuoteV2MarketProviderError, match="CTP_MARKET_STREAM_FACTORY_FAILED"):
+        session.market_provider.subscribe(_key(), generation="market-g1")
+    assert called == [] and fake_md.instances == [] and streams[0]._md_client is None
+    assert session.close() is True
+
+
+def test_gateway_md_coordinator_lost_during_bind_fails_before_native_start(prepared, monkeypatch):
+    from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+    create, _, _, _, _, streams, _, fake_md = prepared
+    coordinator = GatewayDispatchClaimCoordinator(KEY.account_key_id, "service-g1")
+    original = CtpMarketStream._bind_gateway_md_stream_dispatch_coordinator
+
+    def bind_then_close(stream, *args, **kwargs):
+        original(stream, *args, **kwargs)
+        coordinator.close()
+
+    monkeypatch.setattr(CtpMarketStream, "_bind_gateway_md_stream_dispatch_coordinator", bind_then_close)
+    session = create()
+    session._bind_gateway_md_stream_dispatch_coordinator(
+        coordinator, account_scope=KEY.account_key_id, service_generation="service-g1")
+    session.connect(generation="service-g1", timeout=1)
+    with pytest.raises(CtpQuoteV2MarketProviderError, match="CTP_MARKET_STREAM_FACTORY_FAILED"):
+        session.market_provider.subscribe(_key(), generation="market-g1")
+    assert fake_md.instances == [] and streams[0]._md_client is None
+    assert session.close() is True

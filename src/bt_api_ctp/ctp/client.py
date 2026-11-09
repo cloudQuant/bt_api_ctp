@@ -140,6 +140,49 @@ from .ctp_trader_api import CThostFtdcTraderApi, CThostFtdcTraderSpi
 
 _logger = logging.getLogger(__name__)
 
+
+@contextmanager
+def _gateway_partial_source_change(coordinator):
+    """Invalidate one partial source writer without holding a CTP state lock."""
+    if coordinator is None:
+        yield
+        return
+    try:
+        token = coordinator.begin_change("session_source")
+    except Exception:
+        # A native disconnect must still clear the existing direct-session
+        # state even if coordination is already closed or poisoned.
+        try:
+            coordinator.poison_domain("session_source")
+        except Exception:
+            with suppress(Exception):
+                coordinator.close()
+        yield
+        return
+    try:
+        yield
+    except BaseException:
+        try:
+            coordinator.poison(token)
+        except Exception:
+            try:
+                coordinator.poison_domain("session_source")
+            except Exception:
+                with suppress(Exception):
+                    coordinator.close()
+        raise
+    else:
+        try:
+            # Partial callbacks alone can never publish a READY source.
+            coordinator.finish_change(token, "UNAVAILABLE")
+        except Exception:
+            try:
+                coordinator.poison_domain("session_source")
+            except Exception:
+                with suppress(Exception):
+                    coordinator.close()
+
+
 _TRADER_ORDER_CALLBACK_FIELDS = (
     "BrokerID",
     "InvestorID",
@@ -204,6 +247,7 @@ CTP_REQUEST_COUNT_KEYS = (
 
 _QUERY_FILTER_UNSET = object()
 _TRADER_LOGIN_IDENTITY_SEAL = object()
+_TRADER_LOGIN_CLOCK_SEAL = object()
 
 # Environment-neutral admission profile recorded when bt_api_py write
 # admission (iteration 62, D62-01) authorized writes for the bound session.
@@ -2409,7 +2453,7 @@ class _MdSpi(CThostFtdcMdSpi):
 
     @_fence_md_spi_callback
     def OnFrontConnected(self):
-        with self._c._state_lock:
+        with self._c._gateway_md_connection_change(), self._c._state_lock:
             if not self._is_current_locked():
                 return
             self._c._connection_generation += 1
@@ -2442,7 +2486,7 @@ class _MdSpi(CThostFtdcMdSpi):
 
     @_fence_md_spi_callback
     def OnFrontDisconnected(self, nReason):
-        with self._c._state_lock:
+        with self._c._gateway_md_connection_change(), self._c._state_lock:
             if not self._is_current_locked():
                 return
             self._c._connected = False
@@ -2484,7 +2528,7 @@ class _MdSpi(CThostFtdcMdSpi):
         trading_day = ""
         pending = 0
         generation = None
-        with self._c._state_lock:
+        with self._c._gateway_md_connection_change(), self._c._state_lock:
             self._c._login_callback_count += 1
             self._c._login_callback_request_id_relation = MdLoginRequestIdRelation.NOT_OBSERVED
             self._c._login_callback_response_error_status = MdLoginResponseErrorStatus.NOT_OBSERVED
@@ -2789,6 +2833,8 @@ class MdClient:
         # the managed CtpMarketStream turns it on.
         self.login_retry_enabled = False
 
+        # Only selected native MD callbacks participate, never a coverage proof.
+        self._gateway_md_dispatch_coordinator = None
         self._connected = False
         self._loggedin = False
         self._pending_instruments = []
@@ -2929,6 +2975,22 @@ class MdClient:
         self._login_request_pending = True
         return self._login_request_id
 
+    def _bind_gateway_md_dispatch_coordinator(self, coordinator, *, account_scope, service_generation):
+        """Bind partial native MD callback invalidation; this cannot enable dispatch."""
+        from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+        if (type(coordinator) is not GatewayDispatchClaimCoordinator
+                or not coordinator.matches_owner(account_scope, service_generation)):
+            raise ValueError("ctp_gateway_dispatch_owner_mismatch")
+        with self._state_lock:
+            if self._gateway_md_dispatch_coordinator is not None:
+                raise ValueError("ctp_gateway_dispatch_coordinator_already_bound")
+            self._gateway_md_dispatch_coordinator = coordinator
+
+    def _gateway_md_connection_change(self):
+        return _gateway_partial_source_change(
+            getattr(self, "_gateway_md_dispatch_coordinator", None))
+
     def _clear_active_md_identity_locked(self):
         self._active_md_identity = None
         self._active_md_identity_api = None
@@ -2964,7 +3026,7 @@ class MdClient:
             connection_generation=generation,
             error_id=None,
         )
-        with self._state_lock:
+        with self._gateway_md_connection_change(), self._state_lock:
             if (
                 spi._is_current_locked()
                 and self._login_request_id == request_id
@@ -3040,7 +3102,7 @@ class MdClient:
     def _relogin_due(self, token: object, generation: int, api: Any, spi: Any) -> None:
         """Timer callback: resend the login if the same link is still waiting."""
 
-        with self._state_lock:
+        with self._gateway_md_connection_change(), self._state_lock:
             if self._relogin_token is not token:
                 return
             self._relogin_timer = None
@@ -3077,7 +3139,7 @@ class MdClient:
     def _reserve_start_generation(self) -> int:
         """Reserve one startup generation before creating the native API."""
 
-        with self._state_lock:
+        with self._gateway_md_connection_change(), self._state_lock:
             if self._pending_native_join_api_ids:
                 raise RuntimeError("ctp_md_client_native_join_pending")
             if self._api is not None or self._starting_generation is not None:
@@ -3358,7 +3420,7 @@ class MdClient:
         release_now = False
         observe_join = False
         defer_no_join_release = False
-        with self._state_lock:
+        with self._gateway_md_connection_change(), self._state_lock:
             if not self._is_start_current_locked(api, spi, generation):
                 return False
             native_live = native_init_may_be_live or self._native_init_started
@@ -3490,12 +3552,13 @@ class MdClient:
 
     def subscribe(self, instruments):
         """订阅合约列表（可在 start 前或后调用）"""
-        with self._state_lock:
-            self._pending_instruments = list(instruments)
-            api = self._api if self._loggedin else None
-            pending_instruments = list(self._pending_instruments)
-        if api is not None:
-            self._invoke_native_request(api, "SubscribeMarketData", pending_instruments)
+        with self._gateway_md_connection_change():
+            with self._state_lock:
+                self._pending_instruments = list(instruments)
+                api = self._api if self._loggedin else None
+                pending_instruments = list(self._pending_instruments)
+            if api is not None:
+                self._invoke_native_request(api, "SubscribeMarketData", pending_instruments)
 
     def subscribe_additional(self, instruments):
         """Add exact instruments without replacing reconnect subscriptions."""
@@ -3503,20 +3566,21 @@ class MdClient:
         requested = list(instruments)
         if any(type(item) is not str or not item or item != item.strip() for item in requested):
             raise ValueError("invalid CTP market instrument")
-        with self._state_lock:
-            additions = [item for item in requested if item not in self._pending_instruments]
-            api = self._api if self._loggedin else None
-        if api is not None and additions:
-            result = self._invoke_native_request(api, "SubscribeMarketData", additions)
-            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
-                return ()
-            if type(result) is int and result != 0:
-                raise RuntimeError("ctp_md_subscribe_rejected")
-        with self._state_lock:
-            for item in additions:
-                if item not in self._pending_instruments:
-                    self._pending_instruments.append(item)
-        return tuple(additions)
+        with self._gateway_md_connection_change():
+            with self._state_lock:
+                additions = [item for item in requested if item not in self._pending_instruments]
+                api = self._api if self._loggedin else None
+            if api is not None and additions:
+                result = self._invoke_native_request(api, "SubscribeMarketData", additions)
+                if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                    return ()
+                if type(result) is int and result != 0:
+                    raise RuntimeError("ctp_md_subscribe_rejected")
+            with self._state_lock:
+                for item in additions:
+                    if item not in self._pending_instruments:
+                        self._pending_instruments.append(item)
+            return tuple(additions)
 
     def unsubscribe(self, instruments):
         """Remove exact instruments from the native subscription set.
@@ -3528,28 +3592,29 @@ class MdClient:
         requested = list(instruments)
         if any(type(item) is not str or not item or item != item.strip() for item in requested):
             raise ValueError("invalid CTP market instrument")
-        with self._state_lock:
-            removals = [item for item in requested if item in self._pending_instruments]
-            api = self._api if self._loggedin else None
-        if api is not None and removals:
-            native_unsubscribe = getattr(api, "UnSubscribeMarketData", None)
-            if not callable(native_unsubscribe):
-                return False
-            try:
-                result = self._invoke_native_request(
-                    api, "UnSubscribeMarketData", removals
-                )
-            except Exception:
-                return False
-            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
-                return False
-            if type(result) is int and result != 0:
-                return False
-        with self._state_lock:
-            self._pending_instruments = [
-                item for item in self._pending_instruments if item not in removals
-            ]
-        return True
+        with self._gateway_md_connection_change():
+            with self._state_lock:
+                removals = [item for item in requested if item in self._pending_instruments]
+                api = self._api if self._loggedin else None
+            if api is not None and removals:
+                native_unsubscribe = getattr(api, "UnSubscribeMarketData", None)
+                if not callable(native_unsubscribe):
+                    return False
+                try:
+                    result = self._invoke_native_request(
+                        api, "UnSubscribeMarketData", removals
+                    )
+                except Exception:
+                    return False
+                if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                    return False
+                if type(result) is int and result != 0:
+                    return False
+            with self._state_lock:
+                self._pending_instruments = [
+                    item for item in self._pending_instruments if item not in removals
+                ]
+            return True
 
     def subscribe_batched(
         self, instruments, *, batch_size=100, interval_sec=0.1, should_stop=None
@@ -3577,24 +3642,25 @@ class MdClient:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         pending = list(instruments)
-        with self._state_lock:
-            self._pending_instruments = pending
-            api = self._api if self._loggedin else None
-        if api is None or not pending:
-            return 0
-        submitted = 0
-        for start in range(0, len(pending), batch_size):
-            if should_stop is not None and should_stop():
-                return submitted
-            result = self._invoke_native_request(
-                api, "SubscribeMarketData", pending[start : start + batch_size]
-            )
-            if result is _MD_NATIVE_REQUEST_NOT_STARTED:
-                return submitted
-            submitted += 1
-            if interval_sec > 0 and start + batch_size < len(pending):
-                time.sleep(interval_sec)
-        return submitted
+        with self._gateway_md_connection_change():
+            with self._state_lock:
+                self._pending_instruments = pending
+                api = self._api if self._loggedin else None
+            if api is None or not pending:
+                return 0
+            submitted = 0
+            for start in range(0, len(pending), batch_size):
+                if should_stop is not None and should_stop():
+                    return submitted
+                result = self._invoke_native_request(
+                    api, "SubscribeMarketData", pending[start : start + batch_size]
+                )
+                if result is _MD_NATIVE_REQUEST_NOT_STARTED:
+                    return submitted
+                submitted += 1
+                if interval_sec > 0 and start + batch_size < len(pending):
+                    time.sleep(interval_sec)
+            return submitted
 
     def start(self, block=True, *, join_observer=True):
         """启动连接
@@ -3628,7 +3694,7 @@ class MdClient:
             self._release_native_api_immediately(api, None)
             self._clear_start_reservation(generation)
             raise
-        with self._state_lock:
+        with self._gateway_md_connection_change(), self._state_lock:
             if (
                 self._starting_generation != generation
                 or self._lifecycle_generation != generation
@@ -3763,61 +3829,62 @@ class MdClient:
         # is the post-call fence that prevents RegisterFront/Init from running
         # when stop races RegisterSpi on another thread.
         defer_no_join_release = False
-        if expected_api is _NO_EXPECTED_NATIVE_API:
-            self._startup_cancel_event.set()
-        with self._state_lock:
-            api = self._api
-            if expected_api is not _NO_EXPECTED_NATIVE_API and (
-                api is None or api is not expected_api
-            ):
-                return False
-            if expected_api is not _NO_EXPECTED_NATIVE_API:
+        with self._gateway_md_connection_change():
+            if expected_api is _NO_EXPECTED_NATIVE_API:
                 self._startup_cancel_event.set()
-            # A stop issued while CreateFtdc* is still running must cancel the
-            # reserved generation before start() can register it.
-            self._lifecycle_generation += 1
-            self._starting_generation = None
-            self._loggedin = False
-            self._connected = False
-            self._clear_active_md_identity_locked()
-            self._login_request_id = None
-            self._login_request_generation = None
-            self._login_request_pending = False
-            self._front_link_generation = None
-            self._cancel_relogin_locked()
-            spi = self._spi
-            join_thread = self._thread
-            native_may_be_live = self._native_init_started or self._join_active
-            join_active = native_may_be_live and (
-                self._join_active or (join_thread is not None and join_thread.is_alive())
-            )
-            if api is None:
-                return False
-            join_claimed = _ctp_native_join_claimed(api)
-            join_observer = self._join_observer_for_api_locked(api)
-            join_required = bool(join_active or join_claimed)
-            self._last_stopped_native_api = api
-            self._last_stopped_connection_generation = self._connection_generation
-            self._last_stop_join_required = join_required
-            self._last_stop_join_thread = join_thread
-            self._last_stop_join_tracker = self._native_join_tracker
-            if join_active or join_claimed:
-                self._pending_native_join_api_ids.add(id(api))
-                _retain_live_ctp_native_session(api, spi, join_thread)
-            else:
-                self._pending_native_join_api_ids.add(id(api))
-            self._api = None
-            self._spi = None
-            self._thread = None
-            self._join_active = False
-            self._native_init_started = False
+            with self._state_lock:
+                api = self._api
+                if expected_api is not _NO_EXPECTED_NATIVE_API and (
+                    api is None or api is not expected_api
+                ):
+                    return False
+                if expected_api is not _NO_EXPECTED_NATIVE_API:
+                    self._startup_cancel_event.set()
+                # A stop issued while CreateFtdc* is still running must cancel the
+                # reserved generation before start() can register it.
+                self._lifecycle_generation += 1
+                self._starting_generation = None
+                self._loggedin = False
+                self._connected = False
+                self._clear_active_md_identity_locked()
+                self._login_request_id = None
+                self._login_request_generation = None
+                self._login_request_pending = False
+                self._front_link_generation = None
+                self._cancel_relogin_locked()
+                spi = self._spi
+                join_thread = self._thread
+                native_may_be_live = self._native_init_started or self._join_active
+                join_active = native_may_be_live and (
+                    self._join_active or (join_thread is not None and join_thread.is_alive())
+                )
+                if api is None:
+                    return False
+                join_claimed = _ctp_native_join_claimed(api)
+                join_observer = self._join_observer_for_api_locked(api)
+                join_required = bool(join_active or join_claimed)
+                self._last_stopped_native_api = api
+                self._last_stopped_connection_generation = self._connection_generation
+                self._last_stop_join_required = join_required
+                self._last_stop_join_thread = join_thread
+                self._last_stop_join_tracker = self._native_join_tracker
+                if join_active or join_claimed:
+                    self._pending_native_join_api_ids.add(id(api))
+                    _retain_live_ctp_native_session(api, spi, join_thread)
+                else:
+                    self._pending_native_join_api_ids.add(id(api))
+                self._api = None
+                self._spi = None
+                self._thread = None
+                self._join_active = False
+                self._native_init_started = False
 
-            # A native startup call may still be inside vendor code.  Keep the
-            # API/SPI alive and defer both callback detachment and Release
-            # until that call returns; releasing concurrently with Init is
-            # unsafe, and detaching concurrently with RegisterSpi can race the
-            # vendor's own callback registration.
-            startup_call_active = self._startup_native_call_refs.get(id(api), 0) > 0
+                # A native startup call may still be inside vendor code.  Keep the
+                # API/SPI alive and defer both callback detachment and Release
+                # until that call returns; releasing concurrently with Init is
+                # unsafe, and detaching concurrently with RegisterSpi can race the
+                # vendor's own callback registration.
+                startup_call_active = self._startup_native_call_refs.get(id(api), 0) > 0
             if startup_call_active:
                 prior = self._deferred_startup_cleanups.get(id(api))
                 self._deferred_startup_cleanups[id(api)] = (
@@ -4425,6 +4492,17 @@ class _TraderLoginIdentityObservation:
 
 
 @dataclass(frozen=True)
+class _TraderLoginClockObservation:
+    """Immutable native clock fields captured with one accepted TD login."""
+
+    _seal: object
+    login: _TraderLoginIdentityObservation
+    exchange_times: tuple[tuple[str, str], ...]
+    local_received_ns: int | None
+    local_monotonic_ns: int | None
+
+
+@dataclass(frozen=True)
 class _TraderSessionRetryBinding:
     """Private read-only identity for one scheduled same-session retry."""
 
@@ -4931,7 +5009,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     @_fence_trader_spi_callback
     def OnFrontConnected(self):
-        with self._c._query_state_lock:
+        with self._c._gateway_td_connection_change(), self._c._query_state_lock:
             if not self._is_current_locked():
                 return
             self._c._on_front_connected()
@@ -4942,7 +5020,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
 
     @_fence_trader_spi_callback
     def OnFrontDisconnected(self, nReason):
-        with self._c._query_state_lock:
+        with self._c._gateway_td_connection_change(), self._c._query_state_lock:
             if not self._is_current_locked():
                 return
             self._c._on_front_disconnected(nReason)
@@ -4952,7 +5030,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         error_callback = None
         login_submission = None
         auth_failed = False
-        with self._c._query_state_lock:
+        with self._c._gateway_td_connection_change(), self._c._query_state_lock:
             accepted = (
                 self._is_current_locked()
                 and self._c._authentication_state == "authenticating"
@@ -5009,7 +5087,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
         error_callback = None
         error_info = pRspInfo
         login_logged = None
-        with self._c._query_state_lock:
+        with self._c._gateway_td_connection_change(), self._c._query_state_lock:
             try:
                 request_id = int(nRequestID)
             except (TypeError, ValueError, OverflowError):
@@ -5082,6 +5160,13 @@ class _TraderSpi(CThostFtdcTraderSpi):
                     trading_day=trading_day,
                     connection_generation=generation,
                     request_id=request_id,
+                )
+                self._c._login_clock_observation = _TraderLoginClockObservation(
+                    _seal=_TRADER_LOGIN_CLOCK_SEAL,
+                    login=self._c._login_identity_observation,
+                    exchange_times=tuple(sorted(self._c._login_exchange_times.items())),
+                    local_received_ns=self._c._login_local_received_ns,
+                    local_monotonic_ns=self._c._login_local_monotonic_ns,
                 )
                 with suppress(TypeError, ValueError):
                     self._c._max_order_ref = max(
@@ -5167,7 +5252,7 @@ class _TraderSpi(CThostFtdcTraderSpi):
     @_fence_trader_spi_callback
     def OnRspSettlementInfoConfirm(self, pSettlementInfoConfirm, pRspInfo, nRequestID, bIsLast):
         error_callback = None
-        with self._c._query_state_lock:
+        with self._c._gateway_td_connection_change(), self._c._query_state_lock:
             if not self._is_current_locked():
                 return
             if not self._c._accept_settlement_callback(nRequestID, pSettlementInfoConfirm):
@@ -5512,6 +5597,9 @@ class TraderClient:
         self.on_error = None  # callback(CThostFtdcRspInfoField)
 
         self._connected = False
+        # Selected TD callbacks and submit-refusal paths only; this is not a
+        # complete session-source coverage capability.
+        self._gateway_td_dispatch_coordinator = None
         self._ready = False
         self._authentication_state = "disconnected"
         self._login_state = "disconnected"
@@ -5632,6 +5720,7 @@ class TraderClient:
         self._login_exchange_times: dict[str, str] = {}
         self._login_local_received_ns: int | None = None
         self._login_local_monotonic_ns: int | None = None
+        self._login_clock_observation: _TraderLoginClockObservation | None = None
         # Private/public flow resume type (THOST_TERT_*): 0 RESTART, 1 RESUME,
         # 2 QUICK.  Defaults keep the historical QUICK; direct hosts may ask
         # for RESTART (I62-01) before connecting.
@@ -5768,6 +5857,18 @@ class TraderClient:
             self._native_client_epoch = uuid.uuid4().hex if value is not None else None
             self._native_api_source_id = uuid.uuid4().hex if value is not None else None
             return
+        # Lifecycle paths already holding this lock perform invalidation at
+        # their lock-free entry. A direct setter reached while the caller
+        # already owns the lock remains an explicit coverage gap; invoking the
+        # coordinator there would reverse the lock order.
+        if (getattr(self, "_gateway_td_dispatch_coordinator", None) is not None
+                and not lock._is_owned()):
+            with self._gateway_td_connection_change():
+                self._replace_native_api_locked(value, current, lock)
+            return
+        self._replace_native_api_locked(value, current, lock)
+
+    def _replace_native_api_locked(self, value: Any, current: Any, lock: Any) -> None:
         with lock:
             ingress = getattr(self, "_callback_ingress", None)
             if ingress is not None and current is not None and current is not value:
@@ -9666,6 +9767,28 @@ class TraderClient:
             and self._settlement_trading_day == self._trading_day
         )
 
+    def _bind_gateway_td_dispatch_coordinator(self, coordinator, *, account_scope, service_generation):
+        """Bind the owner-local coordinator for selected TD callback paths.
+
+        Other session and clock writers do not yet participate, and MD has a
+        separate partial binding. This cannot establish complete coverage or
+        enable dispatch.
+        """
+        from bt_api_py.gateway_dispatch_claim import GatewayDispatchClaimCoordinator
+
+        if (type(coordinator) is not GatewayDispatchClaimCoordinator
+                or not coordinator.matches_owner(account_scope, service_generation)):
+            raise ValueError("ctp_gateway_dispatch_owner_mismatch")
+        with self._query_state_lock:
+            if self._gateway_td_dispatch_coordinator is not None:
+                raise ValueError("ctp_gateway_dispatch_coordinator_already_bound")
+            self._gateway_td_dispatch_coordinator = coordinator
+
+    def _gateway_td_connection_change(self):
+        """Invalidate selected TD source writers, without CTP lock inversion."""
+        return _gateway_partial_source_change(
+            getattr(self, "_gateway_td_dispatch_coordinator", None))
+
     def _on_front_connected(self) -> None:
         with self._query_state_lock:
             self._revoke_execution_gate_locked("ctp_execution_gate_connection_generation_changed")
@@ -9780,7 +9903,7 @@ class TraderClient:
             error = {"error": "authentication_submit_rejected", "submit_code": ret}
             code = ret
         retry_in = None
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             if (
                 self._authentication_request_id == request_id
                 and self._authentication_connection_generation == generation
@@ -9840,7 +9963,7 @@ class TraderClient:
             error = {"error": "login_submit_rejected", "submit_code": ret}
             code = ret
         retry_in = None
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             if (
                 self._login_request_id == request_id
                 and self._login_connection_generation == generation
@@ -9960,7 +10083,7 @@ class TraderClient:
     ) -> None:
         """Timer callback: resend the refused step if the same link still waits."""
 
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             if self._session_retry_token is not token:
                 return
             self._session_retry_timer = None
@@ -10391,7 +10514,7 @@ class TraderClient:
     def _reserve_start_generation(self) -> int:
         """Reserve one startup generation before creating the native API."""
 
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             # Preserve the managed-gate revocation contract even when this is
             # a rejected re-entrant start attempt.
             self._revoke_execution_gate_locked("ctp_execution_gate_client_start")
@@ -10493,7 +10616,7 @@ class TraderClient:
         release_now = False
         observe_join = False
         release_inline = False
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             if not self._is_start_current_locked(api, spi, generation):
                 return False
             native_live = native_init_may_be_live or self._native_init_started
@@ -10705,7 +10828,7 @@ class TraderClient:
                 pass
             self._clear_start_reservation(generation)
             raise
-        with self._query_state_lock:
+        with self._gateway_td_connection_change(), self._query_state_lock:
             if (
                 self._starting_generation != generation
                 or self._lifecycle_generation != generation
@@ -10758,11 +10881,13 @@ class TraderClient:
         # the exact native-front binding alongside the native API so a later
         # public ``front`` mutation cannot be mistaken for a verified
         # environment on reconnect.
-        with self._query_state_lock:
-            if self._api is not api or self._spi is not spi:
-                self._abort_startup(api, spi, generation)
-                return
-            self._session_native_front = self._bound_front
+        with self._gateway_td_connection_change(), self._query_state_lock:
+            source_changed = self._api is not api or self._spi is not spi
+            if not source_changed:
+                self._session_native_front = self._bound_front
+        if source_changed:
+            self._abort_startup(api, spi, generation)
+            return
 
         def init_native_api() -> None:
             nonlocal init_invoked
@@ -13333,9 +13458,10 @@ class TraderClient:
     def _stop_uninitialized_native_api(self, api: Any, *, spi: Any | None) -> bool:
         """Publish only after construction ends, then use normal checked cleanup."""
 
-        with self._query_state_lock:
-            current_api = self._api
-            publish = current_api is None or current_api is api
+        with self._gateway_td_connection_change():
+            with self._query_state_lock:
+                current_api = self._api
+                publish = current_api is None or current_api is api
             if publish:
                 self._api = api
                 if spi is not None:
@@ -13435,79 +13561,80 @@ class TraderClient:
         # Set this before waiting for a native registration call's lock.  It
         # is the post-call fence that prevents later startup calls when stop
         # races RegisterSpi on another thread.
-        if expected_api is _NO_EXPECTED_NATIVE_API:
-            self._startup_cancel_event.set()
-        with self._query_state_lock:
-            api = self._api
-            if expected_api is not _NO_EXPECTED_NATIVE_API and (
-                api is None or api is not expected_api
-            ):
-                return False
-            if expected_api is not _NO_EXPECTED_NATIVE_API:
+        with self._gateway_td_connection_change():
+            if expected_api is _NO_EXPECTED_NATIVE_API:
                 self._startup_cancel_event.set()
-            # A stop issued while CreateFtdc* is still running must cancel the
-            # reserved generation before start() can register it.
-            self._lifecycle_generation += 1
-            self._starting_generation = None
-            self._on_front_disconnected(
-                "client_stop", query_completion_origin="client_stop"
-            )
-            spi = self._spi
-            join_thread = self._thread
-            native_may_be_live = self._native_init_started or self._join_active
-            join_active = native_may_be_live and (
-                self._join_active or (join_thread is not None and join_thread.is_alive())
-            )
-            if api is None:
-                self._poison_callback_ingress_locked("owner_stop")
-                return False
-            join_observer = self._join_observer_for_api_locked(api)
-            join_claimed = _ctp_native_join_claimed(api)
-            join_required = bool(join_active or join_claimed)
-            self._last_stopped_native_api = api
-            self._last_stopped_connection_generation = self._connection_generation
-            self._last_stop_join_required = join_required
-            self._last_stop_join_thread = join_thread
-            self._last_stop_join_tracker = self._native_join_tracker
-            if join_active or join_claimed or not join_observer:
-                self._pending_native_join_api_ids.add(id(api))
-                _retain_live_ctp_native_session(
-                    api, spi, join_thread if (join_active or join_claimed) else None
+            with self._query_state_lock:
+                api = self._api
+                if expected_api is not _NO_EXPECTED_NATIVE_API and (
+                    api is None or api is not expected_api
+                ):
+                    return False
+                if expected_api is not _NO_EXPECTED_NATIVE_API:
+                    self._startup_cancel_event.set()
+                # A stop issued while CreateFtdc* is still running must cancel the
+                # reserved generation before start() can register it.
+                self._lifecycle_generation += 1
+                self._starting_generation = None
+                self._on_front_disconnected(
+                    "client_stop", query_completion_origin="client_stop"
                 )
-            else:
-                self._pending_native_join_api_ids.add(id(api))
-            self._native_stop_in_progress = True
-            self._api = None
-            self._native_stop_in_progress = False
-            self._thread = None
-            self._join_active = False
-            self._native_init_started = False
-            ingress_state = self._callback_ingress
-            defer_ingress_cleanup = (
-                not join_observer
-                or
-                self._native_request_inflight_refs > 0
-                or self._callback_inflight_refs > 0
-                or (
-                    ingress_state is not None
-                    and (ingress_state.native_call_refs > 0 or ingress_state.callback_refs > 0)
+                spi = self._spi
+                join_thread = self._thread
+                native_may_be_live = self._native_init_started or self._join_active
+                join_active = native_may_be_live and (
+                    self._join_active or (join_thread is not None and join_thread.is_alive())
                 )
-            )
-            if defer_ingress_cleanup:
-                self._callback_ingress_deferred_cleanup = (
-                    api,
-                    spi,
-                    join_required,
-                    join_claimed,
-                    join_observer,
+                if api is None:
+                    self._poison_callback_ingress_locked("owner_stop")
+                    return False
+                join_observer = self._join_observer_for_api_locked(api)
+                join_claimed = _ctp_native_join_claimed(api)
+                join_required = bool(join_active or join_claimed)
+                self._last_stopped_native_api = api
+                self._last_stopped_connection_generation = self._connection_generation
+                self._last_stop_join_required = join_required
+                self._last_stop_join_thread = join_thread
+                self._last_stop_join_tracker = self._native_join_tracker
+                if join_active or join_claimed or not join_observer:
+                    self._pending_native_join_api_ids.add(id(api))
+                    _retain_live_ctp_native_session(
+                        api, spi, join_thread if (join_active or join_claimed) else None
+                    )
+                else:
+                    self._pending_native_join_api_ids.add(id(api))
+                self._native_stop_in_progress = True
+                self._api = None
+                self._native_stop_in_progress = False
+                self._thread = None
+                self._join_active = False
+                self._native_init_started = False
+                ingress_state = self._callback_ingress
+                defer_ingress_cleanup = (
+                    not join_observer
+                    or
+                    self._native_request_inflight_refs > 0
+                    or self._callback_inflight_refs > 0
+                    or (
+                        ingress_state is not None
+                        and (ingress_state.native_call_refs > 0 or ingress_state.callback_refs > 0)
+                    )
                 )
-            # A no-Join API that never entered Init has no vendor thread to
-            # race; release it now unless a lease is still in flight.
-            release_inline = (
-                not join_observer
-                and not native_may_be_live
-                and self._claim_uninitialized_no_join_release_locked(api)
-            )
+                if defer_ingress_cleanup:
+                    self._callback_ingress_deferred_cleanup = (
+                        api,
+                        spi,
+                        join_required,
+                        join_claimed,
+                        join_observer,
+                    )
+                # A no-Join API that never entered Init has no vendor thread to
+                # race; release it now unless a lease is still in flight.
+                release_inline = (
+                    not join_observer
+                    and not native_may_be_live
+                    and self._claim_uninitialized_no_join_release_locked(api)
+                )
 
         if release_inline:
             self._finish_deferred_native_release()

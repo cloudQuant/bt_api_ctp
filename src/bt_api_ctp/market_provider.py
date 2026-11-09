@@ -251,6 +251,9 @@ class _HandleState:
     source_epoch_reset_pending: bool = False
     source_epoch_reset_epoch: str | None = None
     last_hub_epoch: str | None = None
+    # Source facts for recently polled native events only.  A Hub must still
+    # match the exact successfully published frame before requesting one.
+    clock_events: deque = dataclass_field(default_factory=lambda: deque(maxlen=256), repr=False)
 
 
 @dataclass(frozen=True)
@@ -630,6 +633,12 @@ class CtpQuoteV2MarketProvider:
             except Exception:
                 self._invalid_events += 1
                 raise CtpQuoteV2MarketProviderError("CTP_MARKET_EVENT_INVALID") from None
+        for event in events:
+            fields = ("provider_sequence", "provider_subscription_epoch",
+                      "event_time_provenance", "trading_date", "provider_connection_generation",
+                      "provider_event_time_utc", "received_at_utc", "received_monotonic_ns")
+            handle.clock_events.append((weakref.ref(handle.source_scope),
+                                        {name: event.data.get(name) for name in fields}))
         return tuple(events)
 
     def retained_events_ready(self, handle: object) -> bool:
@@ -1014,6 +1023,7 @@ class CtpQuoteV2MarketProvider:
             return
         for handle in handles:
             handle.queue.clear()
+            handle.clock_events.clear()
             handle.source_epoch_reset_pending = False
             handle.source_epoch_reset_epoch = None
         if stream.detach_quote_v2_client_for_recovery(old_client) is not True:
@@ -1247,6 +1257,7 @@ class CtpQuoteV2MarketProvider:
             recovery.new_scope = new_scope
             recovery.state = "reset_pending"
             for handle in self._active_handles.values():
+                handle.clock_events.clear()
                 handle.source_scope = new_scope
                 handle.source_epoch_reset_pending = True
                 handle.source_epoch_reset_epoch = None
@@ -1512,6 +1523,7 @@ class CtpQuoteV2MarketProvider:
         self._source_scope = None
         for handle in self._active_handles.values():
             handle.queue.clear()
+            handle.clock_events.clear()
             handle.source_epoch_reset_pending = False
             handle.source_epoch_reset_epoch = None
 
@@ -1687,6 +1699,7 @@ class CtpQuoteV2MarketProvider:
     def _remove_handle(self, handle: _HandleState) -> None:
         handle.active = False
         handle.queue.clear()
+        handle.clock_events.clear()
         public_handle = handle.public_handle
         self._active_handles.pop(id(public_handle), None)
         if public_handle is not None:
