@@ -493,6 +493,7 @@ def test_ctp_market_provider_shares_one_authenticated_session_across_keys_and_un
         source_ref=_SOURCE_REF,
         entitlement_ref=_ENTITLEMENT_REF,
         connect_timeout_seconds=1.0,
+        max_parked_symbols=0,  # the native unsubscribe path (no parking)
     )
     first = provider.subscribe(first_key, generation="hub-generation-a")
     (client,) = _SyntheticMdClient.instances
@@ -711,6 +712,7 @@ def test_retired_symbol_requires_confirmed_fresh_stream_before_resubscribe(
         # The stream loop can sleep for one second before observing stop;
         # allow scheduling time without weakening incomplete-receipt checks.
         stop_timeout_seconds=3.0,
+        max_parked_symbols=0,  # the native unsubscribe path (no parking)
     )
     first = provider.subscribe(keys[0], generation="hub-generation-a")
     second = provider.subscribe(keys[1], generation="hub-generation-b")
@@ -852,6 +854,7 @@ def test_retired_symbol_limit_fences_additions_but_allows_provider_release(
         stream_factory=_stream_factory,
         source_ref=_SOURCE_REF,
         entitlement_ref=_ENTITLEMENT_REF,
+        max_parked_symbols=0,  # the native unsubscribe path (no parking)
     )
     first = provider.subscribe(keys[0], generation="hub-generation-a")
     second = provider.subscribe(keys[1], generation="hub-generation-b")
@@ -2238,6 +2241,7 @@ def _instrument_key(symbol: str) -> MarketSubscriptionKey:
 
 def _failing_construction_provider(
     monkeypatch: pytest.MonkeyPatch,
+    **provider_options: object,
 ) -> tuple[CtpQuoteV2MarketProvider, list[_SyntheticMdClient], list[float], list[bool]]:
     """A provider whose replacement clients fail construction while ``fail[0]``."""
 
@@ -2261,6 +2265,7 @@ def _failing_construction_provider(
         source_ref=_SOURCE_REF,
         entitlement_ref=_ENTITLEMENT_REF,
         connect_timeout_seconds=1.0,
+        **provider_options,
     )
     return provider, created, constructions, fail
 
@@ -2335,7 +2340,9 @@ def test_symbols_change_during_a_retry_wait_release_allowed_addition_refused(
     """
 
     monkeypatch.setattr(market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.05,))
-    provider, created, _constructions, fail = _failing_construction_provider(monkeypatch)
+    provider, created, _constructions, fail = _failing_construction_provider(
+        monkeypatch, max_parked_symbols=0  # the native unsubscribe path (no parking)
+    )
     handle = provider.subscribe(_key(), generation="hub-generation-r1")
     second_handle = provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-r1")
     fail[0] = True
@@ -2447,3 +2454,217 @@ def test_retained_released_handles_do_not_retain_stopped_streams_or_queues(monke
     assert all(stream_ref() is None and queue_ref() is None
                for stream_ref, queue_ref in resources)
     assert all(provider.unsubscribe(handle) is True for handle in handles)
+
+
+def _shared_pair(monkeypatch: pytest.MonkeyPatch, **provider_options: object):
+    _SyntheticMdClient.instances.clear()
+    _SyntheticMdClient.authenticate = True
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+    streams: list[CtpMarketStream] = []
+
+    def factory(key: MarketSubscriptionKey, sink: BoundedCtpQuoteV2Queue) -> CtpMarketStream:
+        stream = _stream_factory(key, sink)
+        streams.append(stream)
+        return stream
+
+    provider = CtpQuoteV2MarketProvider(
+        stream_factory=factory,
+        source_ref=_SOURCE_REF,
+        entitlement_ref=_ENTITLEMENT_REF,
+        connect_timeout_seconds=1.0,
+        **provider_options,
+    )
+    first = provider.subscribe(_key(), generation="hub-generation-a")
+    (client,) = _SyntheticMdClient.instances
+    client.next_request_id = 1
+    second = provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-b")
+    return provider, client, streams, first, second
+
+
+def test_a_released_symbol_is_parked_and_served_again_on_the_same_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One consumer leaves and comes back while another keeps the session alive.
+
+    SimNow 2026-11-10: strategy B (rb2701) was killed and restarted while
+    another strategy held SA701. Its second subscribe was refused
+    (``CTP_MARKET_FRESH_STREAM_REQUIRED``) because the first release had
+    natively unsubscribed the symbol. A released symbol now keeps its native
+    subscription until the shared session stops.
+    """
+    provider, client, streams, first, second = _shared_pair(monkeypatch)
+    stream = streams[0]
+    provider.poll(first, limit=8)
+    subscribed_before = tuple(client.subscribed)
+
+    assert provider.unsubscribe(first) is True
+    assert client.unsubscribed == [] and client.stop_calls == 0
+    assert stream._retired_quote_v2_subscriptions == {}
+    assert set(stream._quote_v2_subscription_metadata) == {"IF2612", "IH2612"}
+    assert provider.diagnostics["parked_symbols"] == 1
+    assert provider.diagnostics["active_handles"] == 1
+    assert provider._known_handles[first].active is False
+    assert provider.poll(first, limit=8) == ()
+
+    # While parked, the symbol's ticks reach nobody; the other consumer is untouched.
+    _emit_synthetic_tick(client, "IF2612", 1)
+    _emit_synthetic_tick(client, "IH2612", 2)
+    (other,) = provider.poll(second, limit=8)
+    assert other.data["instrument"]["native_symbol"] == "IH2612"
+
+    again = provider.subscribe(_key(), generation="hub-generation-a2")
+    assert again is not first and len(streams) == 1
+    assert tuple(client.subscribed) == subscribed_before  # no native request
+    assert provider.diagnostics["parked_symbols"] == 0
+    assert provider.diagnostics["active_handles"] == 2
+    assert provider._known_handles[again].source_scope is provider._known_handles[second].source_scope
+    assert provider.poll(again, limit=8) == ()  # nothing from the parked interval
+
+    _emit_synthetic_tick(client, "IF2612", 3)
+    (event,) = provider.poll(again, limit=8)
+    assert event.data["instrument"]["native_symbol"] == "IF2612"
+    assert event.data["last_price"] == 4_004.0
+    assert provider.describe_source(
+        again, key=_key(), generation=again.generation, stream_id=_key().stream_id,
+        epoch="hub-epoch-a2",
+    ) is not None
+    assert provider.close() is True
+
+
+def test_parked_symbols_do_not_keep_the_session_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, client, streams, first, second = _shared_pair(monkeypatch)
+    assert provider.unsubscribe(first) is True
+    assert provider.diagnostics["parked_symbols"] == 1 and client.stop_calls == 0
+    # The last consumed symbol goes: the session stops and nothing stays parked.
+    assert provider.unsubscribe(second) is True
+    assert client.stop_calls == 1 and client.unsubscribed == []
+    assert provider.diagnostics["active_sessions"] == 0
+    assert provider.diagnostics["parked_symbols"] == 0
+    # The next subscribe of either symbol starts a fresh session.
+    fresh = provider.subscribe(_key(), generation="hub-generation-a3")
+    assert len(streams) == 2 and provider._known_handles[fresh].stream is streams[1]
+    assert provider.close() is True
+
+
+def test_parking_is_bounded_and_falls_back_to_the_native_unsubscribe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, client, streams, first, second = _shared_pair(monkeypatch, max_parked_symbols=1)
+    client.next_request_id = 1
+    third = provider.subscribe(_instrument_key("IC2612"), generation="hub-generation-c")
+    assert provider.unsubscribe(first) is True  # parked
+    assert client.unsubscribed == [] and provider.diagnostics["parked_symbols"] == 1
+    assert provider.unsubscribe(second) is True  # no room: natively unsubscribed and retired
+    assert client.unsubscribed == ["IH2612"]
+    assert streams[0]._retired_quote_v2_subscriptions == {"IH2612": 1}
+    assert provider.diagnostics["parked_symbols"] == 1
+    with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+        provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-b2")
+    assert refused.value.code == "CTP_MARKET_FRESH_STREAM_REQUIRED"
+    # The parked one is still available, and a new symbol still joins.
+    assert provider.subscribe(_key(), generation="hub-generation-a2") is not None
+    assert provider._known_handles[third].active is True
+    assert provider.close() is True
+
+    with pytest.raises(CtpQuoteV2MarketProviderError) as invalid:
+        CtpQuoteV2MarketProvider(
+            stream_factory=_stream_factory, source_ref=_SOURCE_REF,
+            entitlement_ref=_ENTITLEMENT_REF, max_parked_symbols=-1,
+        )
+    assert invalid.value.code == "INVALID_CTP_MARKET_PROVIDER_CONFIG"
+
+
+def test_a_new_symbol_joins_a_session_that_carries_a_parked_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, client, streams, first, second = _shared_pair(monkeypatch)
+    assert provider.unsubscribe(first) is True
+    client.next_request_id = 1
+    third = provider.subscribe(_instrument_key("IC2612"), generation="hub-generation-c")
+    assert client.subscribed == ["IF2612", "IH2612", "IC2612"]
+    assert streams[0].quote_v2_service_fail_closed is False
+    assert provider.diagnostics["parked_symbols"] == 1
+    _emit_synthetic_tick(client, "IC2612", 4)
+    (event,) = provider.poll(third, limit=8)
+    assert event.data["instrument"]["native_symbol"] == "IC2612"
+    assert provider.close() is True
+
+
+def test_a_parked_symbol_survives_a_source_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replacement session subscribes parked symbols too, so one can return."""
+    monkeypatch.setattr(market_provider_module, "_SOURCE_RECOVERY_RETRY_DELAYS_SECONDS", (0.05,))
+    provider, created, _constructions, fail = _failing_construction_provider(monkeypatch)
+    handle = provider.subscribe(_key(), generation="hub-generation-r1")
+    second_handle = provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-r1")
+    third_handle = provider.subscribe(_instrument_key("IC2612"), generation="hub-generation-r1")
+    assert provider.unsubscribe(third_handle) is True  # parked before the loss
+    fail[0] = True
+    created[0].emit_disconnect()
+    _drive_until(
+        provider,
+        lambda: provider._source_recovery is not None
+        and provider._source_recovery.state == "retry_wait",
+    )
+    assert provider._source_recovery.symbols == frozenset({"IF2612", "IH2612", "IC2612"})
+    # Released during the recovery: parked as well, still part of the session.
+    assert provider.unsubscribe(second_handle) is True
+    assert provider._known_handles[second_handle].active is False
+    assert provider._source_recovery.symbols == frozenset({"IF2612", "IH2612", "IC2612"})
+    assert provider.diagnostics["parked_symbols"] == 2
+
+    fail[0] = False
+    _drive_until(provider, lambda: provider.source_epoch_reset_required(handle) is True)
+    new_client = created[-1]
+    assert new_client is not created[0]
+    assert sorted(new_client.subscribed) == ["IC2612", "IF2612", "IH2612"]
+    assert provider.acknowledge_source_epoch_reset(handle, epoch="hub-epoch-r2") is True
+    assert provider._source_recovery is None
+
+    back = provider.subscribe(_instrument_key("IH2612"), generation="hub-generation-r2")
+    assert sorted(new_client.subscribed) == ["IC2612", "IF2612", "IH2612"]
+    _emit_synthetic_tick(new_client, "IH2612", 6)
+    (event,) = provider.poll(back, limit=4)
+    assert event.data["instrument"]["native_symbol"] == "IH2612"
+    assert event.data["provider_connection_generation"] == (
+        provider._known_handles[handle].source_scope.connection_generation
+    )
+    assert provider.diagnostics["parked_symbols"] == 1
+    assert provider.close() is True
+
+
+def test_a_parked_symbol_is_resumed_only_as_the_same_acknowledged_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, client, streams, first, second = _shared_pair(monkeypatch)
+    stream = streams[0]
+    assert provider.unsubscribe(first) is True
+    subscribed_before = tuple(client.subscribed)
+
+    # Not acknowledged by the venue right now: refused, nothing changes.
+    monkeypatch.setattr(stream, "is_quote_v2_service_symbol_ready", lambda symbol: False)
+    with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+        provider.subscribe(_key(), generation="hub-generation-a2")
+    assert refused.value.code == "CTP_MARKET_SUBSCRIBE_UNACKNOWLEDGED"
+    assert provider.diagnostics["parked_symbols"] == 1
+    assert provider.diagnostics["active_handles"] == 1
+    monkeypatch.undo()
+    monkeypatch.setattr(live_ctp_feed.ctp_client, "MdClient", _SyntheticMdClient)
+
+    # Another native topic under the same symbol is not the parked subscription.
+    parked_topic = dict(provider._parked_symbols["IF2612"])
+    provider._parked_symbols["IF2612"] = {**parked_topic, "asset_type": "option"}
+    with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+        provider.subscribe(_key(), generation="hub-generation-a2")
+    assert refused.value.code == "CTP_MARKET_FRESH_STREAM_REQUIRED"
+    assert provider.diagnostics["parked_symbols"] == 1
+    assert stream.quote_v2_service_fail_closed is False
+    provider._parked_symbols["IF2612"] = parked_topic
+
+    # The native set no longer matches consumed + parked: the session fails closed.
+    stream._quote_v2_subscription_metadata.pop("IF2612")
+    with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+        provider.subscribe(_key(), generation="hub-generation-a2")
+    assert refused.value.code == "CTP_MARKET_SUBSCRIBE_FAILED"
+    assert stream.quote_v2_service_fail_closed is True
+    assert tuple(client.subscribed) == subscribed_before
+    assert provider._known_handles[second].active is True

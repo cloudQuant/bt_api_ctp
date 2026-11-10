@@ -42,6 +42,11 @@ from bt_api_ctp.market_tick_projection import project_ctp_market_tick
 DEFAULT_CTP_QUOTE_QUEUE_CAPACITY = 1_024
 MAX_CTP_QUOTE_QUEUE_CAPACITY = 65_536
 MAX_CTP_PROVIDER_POLL_LIMIT = 256
+# Symbols released by their last consumer while other symbols keep the shared
+# MD session alive stay natively subscribed ("parked"), so that a consumer that
+# comes back can be served on the same session (see ``_park_symbol``).
+DEFAULT_CTP_PARKED_SYMBOLS = 128
+MAX_CTP_PARKED_SYMBOLS = 1_024
 MAX_CTP_QUOTE_EVENT_BYTES = 256 * 1024
 MAX_CTP_CONNECT_TIMEOUT_SECONDS = 300.0
 MAX_CTP_STOP_TIMEOUT_SECONDS = 30.0
@@ -348,6 +353,7 @@ class CtpQuoteV2MarketProvider:
         queue_capacity: int = DEFAULT_CTP_QUOTE_QUEUE_CAPACITY,
         connect_timeout_seconds: float = 30.0,
         stop_timeout_seconds: float = 5.0,
+        max_parked_symbols: int = DEFAULT_CTP_PARKED_SYMBOLS,
     ) -> None:
         if (
             not callable(stream_factory)
@@ -355,6 +361,8 @@ class CtpQuoteV2MarketProvider:
             or not _valid_ref(entitlement_ref)
             or type(queue_capacity) is not int
             or not 1 <= queue_capacity <= MAX_CTP_QUOTE_QUEUE_CAPACITY
+            or type(max_parked_symbols) is not int
+            or not 0 <= max_parked_symbols <= MAX_CTP_PARKED_SYMBOLS
             or not _valid_timeout(connect_timeout_seconds, MAX_CTP_CONNECT_TIMEOUT_SECONDS)
             or not _valid_timeout(stop_timeout_seconds, MAX_CTP_STOP_TIMEOUT_SECONDS)
         ):
@@ -374,6 +382,10 @@ class CtpQuoteV2MarketProvider:
         ] = weakref.WeakKeyDictionary()
         self._active_handles: dict[int, _HandleState] = {}
         self._handles_by_symbol: dict[str, _HandleState] = {}
+        # Native symbol -> native topic of a subscription that no handle
+        # consumes any more but that is kept on the current shared session.
+        self._max_parked_symbols = max_parked_symbols
+        self._parked_symbols: dict[str, dict[str, str]] = {}
         self._stream: CtpMarketStream | None = None
         self._fanout: _CtpQuoteV2Fanout | None = None
         self._native_client: object | None = None
@@ -393,6 +405,7 @@ class CtpQuoteV2MarketProvider:
             "pending_start_cleanup": len(self._pending_start_cleanup),
             "active_handles": len(self._active_handles),
             "active_sessions": int(self._stream is not None),
+            "parked_symbols": len(self._parked_symbols),
             "source_recovery_active": int(self._source_recovery is not None),
             "invalid_events": self._invalid_events,
             "dropped_oldest": sum(
@@ -414,6 +427,8 @@ class CtpQuoteV2MarketProvider:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SESSION_KEY_MISMATCH")
         if self._stream is None:
             return self._start_shared_stream(key, generation)
+        if symbol in self._parked_symbols:
+            return self._resume_parked_symbol(key, generation)
         return self._subscribe_existing_stream(key, generation)
 
     def unsubscribe(self, handle: object) -> bool:
@@ -436,6 +451,8 @@ class CtpQuoteV2MarketProvider:
                 return self.close()
             return self._unsubscribe_during_recovery(handle, recovery)
         if len(self._active_handles) > 1:
+            if self._park_symbol(handle):
+                return True
             symbol = handle.key.instrument.native_symbol
             try:
                 handle.stream.unsubscribe_topics([{"topic": "tick", "symbol": symbol}])
@@ -587,20 +604,25 @@ class CtpQuoteV2MarketProvider:
 
         stream = recovery.stream
         symbol = handle.key.instrument.native_symbol
-        try:
-            # On the replacement client (or with no client, metadata only).
-            stream.unsubscribe_topics([{"topic": "tick", "symbol": symbol}])
-        except CtpMarketStreamSubscriptionError as exc:
-            if exc.code == "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT":
-                raise CtpQuoteV2MarketProviderError("CTP_MARKET_RETIRED_SYMBOL_LIMIT") from None
-            return False
-        except Exception:
-            return False
-        fanout = self._fanout
-        if fanout is None or not fanout.unregister(symbol, handle.queue):
-            return False
-        self._remove_handle(handle)
-        recovery.symbols = frozenset(recovery.symbols - {symbol})
+        # A parked symbol stays in the recovery's symbol set: the replacement
+        # session subscribes it again like the consumed ones.
+        if not self._park_symbol(handle):
+            try:
+                # On the replacement client (or with no client, metadata only).
+                stream.unsubscribe_topics([{"topic": "tick", "symbol": symbol}])
+            except CtpMarketStreamSubscriptionError as exc:
+                if exc.code == "CTP_MD_RETIRED_SUBSCRIPTION_LIMIT":
+                    raise CtpQuoteV2MarketProviderError(
+                        "CTP_MARKET_RETIRED_SYMBOL_LIMIT"
+                    ) from None
+                return False
+            except Exception:
+                return False
+            fanout = self._fanout
+            if fanout is None or not fanout.unregister(symbol, handle.queue):
+                return False
+            self._remove_handle(handle)
+            recovery.symbols = frozenset(recovery.symbols - {symbol})
         if (
             recovery.state == "reset_pending"
             and self._active_handles
@@ -905,7 +927,7 @@ class CtpQuoteV2MarketProvider:
         if scope is None or self._current_source_scope(stream) is not scope:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
         subscribed = getattr(stream, "_quote_v2_subscription_metadata", {})
-        if type(subscribed) is not dict or set(subscribed) != set(self._handles_by_symbol):
+        if type(subscribed) is not dict or set(subscribed) != self._session_symbols():
             stream._fail_closed_quote_v2_subscription()
             self._source_scope = None
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED")
@@ -919,7 +941,7 @@ class CtpQuoteV2MarketProvider:
             # neither changes their source session nor relabels their epoch.
             stream.subscribe_topics([_quote_topic(key)])
             subscribed = getattr(stream, "_quote_v2_subscription_metadata", {})
-            expected = set(self._handles_by_symbol) | {symbol}
+            expected = set(self._session_symbols()) | {symbol}
             if type(subscribed) is not dict or set(subscribed) != expected:
                 if type(subscribed) is dict:
                     ambiguous_symbols.update(expected.symmetric_difference(subscribed))
@@ -961,6 +983,73 @@ class CtpQuoteV2MarketProvider:
             raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED") from None
         return self._register_handle(key, generation, callback_queue, stream, scope)
 
+    def _session_symbols(self) -> frozenset[str]:
+        """Every symbol the shared native session carries: consumed and parked."""
+        return frozenset(self._handles_by_symbol) | frozenset(self._parked_symbols)
+
+    def _park_symbol(self, handle: _HandleState) -> bool:
+        """Release a handle but keep its native subscription on the shared session.
+
+        CTP quote callbacks carry no subscription token, so a symbol that was
+        natively unsubscribed cannot be added again on the same MD client
+        (``CTP_MARKET_FRESH_STREAM_REQUIRED``). In a Gateway that rule made one
+        strategy's restart impossible while another strategy kept the session
+        alive (SimNow 2026-11-10: the second subscribe of rb2701 was refused
+        while SA701 stayed subscribed). A parked symbol is never unsubscribed:
+        its ticks are dropped at the fan-out until a consumer returns, and a
+        tick delivered after that is a current tick of an uninterrupted
+        subscription. Parked symbols do not keep the session alive: releasing
+        the last consumed symbol stops it. Past ``max_parked_symbols`` (or with
+        0) the symbol is natively unsubscribed and retired as before.
+        """
+        symbol = handle.key.instrument.native_symbol
+        fanout = self._fanout
+        if (
+            len(self._parked_symbols) >= self._max_parked_symbols
+            or fanout is None
+            or handle.stream is not self._stream
+            or symbol in self._parked_symbols
+        ):
+            return False
+        if not fanout.unregister(symbol, handle.queue):
+            return False
+        self._parked_symbols[symbol] = _quote_topic(handle.key)
+        self._remove_handle(handle)
+        return True
+
+    def _resume_parked_symbol(
+        self, key: MarketSubscriptionKey, generation: str
+    ) -> CtpQuoteV2MarketHandle:
+        """Serve a parked symbol again; no native request is made."""
+        stream = self._stream
+        fanout = self._fanout
+        scope = self._source_scope
+        symbol = key.instrument.native_symbol
+        if key.instrument.environment != self._session_environment:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SESSION_KEY_MISMATCH")
+        if stream is None or fanout is None:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
+        if self._parked_symbols.get(symbol) != _quote_topic(key):
+            # Another native topic under the same symbol is another subscription.
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_FRESH_STREAM_REQUIRED")
+        if scope is None or self._current_source_scope(stream) is not scope:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SOURCE_SCOPE_CHANGED")
+        subscribed = getattr(stream, "_quote_v2_subscription_metadata", {})
+        if type(subscribed) is not dict or set(subscribed) != self._session_symbols():
+            stream._fail_closed_quote_v2_subscription()
+            self._source_scope = None
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_FAILED")
+        try:
+            acknowledged = stream.is_quote_v2_service_symbol_ready(symbol) is True
+        except Exception:
+            acknowledged = False
+        if not acknowledged:
+            raise CtpQuoteV2MarketProviderError("CTP_MARKET_SUBSCRIBE_UNACKNOWLEDGED")
+        callback_queue = BoundedCtpQuoteV2Queue(self._queue_capacity)
+        fanout.register(symbol, callback_queue)
+        del self._parked_symbols[symbol]
+        return self._register_handle(key, generation, callback_queue, stream, scope)
+
     def _register_handle(
         self,
         key: MarketSubscriptionKey,
@@ -998,7 +1087,7 @@ class CtpQuoteV2MarketProvider:
         old_client = self._native_client
         old_scope = self._source_scope
         handles = tuple(self._active_handles.values())
-        symbols = frozenset(handle.key.instrument.native_symbol for handle in handles)
+        symbols = self._session_symbols()
         subscribed = getattr(stream, "_quote_v2_subscription_metadata", None)
         stream_generation = getattr(stream, "_connection_generation", None)
         if (
@@ -1095,9 +1184,7 @@ class CtpQuoteV2MarketProvider:
             )
             return
         stream = recovery.stream
-        current_symbols = frozenset(
-            handle.key.instrument.native_symbol for handle in self._active_handles.values()
-        )
+        current_symbols = self._session_symbols()
         subscribed = getattr(stream, "_quote_v2_subscription_metadata", None)
         violation = None
         if stream is not self._stream:
@@ -1709,6 +1796,7 @@ class CtpQuoteV2MarketProvider:
 
     def _reset_active_stream(self) -> None:
         self._stream = None
+        self._parked_symbols.clear()
         self._fanout = None
         self._native_client = None
         self._source_scope = None
