@@ -6,6 +6,7 @@ labels are not account authentication or live-trading evidence.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -27,6 +28,9 @@ from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer, CtpGatewayR
 from bt_api_ctp.registered_sim_session import capture_query_session
 from bt_api_ctp.gateway_return_query import CtpGatewayReturnQueryReader
 from bt_api_ctp.trusted_flow import flow_binding, trusted_flow
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class CtpGatewaySessionError(RuntimeError):
@@ -606,6 +610,10 @@ class CtpGatewaySession:
             account_stopped = self._reader.close() is True
         except BaseException:
             pass
+        if not (market_stopped and direct_stopped and account_stopped):
+            # Name the native part whose stop is still unconfirmed (I63-E107).
+            _LOG.warning("CTP Gateway session stop unconfirmed: market=%s direct=%s account=%s",
+                         market_stopped, direct_stopped, account_stopped)
         if market_stopped and direct_stopped and account_stopped:
             self._market_dispatch_binding = None
             self._connection_owner = None
