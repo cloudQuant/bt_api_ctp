@@ -22,6 +22,8 @@ from bt_api_base.direct_write_protocol import (
 from bt_api_base.gateway_execution_protocol import GatewayReturnFact
 from bt_api_base.market_protocol import MarketInstrumentKey
 
+from bt_api_ctp.native_session_id import is_ctp_session_id
+
 ROUTE = "CTP___FUTURE"
 _MISSING = object()
 _SIDE = {"0": "buy", "1": "sell"}
@@ -148,6 +150,15 @@ def _component(value: object) -> int | None:
     return value if value > 0 else None
 
 
+def _session_component(value: object) -> int | None:
+    """CTP SessionID is a signed 32-bit int; SimNow issues negative ones (I63)."""
+    if value is _MISSING or value is None or value == 0:
+        return None
+    if not is_ctp_session_id(value):
+        raise ValueError
+    return value
+
+
 def project_gateway_return(
     kind: str,
     row: Any,
@@ -195,7 +206,7 @@ def project_gateway_return(
         raw_venue = _raw_text(_field(row, "OrderSysID"), optional=True)
         venue = None if raw_venue is None else raw_venue.strip()
         front = _component(_field(row, "FrontID")) if kind == "order" else None
-        session = _component(_field(row, "SessionID")) if kind == "order" else None
+        session = _session_component(_field(row, "SessionID")) if kind == "order" else None
         fields: dict[str, Any] = {
             "trading_day": day,
             "order_ref": ref,

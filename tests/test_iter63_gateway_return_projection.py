@@ -294,3 +294,18 @@ def test_insert_rejected_takes_priority_only_over_known_native_unknown_status():
     missing.pop("OrderStatus")
     with pytest.raises(CtpGatewayReturnProjectionError):
         project("order", missing)
+
+
+@pytest.mark.parametrize("session_id", [-2147483648, -1786642431, -1, 2147483647])
+def test_signed_simnow_session_ids_project_into_the_binding_identity(session_id):
+    # SimNow 63.09 (2026-11-10 10:07): negative SessionIDs made every order
+    # callback fail projection, returns stayed unhealthy, admission was denied.
+    result = project("order", order(SessionID=session_id))
+    assert result.binding_identity.fields["session_id"] == session_id
+
+
+@pytest.mark.parametrize("session_id", [2**31, -(2**31) - 1, True, 1.0, "9"])
+def test_out_of_range_or_non_int_session_ids_still_reject(session_id):
+    with pytest.raises(CtpGatewayReturnProjectionError):
+        project("order", order(SessionID=session_id))
+
