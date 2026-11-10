@@ -192,3 +192,36 @@ def test_gateway_confirmation_releases_provider_lock_over_native_and_consumes_gr
         assert native.calls.count("confirm_settlement") == 1
     finally:
         provider.close()
+
+
+def test_unanswered_gateway_readback_frees_the_owner_after_the_short_timeout():
+    # SimNow 63.09 (I63-E110): unanswered settlement readbacks held the Gateway
+    # owner for the provider-wide 10 s timeout, starving dispatch and calls.
+    import time
+
+    import bt_api_ctp.direct_write_provider as module
+
+    old_provider, client, native = _real_setup()
+    old_provider.close()
+    _login(client, native, session_id=20)
+    native.confirmation_day = "20261105"
+    sent = []
+
+    def dropped(field, request_id):
+        sent.append(request_id)  # the request is accepted but never answered
+        return 0
+
+    native.ReqQrySettlementInfoConfirm = dropped
+    provider = CtpDirectWriteProvider(
+        old_provider._feed, owner_thread_only=True, background_settlement_readback=False,
+        allow_implicit_connect=False,
+    )
+    try:
+        started = time.monotonic()
+        assert provider.observe_settlement() is None
+        elapsed = time.monotonic() - started
+    finally:
+        provider.close()
+    assert sent, "the readback was never sent"
+    assert module._GATEWAY_SETTLEMENT_READBACK_TIMEOUT < module._SETTLEMENT_READBACK_TIMEOUT
+    assert elapsed < module._GATEWAY_SETTLEMENT_READBACK_TIMEOUT + 1.5, elapsed

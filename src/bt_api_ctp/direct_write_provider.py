@@ -89,6 +89,11 @@ _monotonic = time.monotonic
 
 # Settlement confirmation readback (read-only ReqQrySettlementInfoConfirm).
 _SETTLEMENT_READBACK_TIMEOUT = 10.0
+# The Gateway runs this readback on its single owner thread, which also serves
+# dispatch claims, market and strategy calls. SimNow replies in 0.2-0.9 s or
+# never; waiting 10 s blocked the owner (63.09, I63-E110). An unanswered
+# readback is "unavailable" and the settlement controller retries it.
+_GATEWAY_SETTLEMENT_READBACK_TIMEOUT = 2.0
 # Background readback after a same-day re-login (I62-17 revision, 2026-11-06).
 # One monitor thread per provider polls the in-memory readiness at this
 # interval and retries a failed readback after this backoff (seconds after the
@@ -1879,7 +1884,7 @@ class CtpDirectWriteProvider:
 
         try:
             status, evidence = TraderClient._read_direct_settlement_status(
-                trader, timeout=_SETTLEMENT_READBACK_TIMEOUT, _include_evidence=True
+                trader, timeout=_GATEWAY_SETTLEMENT_READBACK_TIMEOUT, _include_evidence=True
             )
             after = trader.get_session_state()
             with self._lock:
