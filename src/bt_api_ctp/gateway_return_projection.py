@@ -273,9 +273,15 @@ def project_gateway_return(
                 "6",
             }:
                 raise ValueError
-            if status_raw not in _STATUS and not (status_raw == "a" and submit_status == "4"):
+            if status_raw == "a" and submit_status in {"0", "1", "2"}:
+                # 'a' (unknown) with an insert/cancel/modify submitted: the front
+                # accepted it and the exchange has not answered. CTP sends it as
+                # the first OnRtnOrder of every order (SimNow 63.09, 2026-11-10).
+                status = DirectOrderStatus.SUBMITTED
+            elif status_raw not in _STATUS and not (status_raw == "a" and submit_status == "4"):
                 raise ValueError
-            status = DirectOrderStatus.REJECTED if submit_status == "4" else _STATUS[status_raw]
+            else:
+                status = DirectOrderStatus.REJECTED if submit_status == "4" else _STATUS[status_raw]
             quantity = _native_int(_field(row, "VolumeTotalOriginal"), optional=True, positive=True)
             filled = _native_int(_field(row, "VolumeTraded"), optional=True)
             remaining = _native_int(_field(row, "VolumeTotal"), optional=True)

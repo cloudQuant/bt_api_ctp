@@ -224,7 +224,6 @@ def test_optional_order_quantities_and_market_price_never_invent_values():
         ("trade", "Direction", None),
         ("trade", "OffsetFlag", "x"),
         ("trade", "TradeID", ""),
-        ("order", "OrderStatus", "a"),
         ("order", "OrderStatus", "z"),
         ("order", "OrderSubmitStatus", "z"),
         ("order", "VolumeTraded", 2.5),
@@ -280,7 +279,7 @@ def test_insert_rejected_takes_priority_only_over_known_native_unknown_status():
         project("order", order(OrderStatus="a", OrderSubmitStatus="4")).fact.status
         is DirectOrderStatus.REJECTED
     )
-    for submit in (None, "0", "3", "5", "6"):
+    for submit in (None, "3", "5", "6"):
         with pytest.raises(CtpGatewayReturnProjectionError):
             project("order", order(OrderStatus="a", OrderSubmitStatus=submit))
     for submit in ("5", "6"):
@@ -308,4 +307,17 @@ def test_signed_simnow_session_ids_project_into_the_binding_identity(session_id)
 def test_out_of_range_or_non_int_session_ids_still_reject(session_id):
     with pytest.raises(CtpGatewayReturnProjectionError):
         project("order", order(SessionID=session_id))
+
+
+@pytest.mark.parametrize("submit_status,expected", [
+    ("0", DirectOrderStatus.SUBMITTED), ("1", DirectOrderStatus.SUBMITTED),
+    ("2", DirectOrderStatus.SUBMITTED), ("4", DirectOrderStatus.REJECTED),
+])
+def test_unknown_status_first_callback_is_submitted_not_invalid(submit_status, expected):
+    # SimNow 63.09 (2026-11-10 10:12): CTP's first OnRtnOrder after an insert
+    # carries OrderStatus 'a' with OrderSubmitStatus '0'; projecting it failed,
+    # the callback batch stayed unacknowledged and admission was denied.
+    result = project("order", order(OrderStatus="a", OrderSubmitStatus=submit_status,
+                                    VolumeTraded=0, VolumeTotal=5))
+    assert result.fact.status is expected
 
