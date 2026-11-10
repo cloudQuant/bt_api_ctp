@@ -414,6 +414,25 @@ class CtpQuoteV2MarketProvider:
         }
 
     def subscribe(self, key: MarketSubscriptionKey, *, generation: str) -> CtpQuoteV2MarketHandle:
+        """Acquire one key; a typed refusal says that no handle exists for it.
+
+        Every ``CtpQuoteV2MarketProviderError`` raised here carries
+        ``subscription_refused = True``: the handle is registered last on each
+        path, so a refused key holds none, and whatever a failed native start
+        or add left behind stays in this provider's own custody (pending start
+        cleanup, or a session failed closed until its existing handles stop
+        it). A caller may therefore drop the key at once instead of retaining
+        an acquisition whose release it could never confirm. In the Gateway
+        that retained acquisition kept the whole market plane not ready for
+        every strategy (SimNow 2026-11-10).
+        """
+        try:
+            return self._subscribe(key, generation)
+        except CtpQuoteV2MarketProviderError as error:
+            error.subscription_refused = True
+            raise
+
+    def _subscribe(self, key: MarketSubscriptionKey, generation: str) -> CtpQuoteV2MarketHandle:
         self._check_owner()
         self._validate_key(key)
         if type(generation) is not str or not generation or generation != generation.strip():

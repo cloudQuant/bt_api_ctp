@@ -2668,3 +2668,28 @@ def test_a_parked_symbol_is_resumed_only_as_the_same_acknowledged_subscription(
     assert stream.quote_v2_service_fail_closed is True
     assert tuple(client.subscribed) == subscribed_before
     assert provider._known_handles[second].active is True
+
+
+def test_a_typed_subscribe_refusal_declares_that_no_handle_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Gateway bridge drops a refused acquisition only on this declaration."""
+    provider, client, streams, first, second = _shared_pair(monkeypatch, max_parked_symbols=0)
+    assert provider.unsubscribe(first) is True  # natively unsubscribed and retired
+    handles_before = dict(provider._active_handles)
+    for attempt in (
+        lambda: provider.subscribe(_key(), generation="hub-generation-a2"),  # retired symbol
+        lambda: provider.subscribe(_instrument_key("IH2612"), generation="again"),  # already held
+        lambda: provider.subscribe(_key(), generation=" "),  # invalid request
+    ):
+        with pytest.raises(CtpQuoteV2MarketProviderError) as refused:
+            attempt()
+        assert refused.value.subscription_refused is True
+        assert provider._active_handles == handles_before
+    assert [refused.value.code] == ["INVALID_CTP_MARKET_KEY"]
+
+    # The declaration belongs to subscribe only.
+    with pytest.raises(CtpQuoteV2MarketProviderError) as other:
+        provider.poll(second, limit=0)
+    assert getattr(other.value, "subscription_refused", None) is None
+    assert provider.close() is True
