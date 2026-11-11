@@ -672,18 +672,30 @@ def test_wait_ready_cancels_pending_settlement_readback():
         client._settlement_account_fingerprint = client._account_fingerprint
         client._settlement_trading_day = client._trading_day
     submissions = []
-    client._api = SimpleNamespace(
-        ReqQrySettlementInfoConfirm=lambda *_args: submissions.append(True) or 0
-    )
+    submitted = threading.Event()
+
+    def submit(*_args):
+        submissions.append(True)
+        submitted.set()
+        return 0
+
+    client._api = SimpleNamespace(ReqQrySettlementInfoConfirm=submit)
     stop_event = threading.Event()
-    cancel = threading.Timer(0.02, stop_event.set)
-    cancel.daemon = True
+
+    def cancel_once_submitted():
+        # Cancel as soon as the readback is out. A fixed 20 ms timer raced the
+        # submission and lost on a loaded machine (the request was then never
+        # sent and the test failed for a reason unrelated to the code).
+        submitted.wait(5)
+        stop_event.set()
+
+    cancel = threading.Thread(target=cancel_once_submitted, daemon=True)
     started = time.monotonic()
     cancel.start()
     try:
         ready = client.wait_ready(timeout=30, should_stop=stop_event.is_set)
     finally:
-        cancel.join(timeout=1)
+        cancel.join(timeout=6)
 
     result = client.get_query_result(client._req_id)
     assert time.monotonic() - started < 1.0
