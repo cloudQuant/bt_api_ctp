@@ -572,6 +572,47 @@ class CtpGatewaySession:
             raise CtpGatewaySessionError("SESSION_CHANGED")
         return self._reader.read_account(generation=generation, timeout=_timeout(timeout, 300.0))
 
+    def begin_read_account(self, *, generation: str, timeout: float) -> Any:
+        """Start ``read_account`` as request and response; no native I/O (I63-E130).
+
+        ``poll_read_account`` sends and watches its queries on later owner
+        ticks; the owner thread never waits for the venue meanwhile.
+        """
+        self._require_connected()
+        if generation != self._service_generation:
+            raise CtpGatewaySessionError("SESSION_CHANGED")
+        return self._reader.begin_read_account(
+            generation=generation, timeout=_timeout(timeout, 300.0)
+        )
+
+    def poll_read_account(self, request: Any) -> Any:
+        """Advance a read begun by ``begin_read_account``; ``None`` while outstanding.
+
+        A session that no longer passes its own checks ends the read failed.
+        """
+        self._check_owner()
+        try:
+            self._require_connected()
+        except BaseException:
+            self._reader.cancel_read_account(request)
+            raise
+        return self._reader.poll_read_account(request)
+
+    def cancel_read_account(self, request: Any) -> None:
+        """Discard a read begun by ``begin_read_account``; its answers are never used."""
+        self._check_owner()
+        self._reader.cancel_read_account(request)
+
+    def query_lane_ready(self) -> bool:
+        """Whether this session's Trader would send a query at once (local state only).
+
+        Neither connects nor validates the session; a session that is not
+        connected has no lane that is ready.
+        """
+        self._check_owner()
+        trader = self._trader
+        return self._state == "connected" and trader is not None and trader.query_lane_idle() is True
+
     def refresh_session(self) -> None:
         self._check_owner()
         if self._state != "connected" or self._feed is None or self._feed.trader_client is not self._trader:

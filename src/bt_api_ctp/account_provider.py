@@ -25,7 +25,7 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from math import isfinite
@@ -149,6 +149,8 @@ class CtpAccountSessionProviderError(RuntimeError):
             "QUERY_METHOD_UNAVAILABLE",
             "QUERY_FAILED",
             "QUERY_INCOMPLETE",
+            "QUERY_PENDING",
+            "QUERY_REQUEST_UNKNOWN",
             "QUERY_SOURCE_UNTRUSTED",
             "QUERY_SCOPE_CHANGED",
             "QUERY_ROW_INVALID",
@@ -170,6 +172,28 @@ class CtpAccountSessionProviderError(RuntimeError):
             code = "CTP_ACCOUNT_PROVIDER_FAILED"
         self.code = code
         super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class CtpAccountReadRequest:
+    """Opaque handle of one ``begin_read_account``; the read's state stays in the provider."""
+
+    generation: str
+
+
+@dataclass(slots=True, eq=False)
+class _PendingAccountRead:
+    request: CtpAccountReadRequest
+    feed: object
+    trader: Any
+    account_key: AccountKey
+    service_generation: str
+    baseline_scope: Any
+    deadline: float
+    index: int = 0
+    # Handle of the Trader query in flight (``TraderClient.begin_query``).
+    query: object | None = None
+    results: dict[str, QueryResult[Any]] = field(default_factory=dict)
 
 
 class CtpReadOnlyAccountSessionProvider:
@@ -251,6 +275,8 @@ class CtpReadOnlyAccountSessionProvider:
         self._last_native_stop_receipt: CtpNativeStopReceipt | None = None
         self._startup_attempt: CtpNativeStartupAttempt | None = None
         self._last_native_startup_stop_receipt: CtpNativeStartupStopReceipt | None = None
+        # The one read begun by ``begin_read_account`` and not ended (I63-E130).
+        self._account_read: _PendingAccountRead | None = None
 
     @property
     def native_owner_created(self) -> bool:
@@ -380,6 +406,7 @@ class CtpReadOnlyAccountSessionProvider:
         # Every generation starts with a fresh execution queue; unconfirmed
         # observations of an earlier generation are re-derived from queries.
         self._execution = None
+        self._account_read = None
         # GatewayAccountSessionWorker reuses the provider after an explicit
         # close-and-reconnect recovery. Reopening is safe only after close has
         # detached the exact old feed/trader above.
@@ -465,6 +492,9 @@ class CtpReadOnlyAccountSessionProvider:
 
     def read_account(self, *, generation: str, timeout: float) -> AccountObservation:
         self._check_owner()
+        if self._account_read is not None:
+            # One read at a time; the outstanding one keeps the query lane.
+            raise CtpAccountSessionProviderError("QUERY_PENDING")
         if (
             self._request_feed is None
             or self._trader is None
@@ -503,18 +533,38 @@ class CtpReadOnlyAccountSessionProvider:
                 result = method(timeout=remaining)
             except Exception:
                 raise CtpAccountSessionProviderError("QUERY_FAILED") from None
-            query_finished = self._monotonic()
-            if not isfinite(query_finished) or query_finished > deadline:
-                raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
-            self._validate_query_result(
-                result,
-                query_name=query_name,
-                trader=self._trader,
-                scope=baseline_scope,
-                now_monotonic=query_finished,
-            )
-            self._validate_account_query_scope(result, query_name, baseline_scope)
+            self._accept_account_query(result, query_name, baseline_scope, deadline)
             results[query_name] = result
+        return self._complete_account_read(
+            feed, account_key, service_generation, baseline_scope, results, deadline
+        )
+
+    def _accept_account_query(
+        self, result: object, query_name: str, scope: object, deadline: float
+    ) -> None:
+        """Check one finished query of an account read, as soon as it ended."""
+        query_finished = self._monotonic()
+        if not isfinite(query_finished) or query_finished > deadline:
+            raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+        self._validate_query_result(
+            result,
+            query_name=query_name,
+            trader=self._trader,
+            scope=scope,
+            now_monotonic=query_finished,
+        )
+        self._validate_account_query_scope(result, query_name, scope)
+
+    def _complete_account_read(
+        self,
+        feed: object,
+        account_key: AccountKey,
+        service_generation: str,
+        baseline_scope: Any,
+        results: dict[str, QueryResult[Any]],
+        deadline: float,
+    ) -> AccountObservation:
+        """The final checks and projection of an account read whose queries all ended."""
         finished = self._monotonic()
         if not isfinite(finished) or finished > deadline:
             raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
@@ -541,6 +591,136 @@ class CtpReadOnlyAccountSessionProvider:
             account_key, results, self._utc_clock(), projector=projector,
             catalog=settings.catalog if settings is not None else None,
             trading_day=baseline_scope.trading_day,
+        )
+
+    # -- the same account read as request and response (I63-E130) -------------
+
+    @property
+    def account_read_pending(self) -> bool:
+        """Whether a read begun by ``begin_read_account`` has not ended (owner state)."""
+        self._check_owner(allow_unbound=True)
+        return self._account_read is not None
+
+    def begin_read_account(
+        self, *, generation: str, timeout: float
+    ) -> CtpAccountReadRequest:
+        """Start the account read of ``read_account`` without native I/O or any wait.
+
+        ``poll_read_account`` sends its three queries (account, positions,
+        orders) one after the other through the Trader's query lane, whose
+        one-query-per-session rule and query spacing it shares with every
+        other query of the session, and applies to each answer and to the
+        whole read exactly the checks of ``read_account``, with the same
+        budget: every answer must arrive within ``timeout`` of this call. One
+        read exists at a time; ``read_account`` refuses while it is outstanding.
+        """
+        self._check_owner()
+        if self._account_read is not None:
+            raise CtpAccountSessionProviderError("QUERY_PENDING")
+        if (
+            self._request_feed is None
+            or self._trader is None
+            or self._account_key is None
+            or self._service_generation is None
+            or generation != self._service_generation
+        ):
+            raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+            or not isfinite(timeout)
+        ):
+            raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+        started = self._monotonic()
+        deadline = started + float(timeout)
+        if not isfinite(started) or not isfinite(deadline):
+            raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+        request = CtpAccountReadRequest(generation)
+        self._account_read = _PendingAccountRead(
+            request, self._request_feed, self._trader, self._account_key,
+            self._service_generation, self._session_scope, deadline,
+        )
+        return request
+
+    def poll_read_account(self, request: CtpAccountReadRequest) -> AccountObservation | None:
+        """Advance a read begun by ``begin_read_account``; never sleeps or waits.
+
+        ``None``: still outstanding. Otherwise the observation ``read_account``
+        would have built. A failed read raises the finite error ``read_account``
+        raises for the same cause and is discarded: a read that ran out of its
+        budget, or whose session, scope or generation changed meanwhile, ends
+        failed and none of its answers is ever used.
+        """
+        self._check_owner()
+        pending = self._account_read
+        if pending is None or pending.request is not request:
+            raise CtpAccountSessionProviderError("QUERY_REQUEST_UNKNOWN")
+        try:
+            observation = self._advance_account_read(pending)
+        except BaseException:
+            self._discard_account_read()
+            raise
+        if observation is not None:
+            self._account_read = None
+        return observation
+
+    def cancel_read_account(self, request: CtpAccountReadRequest) -> None:
+        """Discard a read begun by ``begin_read_account``; another handle is ignored.
+
+        A query already sent is sealed locally; CTP has no query cancel, so the
+        session's query lane stays reserved until the venue's last packet.
+        """
+        self._check_owner()
+        pending = self._account_read
+        if pending is not None and pending.request is request:
+            self._discard_account_read()
+
+    def _discard_account_read(self) -> None:
+        pending, self._account_read = self._account_read, None
+        if pending is not None and pending.query is not None:
+            query, pending.query = pending.query, None
+            pending.trader.cancel_query(query)
+
+    def _advance_account_read(self, pending: _PendingAccountRead) -> AccountObservation | None:
+        names = tuple(_QUERY_METHODS)
+        while pending.index < len(names):
+            # The provider still serves the exact session the read began on.
+            if (
+                self._request_feed is not pending.feed
+                or self._trader is not pending.trader
+                or self._account_key is not pending.account_key
+                or self._service_generation != pending.service_generation
+                or not _same_session_scope(pending.baseline_scope, self._session_scope)
+            ):
+                raise CtpAccountSessionProviderError("QUERY_SCOPE_CHANGED")
+            now = self._monotonic()
+            if not isfinite(now) or now >= pending.deadline:
+                raise CtpAccountSessionProviderError("QUERY_BUDGET_EXCEEDED")
+            query_name = names[pending.index]
+            trader = pending.trader
+            if pending.query is None:
+                begin = getattr(trader, "begin_query", None)
+                if not callable(begin):
+                    raise CtpAccountSessionProviderError("QUERY_METHOD_UNAVAILABLE")
+                try:
+                    pending.query = begin(query_name, timeout=pending.deadline - now)
+                except Exception:
+                    raise CtpAccountSessionProviderError("QUERY_FAILED") from None
+            try:
+                result = trader.poll_query(pending.query)
+            except Exception:
+                raise CtpAccountSessionProviderError("QUERY_FAILED") from None
+            if result is None:
+                return None  # the next poll checks the budget first
+            # The Trader retired the finished query's handle.
+            pending.query = None
+            self._accept_account_query(result, query_name, pending.baseline_scope, pending.deadline)
+            pending.results[query_name] = result
+            pending.index += 1
+        return self._complete_account_read(
+            pending.feed, pending.account_key, pending.service_generation,
+            pending.baseline_scope, pending.results, pending.deadline,
         )
 
     def borrow_request_feed(self) -> object:
@@ -601,6 +781,8 @@ class CtpReadOnlyAccountSessionProvider:
         """Stop the exact native trader; false leaves its reference in custody."""
 
         self._check_owner(allow_unbound=True)
+        # An outstanding request/response read never completes after a close.
+        self._discard_account_read()
         feed = self._request_feed
         try:
             feed_trader = None if feed is None else getattr(feed, "_trader", None)

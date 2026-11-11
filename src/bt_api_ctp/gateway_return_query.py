@@ -20,14 +20,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any
 
-from bt_api_ctp.ctp.client import (
-    TraderClient,
-    _query_filter_items,
-    _read_native_query_filter_items,
-    _read_native_query_parameter_items,
-    _TraderSpi,
-)
-from bt_api_ctp.ctp.ctp_structs_query import CThostFtdcQryOrderField, CThostFtdcQryTradeField
+from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.query import (
     QueryResult,
     _QUERY_EVIDENCE_MAX_TTL_SECONDS,
@@ -110,11 +103,9 @@ class CtpGatewayReturnQueryRequest:
 class _PendingRead:
     request: CtpGatewayReturnQueryRequest
     kind: str
-    timeout: float
     binding: CtpQuerySessionBinding
-    send_by: float
-    accumulator: Any = None
-    answer_by: float = 0.0
+    # The Trader's request/response query (``TraderClient.begin_query``) until it ended.
+    query: Any = None
     batch: CtpGatewayReturnQueryBatch | None = None
 
 
@@ -508,10 +499,11 @@ class CtpGatewayReturnQueryReader:
 
         ``poll_read`` sends the query once this Trader has no other query
         outstanding and its query interval has passed, then watches for the
-        answer. A read that cannot be sent within ``timeout`` plus one query
-        interval, or is not answered within ``timeout`` after it was sent,
-        fails like ``read``. Only one read exists at a time: beginning another
-        discards the previous one.
+        answer: ``TraderClient.begin_query``, whose lane and spacing every
+        query of the session shares. A read that cannot be sent within
+        ``timeout`` plus one query interval, or is not answered within
+        ``timeout`` after it was sent, fails like ``read``. Only one read
+        exists at a time: beginning another discards the previous one.
         """
         self._check_owner()
         self._ticket = None
@@ -523,10 +515,12 @@ class CtpGatewayReturnQueryReader:
         if (type(interval) not in (int, float) or not math.isfinite(interval)
                 or not 0 <= interval <= 300):
             raise CtpGatewayReturnQueryError("INVALID_CONFIGURATION")
+        try:
+            query = self._trader.begin_query(kind, timeout=float(timeout), max_records=_MAX_ROWS)
+        except Exception:
+            raise CtpGatewayReturnQueryError("QUERY_FAILED") from None
         request = CtpGatewayReturnQueryRequest(kind)
-        self._pending = _PendingRead(
-            request, kind, float(timeout), binding, time.monotonic() + timeout + interval
-        )
+        self._pending = _PendingRead(request, kind, binding, query)
         return request
 
     def poll_read(self, request: CtpGatewayReturnQueryRequest) -> bool:
@@ -543,11 +537,12 @@ class CtpGatewayReturnQueryReader:
         if pending.batch is not None:
             return True
         try:
-            if pending.accumulator is None and not self._send_pending(pending):
-                return False
-            result = self._pending_result(pending)
+            with self._trader._query_state_lock:
+                self._capture_locked()
+            result = self._trader.poll_query(pending.query)
             if result is None:
                 return False
+            pending.query = None  # the Trader retired the ended query
             pending.batch = self._issue_batch(pending.kind, pending.binding, result)
         except CtpGatewayReturnQueryError:
             self._discard_pending()
@@ -576,144 +571,9 @@ class CtpGatewayReturnQueryReader:
 
     def _discard_pending(self) -> None:
         pending, self._pending = self._pending, None
-        if pending is not None and pending.accumulator is not None:
-            with self._trader._query_state_lock:
-                self._seal_locked(pending.accumulator, "local_cancel", -1, "query_cancelled")
-
-    @staticmethod
-    def _seal_locked(
-        accumulator: Any,
-        origin: str | None = None,
-        error_code: int | None = None,
-        message: str = "",
-        *,
-        timed_out: bool = False,
-    ) -> None:
-        """End an accumulator as ``TraderClient._execute_query`` does; a received
-        final packet keeps its own outcome. Caller holds ``_query_state_lock``."""
-        if origin is not None and not (
-            accumulator.event.is_set()
-            or accumulator.is_last_seen
-            or accumulator.error_code not in (None, 0)
-        ):
-            accumulator.record_completion_origin(origin)
-            if error_code is not None:
-                accumulator.error_code = error_code
-            accumulator.error_message = message
-            accumulator.timed_out = timed_out
-        if accumulator.completed_at_utc is None:
-            accumulator.completed_at_utc = datetime.now(_UTC)
-            accumulator.completed_monotonic = time.monotonic()
-        accumulator.sealed = True
-        accumulator.event.set()
-
-    def _send_pending(self, pending: _PendingRead) -> bool:
-        """Send the query when the Trader's query lane is free; False: try later.
-
-        The lane rules are those of ``TraderClient._execute_query``: one native
-        query outstanding per session and the query interval between sends,
-        shared with every other query of this Trader. A busy lane is left to a
-        later poll instead of being waited for.
-        """
-        trader = self._trader
-        if time.monotonic() >= pending.send_by:
-            raise CtpGatewayReturnQueryError("QUERY_SLOT_BUSY")
-        if getattr(trader._native_callback_thread_state, "depth", 0) > 0:
-            return False
-        if not trader._query_lock.acquire(blocking=False):
-            return False
-        try:
-            if not trader._query_state_lock.acquire(blocking=False):
-                return False
-            try:
-                self._capture_locked()
-                if (
-                    trader._query_slot_blocking_locked()
-                    or time.monotonic() - trader._last_query_submitted_at < trader._query_interval
-                ):
-                    return False
-                api = trader._api
-                method = "ReqQryOrder" if pending.kind == "orders" else "ReqQryTrade"
-                try:
-                    native = (
-                        CThostFtdcQryOrderField()
-                        if pending.kind == "orders"
-                        else CThostFtdcQryTradeField()
-                    )
-                    intent = _full_day_filters(
-                        pending.kind, trader._bound_broker_id, trader._bound_user_id
-                    )
-                    for name, value in intent.items():
-                        setattr(native, name, value)
-                    intent_items = _query_filter_items(intent)
-                    filter_items = _read_native_query_filter_items(native, intent_items)
-                    parameter_items = _read_native_query_parameter_items(native, ())
-                    if not callable(getattr(api, method, None)):
-                        raise ValueError
-                except Exception:
-                    raise CtpGatewayReturnQueryError("QUERY_PREFLIGHT_FAILED") from None
-                accumulator = trader._new_query_accumulator(
-                    pending.kind,
-                    dict(filter_items),
-                    request_intent_filters=dict(intent_items),
-                    request_parameters=dict(parameter_items),
-                    request_intent_parameters={},
-                    record_limit=_MAX_ROWS,
-                )
-                # Reserve the lane before releasing it, as the blocking path does.
-                trader._query_native_inflight = (
-                    accumulator.request_id,
-                    pending.kind,
-                    accumulator.connection_generation,
-                )
-                trader._last_query_submitted_at = time.monotonic()
-                pending.accumulator = accumulator
-            finally:
-                trader._query_state_lock.release()
-        finally:
-            trader._query_lock.release()
-        # Native code runs with every SDK lock released; a fake or vendor Req
-        # may deliver its callbacks synchronously on this thread.
-        try:
-            trader._record_request(f"query_{pending.kind}")
-            sent = trader._invoke_session_native_request(
-                api, method, native, accumulator.request_id
-            )
-            if sent is not None and type(sent) is not int:
-                raise TypeError
-        except Exception:
-            with trader._query_state_lock:
-                # A failed send is not tracked as outstanding.
-                trader._release_query_slot_locked(accumulator.request_id, pending.kind)
-                self._seal_locked(accumulator, "submit_exception", -4, "query_submit_exception")
-            raise CtpGatewayReturnQueryError("QUERY_SUBMIT_FAILED") from None
-        accumulator.submit_code = sent
-        if sent not in (None, 0):
-            # A rejected Req (-1/-2/-3) never became a vendor-side request.
-            with trader._query_state_lock:
-                trader._release_query_slot_locked(accumulator.request_id, pending.kind)
-                self._seal_locked(accumulator, "submit_rejected", sent, "query_submit_rejected")
-            raise CtpGatewayReturnQueryError(_untrusted_code(accumulator.result()))
-        pending.answer_by = time.monotonic() + pending.timeout
-        return True
-
-    def _pending_result(self, pending: _PendingRead) -> QueryResult | None:
-        """The sent query's result once answered or timed out; None while waiting."""
-        accumulator = pending.accumulator
-        with self._trader._query_state_lock:
-            self._capture_locked()
-            if not (
-                accumulator.event.is_set()
-                or accumulator.is_last_seen
-                or accumulator.error_code not in (None, 0)
-            ):
-                if time.monotonic() < pending.answer_by:
-                    return None
-                # Sealed under the callback lock: a later packet is only late.
-                self._seal_locked(accumulator, "timeout", None, "query_timeout", timed_out=True)
-            else:
-                self._seal_locked(accumulator)
-            return accumulator.result()
+        if pending is not None and pending.query is not None:
+            # A sent query is sealed locally; the Trader keeps the vendor lane.
+            self._trader.cancel_query(pending.query)
 
     def _issue_batch(
         self, kind: str, binding: CtpQuerySessionBinding, result: object

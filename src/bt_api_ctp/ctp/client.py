@@ -2404,6 +2404,38 @@ class _AsyncInstrumentQuery:
     submit_finished: float | None = None
 
 
+class CtpQueryHandle:
+    """Opaque owner-bound token of one request/response query (I63-E130)."""
+
+    __slots__ = ()
+
+
+# Unfiltered whole-account queries that ``TraderClient.begin_query`` offers.
+_NONBLOCKING_QUERY_KINDS = frozenset({"account", "positions", "orders", "trades"})
+
+
+@dataclass
+class _NonblockingQuery:
+    """One whole-account query sent and answered over several owner polls."""
+
+    pid: int
+    thread: threading.Thread
+    kind: str
+    api: Any
+    spi: Any
+    session_api: Any
+    login: Any
+    generation: int
+    fingerprint: str
+    trading_day: str
+    source_tags: Any
+    timeout: float
+    send_by: float
+    record_limit: int | None
+    answer_by: float = 0.0
+    accumulator: _QueryAccumulator | None = None
+
+
 # ===========================================================================
 #  MdClient - 行情客户端
 # ===========================================================================
@@ -5685,6 +5717,7 @@ class TraderClient:
         self._gateway_return_environment = None
         self._query_history: dict[int, _QueryAccumulator] = {}
         self._async_instrument_queries: dict[CtpInstrumentQueryHandle, _AsyncInstrumentQuery] = {}
+        self._nonblocking_queries: dict[CtpQueryHandle, _NonblockingQuery] = {}
         # The vendor keeps one outstanding ReqQry* per session until its
         # terminal packet, even after a local timeout sealed the accumulator.
         # ``(request_id, request_type, connection_generation)`` or ``None``.
@@ -12192,6 +12225,282 @@ class TraderClient:
             return True
         finally:
             self._query_state_lock.release()
+
+    # ------------------------------------------------------------------
+    # whole-account queries as request and response (I63-E130)
+    # ------------------------------------------------------------------
+    def query_lane_idle(self) -> bool:
+        """Whether a query sent now would leave at once (I63-E130).
+
+        True when no thread holds this Trader's query lane, no native query of
+        the current connection is outstanding and the query interval has passed
+        since the last send. Local state only; never waits or sends.
+        """
+        if self._query_lock.locked() or not self._query_state_lock.acquire(blocking=False):
+            return False
+        try:
+            return (
+                not self._query_slot_blocking_locked()
+                and time.monotonic() - self._last_query_submitted_at >= self._query_interval
+            )
+        finally:
+            self._query_state_lock.release()
+
+    def _nonblocking_request(self, kind: str) -> tuple[Any, str, dict[str, str]]:
+        """Native field, method and filters of the unfiltered ``query_<kind>_result``."""
+        broker_id, investor_id = self._bound_broker_id, self._bound_user_id
+        if kind == "account":
+            field, method = CThostFtdcQryTradingAccountField(), "ReqQryTradingAccount"
+            intent = native_account_query_filters(
+                "account", broker_id=broker_id, investor_id=investor_id
+            )
+        elif kind == "positions":
+            field, method = CThostFtdcQryInvestorPositionField(), "ReqQryInvestorPosition"
+            intent = native_account_query_filters(
+                "positions", broker_id=broker_id, investor_id=investor_id,
+                instrument_id="", exchange_id="",
+            )
+        elif kind == "orders":
+            field, method = CThostFtdcQryOrderField(), "ReqQryOrder"
+            intent = native_account_query_filters(
+                "orders", broker_id=broker_id, investor_id=investor_id,
+                instrument_id="", exchange_id="", order_sys_id="",
+            )
+        else:
+            field, method = CThostFtdcQryTradeField(), "ReqQryTrade"
+            intent = {
+                "BrokerID": broker_id, "InvestorID": investor_id, "InstrumentID": "",
+                "ExchangeID": "", "TradeID": "", "TradeTimeStart": "", "TradeTimeEnd": "",
+            }
+        for name, value in intent.items():
+            setattr(field, name, value)
+        return field, method, intent
+
+    def _nonblocking_session_current_locked(self, state: _NonblockingQuery) -> bool:
+        return (
+            self._api is state.api
+            and self._spi is state.spi
+            and self._session_native_api is state.session_api
+            and self._connection_generation == state.generation
+            and self._account_fingerprint == state.fingerprint
+            and self._trading_day == state.trading_day
+            and self._current_login_identity_locked() is state.login
+            and self._query_source_tags_locked() == state.source_tags
+        )
+
+    def _nonblocking_owned(self, handle: CtpQueryHandle) -> _NonblockingQuery | None:
+        state = (
+            self._nonblocking_queries.get(handle) if type(handle) is CtpQueryHandle else None
+        )
+        if state is not None and (
+            state.pid != os.getpid() or state.thread is not threading.current_thread()
+        ):
+            raise RuntimeError("ctp_query_owner_mismatch")
+        return state
+
+    def _nonblocking_finish_locked(
+        self, handle: CtpQueryHandle, state: _NonblockingQuery, *, origin: str | None = None,
+        error_code: int | None = None, message: str = "", timed_out: bool = False,
+        unsupported: bool = False, force: bool = False,
+    ) -> QueryResult[Any]:
+        """Seal and retire a query (``_query_state_lock`` held).
+
+        A received final packet keeps its own outcome unless ``force``; a query
+        that never reached the venue stays out of the shared callback history.
+        """
+        self._nonblocking_queries.pop(handle, None)
+        accumulator = state.accumulator
+        if accumulator is None:
+            accumulator = _QueryAccumulator(
+                request_type=state.kind, request_id=self._next_request_id(),
+                connection_generation=state.generation, account_fingerprint=state.fingerprint,
+                started_at_utc=datetime.now(timezone.utc), started_monotonic=time.monotonic(),
+                record_limit=state.record_limit,
+            )
+            state.accumulator = accumulator
+            force = True
+        terminal = (
+            accumulator.event.is_set()
+            or accumulator.is_last_seen
+            or accumulator.error_code not in (None, 0)
+        )
+        if origin is not None and (force or not terminal):
+            accumulator.record_completion_origin(origin)
+            if error_code is not None:
+                accumulator.error_code = error_code
+            accumulator.error_message = message
+            accumulator.timed_out = timed_out
+            accumulator.unsupported = unsupported
+        if accumulator.completed_at_utc is None:
+            accumulator.completed_at_utc = datetime.now(timezone.utc)
+            accumulator.completed_monotonic = time.monotonic()
+        accumulator.sealed = True
+        accumulator.event.set()
+        return accumulator.result()
+
+    def begin_query(
+        self, kind: str, *, timeout: float, max_records: int | None = None
+    ) -> CtpQueryHandle:
+        """Reserve one unfiltered whole-account query without native I/O or any wait.
+
+        ``kind`` is ``account``, ``positions``, ``orders`` or ``trades``: the
+        native request and filters of ``query_<kind>_result`` called without
+        filter arguments. ``poll_query`` sends it once this session has no
+        native query outstanding and its query interval has passed (the lane and
+        spacing every query of this Trader shares; a busy lane is retried by a
+        later poll, never waited for), then watches for the answer. A query
+        that cannot be sent within ``timeout`` plus one query interval, or is
+        not answered within ``timeout`` after it was sent, ends failed as the
+        blocking query does (I63-E130). Owner-bound to the calling thread.
+        """
+        if type(kind) is not str or kind not in _NONBLOCKING_QUERY_KINDS:
+            raise ValueError("ctp_query_kind_invalid")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300:
+            raise ValueError("ctp_query_timeout_invalid")
+        if max_records is not None and (
+            type(max_records) is not int or not 1 <= max_records <= _MAX_QUERY_RECORDS
+        ):
+            raise ValueError("ctp_query_record_limit_invalid")
+        with self._query_state_lock:
+            login = self._current_login_identity_locked()
+            api, spi = self._api, self._spi
+            if login is None or api is None or spi is None or self._session_native_api is not api:
+                raise RuntimeError("ctp_query_session_unavailable")
+            if len(self._nonblocking_queries) >= 16:
+                raise RuntimeError("ctp_query_capacity")
+            handle = CtpQueryHandle()
+            self._nonblocking_queries[handle] = _NonblockingQuery(
+                os.getpid(), threading.current_thread(), kind, api, spi,
+                self._session_native_api, login, self._connection_generation,
+                self._account_fingerprint, self._trading_day, self._query_source_tags_locked(),
+                float(timeout), time.monotonic() + float(timeout) + self._query_interval,
+                max_records,
+            )
+        return handle
+
+    def poll_query(self, handle: CtpQueryHandle) -> QueryResult[Any] | None:
+        """Advance a query begun by ``begin_query``; never sleeps or waits (I63-E130).
+
+        ``None``: not sent yet or not answered yet. Otherwise the sealed result,
+        trusted only by its own checks, and the handle is retired. A changed
+        session ends the query as disconnected; a vendor Req entered by a poll
+        cannot be interrupted and may itself block in native code.
+        """
+        state = self._nonblocking_owned(handle)
+        if state is None:
+            raise ValueError("ctp_query_handle_invalid")
+        if state.accumulator is None:
+            if time.monotonic() >= state.send_by:
+                with self._query_state_lock:
+                    return self._nonblocking_finish_locked(
+                        handle, state, origin="query_slot_busy", message="query_slot_busy",
+                        timed_out=True)
+            if getattr(self._native_callback_thread_state, "depth", 0) > 0:
+                return None
+            if not self._query_lock.acquire(blocking=False):
+                return None
+            try:
+                if not self._query_state_lock.acquire(blocking=False):
+                    return None
+                try:
+                    if not self._nonblocking_session_current_locked(state):
+                        return self._nonblocking_finish_locked(
+                            handle, state, origin="front_disconnected", error_code=-2,
+                            message="connection_lost")
+                    if (
+                        self._query_slot_blocking_locked()
+                        or time.monotonic() - self._last_query_submitted_at < self._query_interval
+                    ):
+                        return None
+                    api = state.api
+                    try:
+                        field, method, intent = self._nonblocking_request(state.kind)
+                        intent_items = _query_filter_items(intent)
+                        filter_items = _read_native_query_filter_items(field, intent_items)
+                        parameter_items = _read_native_query_parameter_items(field, ())
+                        if not callable(getattr(api, method, None)):
+                            raise ValueError("native_query_unsupported")
+                    except Exception:
+                        return self._nonblocking_finish_locked(
+                            handle, state, origin="local_preflight", error_code=-3,
+                            message="native_query_fields_unsupported", unsupported=True)
+                    accumulator = self._new_query_accumulator(
+                        state.kind, dict(filter_items),
+                        request_intent_filters=dict(intent_items),
+                        request_parameters=dict(parameter_items),
+                        request_intent_parameters={},
+                        record_limit=state.record_limit,
+                    )
+                    # Reserve the lane before releasing it, as the blocking query does.
+                    self._query_native_inflight = (
+                        accumulator.request_id, state.kind, accumulator.connection_generation
+                    )
+                    self._last_query_submitted_at = time.monotonic()
+                    state.accumulator = accumulator
+                finally:
+                    self._query_state_lock.release()
+            finally:
+                self._query_lock.release()
+            # Native code runs with every SDK lock released; a fake or vendor
+            # Req may deliver its callbacks synchronously on this thread.
+            try:
+                self._record_request(f"query_{state.kind}")
+                sent = self._invoke_session_native_request(
+                    api, method, field, accumulator.request_id
+                )
+                if sent is not None and type(sent) is not int:
+                    raise TypeError("native query return code invalid")
+            except Exception:
+                with self._query_state_lock:
+                    # A failed send is not tracked as outstanding.
+                    self._release_query_slot_locked(accumulator.request_id, state.kind)
+                    return self._nonblocking_finish_locked(
+                        handle, state, origin="submit_exception", error_code=-4,
+                        message="query_submit_exception")
+            accumulator.submit_code = sent
+            if sent not in (None, 0):
+                # A rejected Req (-1/-2/-3) never became a vendor-side request.
+                with self._query_state_lock:
+                    self._release_query_slot_locked(accumulator.request_id, state.kind)
+                    return self._nonblocking_finish_locked(
+                        handle, state, origin="submit_rejected", error_code=sent,
+                        message="query_submit_rejected")
+            state.answer_by = time.monotonic() + state.timeout
+        with self._query_state_lock:
+            accumulator = state.accumulator
+            if not self._nonblocking_session_current_locked(state):
+                # An answer of a replaced session is never offered as current.
+                return self._nonblocking_finish_locked(
+                    handle, state, origin="front_disconnected", error_code=-2,
+                    message="connection_lost", force=True)
+            if (
+                accumulator.event.is_set()
+                or accumulator.is_last_seen
+                or accumulator.error_code not in (None, 0)
+            ):
+                return self._nonblocking_finish_locked(handle, state)
+            if time.monotonic() < state.answer_by:
+                return None
+            # Sealed under the callback lock: a later packet only counts as late.
+            return self._nonblocking_finish_locked(
+                handle, state, origin="timeout", message="query_timeout", timed_out=True)
+
+    def cancel_query(self, handle: CtpQueryHandle) -> None:
+        """Discard a query begun by ``begin_query``; a sent one is sealed locally.
+
+        CTP has no query cancel: the session keeps its query lane reserved until
+        the venue's last packet or a new connection, as after a local timeout.
+        A finished or unknown handle is ignored.
+        """
+        state = self._nonblocking_owned(handle)
+        if state is None:
+            return
+        with self._query_state_lock:
+            if state.accumulator is None:
+                self._nonblocking_queries.pop(handle, None)
+                return
+            self._nonblocking_finish_locked(
+                handle, state, origin="local_cancel", error_code=-1, message="query_cancelled")
 
     def query_instruments_result(
         self,
