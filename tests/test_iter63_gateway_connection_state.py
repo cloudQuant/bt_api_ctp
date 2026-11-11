@@ -426,6 +426,64 @@ def test_refresh_normalizes_only_exact_connection_error(prepared, monkeypatch, s
     assert session.close()
 
 
+def _entry_points(session):
+    """Every owner call that starts with the session's connected check."""
+    return {
+        "account_binding": lambda: session.account_binding,
+        "read_account": lambda: session.read_account(generation=session._service_generation, timeout=1),
+        "begin_read_account": lambda: session.begin_read_account(
+            generation=session._service_generation, timeout=1),
+    }
+
+
+@pytest.mark.parametrize("entry", ["account_binding", "read_account", "begin_read_account"])
+def test_a_link_drop_seen_by_the_connected_check_is_a_finite_session_code(prepared, monkeypatch, entry):
+    """I63-E147: the owner samples the connection, then calls into the session. A front that
+    drops in between used to surface here as a raw connection error, which the owner does not
+    recognise as a link transition: its maintenance stopped for good."""
+    from bt_api_base.exceptions import ExchangeConnectionError
+    session, feed, _, _, _, _ = _open(prepared)
+
+    def broken():
+        raise ExchangeConnectionError("CTP", "synthetic private detail")
+    scope_reader = feed.get_query_session_scope
+    monkeypatch.setattr(feed, "get_query_session_scope", broken)
+    with pytest.raises(CtpGatewaySessionError) as caught:
+        _entry_points(session)[entry]()
+    assert caught.value.code == "SESSION_UNAVAILABLE" and str(caught.value) == "SESSION_UNAVAILABLE"
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__ is True
+    monkeypatch.setattr(feed, "get_query_session_scope", scope_reader)
+    assert session.account_binding                      # the session itself is intact afterwards
+    assert session.close()
+
+
+def test_the_connected_check_refuses_a_feed_that_is_not_the_sessions_own(prepared, monkeypatch):
+    session, feed, _, _, _, _ = _open(prepared)
+    borrow = session._reader.borrow_request_feed
+    monkeypatch.setattr(session._reader, "borrow_request_feed", lambda: object())
+    with pytest.raises(CtpGatewaySessionError, match="^SESSION_CHANGED$"):
+        session.account_binding
+    monkeypatch.setattr(session._reader, "borrow_request_feed", borrow)
+    assert session.close()
+
+
+@pytest.mark.parametrize("kind", ["value", "authentication"])
+def test_the_connected_check_preserves_other_exceptions(prepared, monkeypatch, kind):
+    from bt_api_base.exceptions import AuthenticationError
+    session, feed, _, _, _, _ = _open(prepared)
+    error = ValueError("synthetic") if kind == "value" else AuthenticationError("CTP")
+
+    def broken():
+        raise error
+    scope_reader = feed.get_query_session_scope
+    monkeypatch.setattr(feed, "get_query_session_scope", broken)
+    with pytest.raises(type(error)) as caught:
+        session.account_binding
+    assert caught.value is error
+    monkeypatch.setattr(feed, "get_query_session_scope", scope_reader)
+    assert session.close()
+
+
 @pytest.mark.parametrize("stage", ["reader", "feed"])
 @pytest.mark.parametrize("kind", ["value", "authentication"])
 def test_refresh_preserves_other_exceptions(prepared, monkeypatch, stage, kind):

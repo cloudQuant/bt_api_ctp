@@ -219,7 +219,17 @@ class CtpGatewaySession:
         if self._state != "connected":
             raise CtpGatewaySessionError("SESSION_NOT_CONNECTED")
         self._flow.verify_root()
-        if self._reader.borrow_request_feed() is not self._feed or self._feed.trader_client is not self._trader:
+        try:
+            borrowed = self._reader.borrow_request_feed()
+        except ExchangeConnectionError as exc:
+            # The link dropped between the caller's connection sample and this check: the same
+            # finite code as refresh_session, which the owner treats as a link transition and
+            # waits out. Before, the raw error stopped the owner's maintenance for good.
+            # AuthenticationError is a subclass, but is not a link transition.
+            if type(exc) is not ExchangeConnectionError:
+                raise
+            raise CtpGatewaySessionError("SESSION_UNAVAILABLE") from None
+        if borrowed is not self._feed or self._feed.trader_client is not self._trader:
             raise CtpGatewaySessionError("SESSION_CHANGED")
 
     def _checked_feed(self) -> CtpRequestDataFuture:
