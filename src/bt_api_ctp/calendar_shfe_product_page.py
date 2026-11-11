@@ -17,7 +17,8 @@ _MAX_SCRIPT = 512 * 1024
 _MAX_RECORDS = 100
 _MAX_FIELDS = 100
 _MAX_FIELD = 8192
-_PATH = re.compile(r"/products/(futures|option)/(?:[a-z0-9]+/)+[a-z0-9]+_([fo])/")
+_PATH = re.compile(r"/products/(futures|option)/(?:[a-z0-9]+/|index_f/)+[a-z0-9]+_([fo])/")
+_INDEX_FUTURE_PATH = re.compile(r"/products/futures/index_f/[a-z0-9]+_f/\Z", re.ASCII)
 _DECLARATION = re.compile(r"\blet\s+(pageList(?:_o)?)\s*=")
 _FUTURE_CODE = re.compile(r"[A-Z]{1,5}\Z")
 _OPTION_CODE = re.compile(
@@ -105,6 +106,8 @@ def _url_kind(url):
         ("futures", "f"),
         ("option", "o"),
     }:
+        return None
+    if "index_f" in p.path.split("/") and _INDEX_FUTURE_PATH.fullmatch(p.path) is None:
         return None
     return "future" if match.group(1) == "futures" else "option"
 

@@ -9,6 +9,7 @@ from bt_api_ctp.calendar_shfe_product_page import MAX_BYTES, parse_shfe_product_
 
 FUTURE = "https://www.shfe.com.cn/products/futures/metal/nonferrousmetal/cu_f/"
 OPTION = "https://www.shfe.com.cn/products/option/nonferrousmetal/cu_o/"
+INDEX_FUTURE = "https://www.shfe.com.cn/products/futures/index_f/ec_f/"
 
 
 def page(rows, kind="future"):
@@ -39,6 +40,15 @@ def test_future_retains_raw_fields_and_distinguishes_date_from_validity():
     assert row.effective_date == "UNKNOWN"
     assert dict(row.fields)["note"] == '原样保留 [ ] , 和 \\" 字符'
     assert dict(row.fields)["TradingHours"] == "合成时间及其他时间"
+
+
+def test_explicit_index_future_path_is_supported_without_venue_inference():
+    html = page([record("EC", venue="", ListingExchange1="上海国际能源交易中心")])
+    result = parse_shfe_product_page(source_url=INDEX_FUTURE, html=html)
+    assert result.status == "CANDIDATE"
+    assert result.records[0].symbol == "EC" and result.records[0].venue == "INE"
+    assert result.source_authentication == "NOT_PROVEN"
+    assert result.records[0].effective_date == "UNKNOWN"
 
 
 def test_option_venue_is_read_from_record_and_history_is_preserved():
@@ -159,6 +169,13 @@ def test_duplicate_declarations_in_separate_scripts_or_external_script_are_rejec
         FUTURE + "#x",
         "https://www.shfe.com.cn/products/futures/../cu_f/",
         "https://www.shfe.com.cn/products/futures/metal/cu_o/",
+        "https://www.shfe.com.cn/products/option/index_f/ec_o/",
+        "https://www.shfe.com.cn/products/futures/metal/index_f/ec_f/",
+        "https://www.shfe.com.cn/products/futures/index_f/metal/ec_f/",
+        "https://www.shfe.com.cn/products/futures/index_f/../ec_f/",
+        "https://www.shfe.com.cn/products/futures/index_f/%65c_f/",
+        "https://www.shfe.com.cn/products/futures/index_f//ec_f/",
+        "https://www.shfe.com.cn/products/futures/index_f/ec_f/?query=1",
     ],
 )
 def test_source_url_is_exactly_bounded(url):
