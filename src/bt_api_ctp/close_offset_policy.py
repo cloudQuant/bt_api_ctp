@@ -1,18 +1,20 @@
 """CTP venue rule: which exchanges need an explicit today/yesterday close.
 
 SHFE and INE reject an ordinary ``close`` for today's position: the order must
-say ``close_today`` or ``close_yesterday``. On CZCE and DCE an ordinary
-``close`` is accepted and the venue chooses the bucket. The sets equal the ones
-of ``ctp_close_plan``; the rule for CFFEX and GFEX has not been established, so
-those exchanges are refused instead of guessed. This is a provider fact shared
-with the Gateway strategy ledger binding; it grants no authority and proves no
-account state.
+say ``close_today`` or ``close_yesterday``. On CZCE, DCE, CFFEX and GFEX an
+ordinary ``close`` is accepted and the venue chooses the bucket. CFFEX and GFEX
+were added by decision D63-51 after the SimNow counter accepted an ordinary
+close of a position opened the same day on each of them (2026-11-11). The split
+set equals the one of ``ctp_close_plan``; that planner serves the direct path
+and keeps its own, narrower generic set. Any other exchange is refused instead
+of guessed. This is a provider fact shared with the Gateway strategy ledger
+binding; it grants no authority and proves no account state.
 """
 
 from __future__ import annotations
 
 SPLIT_CLOSE_EXCHANGES = frozenset(("SHFE", "INE"))
-GENERIC_CLOSE_EXCHANGES = frozenset(("CZCE", "DCE"))
+GENERIC_CLOSE_EXCHANGES = frozenset(("CZCE", "DCE", "CFFEX", "GFEX"))
 KNOWN_EXCHANGES = SPLIT_CLOSE_EXCHANGES | GENERIC_CLOSE_EXCHANGES
 
 
