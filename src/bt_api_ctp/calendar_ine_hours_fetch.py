@@ -38,7 +38,9 @@ else:
 SOURCE = "https://www.ine.cn/services/calenderandholidays/tradinghours/"
 _HOST = "www.ine.cn"
 _PATH = "/services/calenderandholidays/tradinghours/"
+_HOLIDAY_PATH = "/services/calenderandholidays/holiday/"
 _SCHEMA = "bt_api_ctp.ine-hours-raw/1"
+_HOLIDAY_SCHEMA = "bt_api_ctp.ine-holiday-raw/1"
 _CHILD_LIMIT = 2 * 1024 * 1024
 _CHILD_STATUSES = frozenset(
     {
@@ -83,12 +85,15 @@ def _fetch_bytes(
     max_bytes: int,
     *,
     connection_factory: Callable = http.client.HTTPSConnection,
+    _holiday: bool = False,
 ) -> tuple[str, Optional[bytes]]:
     connection = None
     try:
         context = ssl.create_default_context()
         connection = connection_factory(_HOST, timeout=connect_timeout, context=context)
-        connection.request("GET", _PATH, headers={"Accept-Encoding": "identity"})
+        connection.request(
+            "GET", _HOLIDAY_PATH if _holiday else _PATH, headers={"Accept-Encoding": "identity"}
+        )
         if connection.sock is not None:
             connection.sock.settimeout(read_timeout)
         response = connection.getresponse()
@@ -138,14 +143,14 @@ def _fetch_bytes(
                 pass
 
 
-def _encode(status: str, raw: Optional[bytes]) -> bytes:
+def _encode(status: str, raw: Optional[bytes], *, _holiday: bool = False) -> bytes:
     if status not in _CHILD_STATUSES or (status == "HTTP_OK") != (type(raw) is bytes):
         raise ValueError("invalid child response")
     if raw is not None and (not raw or len(raw) > MAX_BYTES):
         raise ValueError("invalid response size")
     return json.dumps(
         {
-            "schema": _SCHEMA,
+            "schema": _HOLIDAY_SCHEMA if _holiday else _SCHEMA,
             "transport": status,
             "sha256": hashlib.sha256(raw).hexdigest() if raw is not None else None,
             "raw_base64": base64.b64encode(raw).decode("ascii") if raw is not None else None,
@@ -164,7 +169,7 @@ def _unique_pairs(pairs):
     return result
 
 
-def _decode(data: bytes, max_bytes: int) -> tuple[str, Optional[bytes]]:
+def _decode(data: bytes, max_bytes: int, *, _holiday: bool = False) -> tuple[str, Optional[bytes]]:
     """Reject child attempts to claim supervisor-only statuses or forge bytes."""
     try:
         if type(data) is not bytes or len(data) > _CHILD_LIMIT:
@@ -173,7 +178,8 @@ def _decode(data: bytes, max_bytes: int) -> tuple[str, Optional[bytes]]:
         if type(item) is not dict or set(item) != {"schema", "transport", "sha256", "raw_base64"}:
             raise ValueError("invalid protocol")
         status = item["transport"]
-        if item["schema"] != _SCHEMA or type(status) is not str or status not in _CHILD_STATUSES:
+        schema = _HOLIDAY_SCHEMA if _holiday else _SCHEMA
+        if item["schema"] != schema or type(status) is not str or status not in _CHILD_STATUSES:
             raise ValueError("invalid status")
         if status != "HTTP_OK":
             if item["sha256"] is not None or item["raw_base64"] is not None:
@@ -196,11 +202,11 @@ def _decode(data: bytes, max_bytes: int) -> tuple[str, Optional[bytes]]:
         return "CHILD_ERROR", None
 
 
-def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes):
+def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes, *, _holiday=False):
     command = [
         sys.executable,
         str(Path(__file__).absolute()),
-        "--child",
+        "--child-holiday" if _holiday else "--child",
         str(connect_timeout),
         str(read_timeout),
         str(max_bytes),
@@ -209,9 +215,13 @@ def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes):
         command,
         total_timeout,
         _CHILD_LIMIT,
-        lambda output: _decode(output, max_bytes),
+        lambda output: _decode(output, max_bytes, _holiday=_holiday),
         oversize="CHILD_ERROR",
     )
+
+
+def _run_holiday_child(connect_timeout, read_timeout, total_timeout, max_bytes):
+    return _run_child(connect_timeout, read_timeout, total_timeout, max_bytes, _holiday=True)
 
 
 def collect_ine_hours(
@@ -284,7 +294,7 @@ def collect_ine_hours(
 
 
 def _main() -> int:
-    if len(sys.argv) != 5 or sys.argv[1] != "--child":
+    if len(sys.argv) != 5 or sys.argv[1] not in {"--child", "--child-holiday"}:
         return 2
     try:
         connect, read, limit = float(sys.argv[2]), float(sys.argv[3]), int(sys.argv[4])
@@ -292,8 +302,9 @@ def _main() -> int:
             return 2
         if not 0 < limit <= MAX_BYTES:
             return 2
-        status, raw = _fetch_bytes(connect, read, limit)
-        sys.stdout.buffer.write(_encode(status, raw))
+        holiday = sys.argv[1] == "--child-holiday"
+        status, raw = _fetch_bytes(connect, read, limit, _holiday=holiday)
+        sys.stdout.buffer.write(_encode(status, raw, _holiday=holiday))
         return 0
     except Exception:
         return 2
