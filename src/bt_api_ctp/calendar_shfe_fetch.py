@@ -26,6 +26,7 @@ Popen handle remain unproven; injection is an unverified substitute.
 
 from __future__ import annotations
 
+import base64
 import http.client
 import importlib.util
 import json
@@ -55,7 +56,7 @@ if __name__ == "__main__":
     StageCandidate = _parser_module.StageCandidate
     parse_shfe_page = _parser_module.parse_shfe_page
     MAX_BYTES = _parser_module.MAX_BYTES
-    if len(sys.argv) > 1 and sys.argv[1] == "--child-holiday":
+    if len(sys.argv) > 1 and sys.argv[1] in {"--child-holiday", "--child-evidence-holiday"}:
         _holiday_spec = importlib.util.spec_from_file_location(
             "_calendar_shfe_holiday_child", Path(__file__).with_name("calendar_shfe_holiday.py")
         )
@@ -151,6 +152,7 @@ def _fetch_and_parse(
     connection_factory: Callable = http.client.HTTPSConnection,
     parser: Callable = parse_shfe_page,
     _holiday: bool = False,
+    _capture: Optional[Callable] = None,
 ) -> tuple[str, Optional[PageCandidate]]:
     connection = None
     path = _HOLIDAY_PATH if _holiday else _PATH
@@ -183,6 +185,8 @@ def _fetch_and_parse(
             data.extend(chunk)
             if len(data) > max_bytes:
                 return "RESPONSE_TOO_LARGE", None
+        if length is not None and len(data) != int(length):
+            return "HTTP_ERROR", None
         if not data:
             return "EMPTY_RESPONSE", None
         try:
@@ -197,6 +201,8 @@ def _fetch_and_parse(
             or (_holiday and page.coverage != "NOT_PROVEN")
         ):
             return "PARSER_ERROR", None
+        if _capture is not None:
+            _capture(bytes(data))
         return "HTTP_OK", page
     except ssl.SSLError:
         return "TLS_ERROR", None
@@ -570,7 +576,12 @@ def collect_shfe_holiday(
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 5 or sys.argv[1] not in {"--child", "--child-holiday"}:
+        if len(sys.argv) != 5 or sys.argv[1] not in {
+            "--child",
+            "--child-holiday",
+            "--child-evidence-hours",
+            "--child-evidence-holiday",
+        }:
             raise ValueError
         connect, read = float(sys.argv[2]), float(sys.argv[3])
         limit = int(sys.argv[4])
@@ -579,7 +590,35 @@ if __name__ == "__main__":
             or not 0 < limit <= MAX_BYTES
         ):
             raise ValueError
-        if sys.argv[1] == "--child-holiday":
+        if sys.argv[1] in {"--child-evidence-hours", "--child-evidence-holiday"}:
+            holiday = sys.argv[1] == "--child-evidence-holiday"
+            captured = []
+            status, page = _fetch_and_parse(
+                connect,
+                read,
+                limit,
+                _holiday=holiday,
+                parser=parse_shfe_holiday if holiday else parse_shfe_page,
+                _capture=captured.append,
+            )
+            encoded = (
+                _encode_holiday_result(status, page) if holiday else _encode_result(status, page)
+            )
+            decoded = json.loads(encoded)
+            # Never return raw bytes if the bounded page encoder failed.
+            raw = (
+                base64.b64encode(captured[0]).decode("ascii")
+                if decoded["transport"] == "HTTP_OK" and len(captured) == 1
+                else None
+            )
+            sys.stdout.buffer.write(
+                json.dumps(
+                    {"schema": "shfe-evidence-ipc/1", "result": decoded, "raw_base64": raw},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+            )
+        elif sys.argv[1] == "--child-holiday":
             sys.stdout.buffer.write(_encode_holiday_result(*_fetch_holiday(connect, read, limit)))
         else:
             sys.stdout.buffer.write(_encode_result(*_fetch_and_parse(connect, read, limit)))
