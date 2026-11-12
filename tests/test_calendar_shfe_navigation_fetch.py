@@ -344,7 +344,7 @@ else:
         return original_stop(child, status)
     fetch._stop = spy
     def spawn(command, **kwargs):
-        code = "pass" if mode in {"after_wait", "systemexit_during_wait"} else "import time; time.sleep(30)"
+        code = "pass" if mode in {"after_wait", "restore_after", "systemexit_during_wait"} else "import time; time.sleep(30)"
         child = original_popen([sys.executable, "-c", code], **kwargs)
         children.append(child)
         if mode == "during_popen": os.kill(os.getpid(), signal.SIGINT)
@@ -367,6 +367,14 @@ else:
                 os.kill(os.getpid(), signal.SIGINT)
                 return status
             child.wait = wait
+        elif mode == "restore_after":
+            real_signal = signal.signal
+            def during_restore(signum, handler):
+                result = real_signal(signum, handler)
+                if signum == signal.SIGINT and handler is original_handler:
+                    os.kill(os.getpid(), signal.SIGINT)
+                return result
+            signal.signal = during_restore
         elif mode == "systemexit_during_wait":
             original_wait = child.wait
             def wait(*args, **kwargs):
@@ -389,7 +397,7 @@ else:
             assert calls and children[0].poll() is not None
         elif mode == "systemexit_cleanup_failure":
             assert calls and children[0].poll() is None
-        elif mode in {"after_wait", "systemexit_during_wait"}:
+        elif mode in {"after_wait", "restore_after", "systemexit_during_wait"}:
             assert not calls and children[0].poll() is not None
         else:
             assert not calls and children[0].poll() is None
@@ -413,6 +421,7 @@ else:
         "during_popen",
         "during_select",
         "after_wait",
+        "restore_after",
         "no_handle",
         "systemexit",
         "systemexit_cleanup_failure",

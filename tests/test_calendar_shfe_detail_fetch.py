@@ -261,7 +261,7 @@ def test_default_import_and_invalid_settings_do_not_start_network(monkeypatch):
             fetch.collect_detail_page(path=FUTURE, runner=forbidden, **settings)
 
 
-def test_total_timeout_kills_and_reaps_owned_child(monkeypatch):
+def test_total_timeout_kills_and_reaps_owned_child(monkeypatch, calendar_supported_host):
     original = subprocess.Popen
     children = []
 
@@ -280,7 +280,9 @@ def test_total_timeout_kills_and_reaps_owned_child(monkeypatch):
     assert len(children) == 1 and children[0].poll() is not None
 
 
-def test_owned_child_protocol_roundtrip_uses_only_validated_path(monkeypatch):
+def test_owned_child_protocol_roundtrip_uses_only_validated_path(
+    monkeypatch, calendar_supported_host
+):
     parsed = fake(Connection(Response(body=future(row("CU")))))
     payload = fetch._encode(*parsed)
     original = subprocess.Popen
@@ -300,7 +302,9 @@ def test_owned_child_protocol_roundtrip_uses_only_validated_path(monkeypatch):
     assert commands[0][1]["env"] == {} and commands[0][1]["shell"] is False
 
 
-def test_child_output_limit_is_enforced_before_buffering_unbounded_output(monkeypatch):
+def test_child_output_limit_is_enforced_before_buffering_unbounded_output(
+    monkeypatch, calendar_supported_host
+):
     original = subprocess.Popen
     children = []
     monkeypatch.setattr(fetch, "_MAX_RESULT", 128)

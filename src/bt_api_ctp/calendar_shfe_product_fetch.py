@@ -6,19 +6,20 @@ A URL, TLS, local timestamp or hash is not source authority, freshness, record
 validity or coverage. Injected runners/transports are test ports and cannot
 establish authenticity. OS process creation and uninterruptible kernel waits
 cannot be strictly bounded; Windows/network and production behavior are untested.
+
+The default runner requires a POSIX single-Python-thread main thread with
+default SIGINT and SIGCHLD; unsupported hosts do not start it. SIGTERM,
+SA_NOCLDWAIT, native reapers and Popen without a handle remain unproven.
 """
 
 import http.client
 import importlib.util
 import json
 import math
-import os
-import selectors
 import socket
 import ssl
-import subprocess
+import subprocess  # noqa: F401 - existing offline test injection port
 import sys
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,7 @@ if __name__ == "__main__":
     ProductPage, ProductRecord = module.ProductPage, module.ProductRecord
     parse_shfe_product_page, _record = module.parse_shfe_product_page, module._record
 else:
+    from bt_api_ctp._calendar_child_supervisor import supervise
     from bt_api_ctp.calendar_shfe_product_page import (
         MAX_BYTES,
         ProductPage,
@@ -69,6 +71,7 @@ _TRANSPORT = frozenset(
         "CHILD_ERROR",
         "CHILD_TIMEOUT",
         "CHILD_CLEANUP_UNCERTAIN",
+        "SUPERVISOR_UNSUPPORTED",
     }
 )
 _PARSE = frozenset({"CANDIDATE", "NEEDS_REVIEW", "INVALID_UTF8", "STRUCTURE_CHANGED"})
@@ -308,7 +311,6 @@ def _stop(child, status):
 
 
 def _run_child(source_key, connect_timeout, read_timeout, total_timeout, max_bytes):
-    deadline = time.monotonic() + total_timeout
     command = [
         sys.executable,
         str(Path(__file__).absolute()),
@@ -318,48 +320,9 @@ def _run_child(source_key, connect_timeout, read_timeout, total_timeout, max_byt
         str(read_timeout),
         str(max_bytes),
     ]
-    try:
-        child = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={},
-            shell=False,
-        )
-    except Exception:
-        return "CHILD_ERROR", None
-    try:
-        output = bytearray()
-        with selectors.DefaultSelector() as selector:
-            selector.register(child.stdout, selectors.EVENT_READ)
-            while True:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    return _stop(child, "CHILD_TIMEOUT")
-                if not selector.select(left):
-                    return _stop(child, "CHILD_TIMEOUT")
-                part = os.read(child.stdout.fileno(), min(65536, _MAX_RESULT + 1 - len(output)))
-                if not part:
-                    break
-                output.extend(part)
-                if len(output) > _MAX_RESULT:
-                    return _stop(child, "RESULT_TOO_LARGE")
-        left = deadline - time.monotonic()
-        if left <= 0:
-            return _stop(child, "CHILD_TIMEOUT")
-        try:
-            child.wait(timeout=left)
-        except subprocess.TimeoutExpired:
-            return _stop(child, "CHILD_TIMEOUT")
-        if child.returncode != 0:
-            return "CHILD_ERROR", None
-        return _decode(bytes(output), source_key)
-    except Exception:
-        return _stop(child, "CHILD_ERROR")
-    finally:
-        if child.stdout is not None:
-            child.stdout.close()
+    return supervise(
+        command, total_timeout, _MAX_RESULT, lambda raw: _decode(raw, source_key), stop=_stop
+    )
 
 
 def collect_product_page(
@@ -388,7 +351,7 @@ def collect_product_page(
         # Revalidate even injected runner results using the same bounded child protocol.
         transport, page = _decode(_encode(transport, page), source_key)
     except Exception:
-        transport, page = "CHILD_ERROR", None
+        transport, page = "CHILD_CLEANUP_UNCERTAIN", None
     parse = page.status if page is not None else "NOT_OBSERVED"
     identity = "NOT_ASSESSED"
     if page is not None and parse in {"CANDIDATE", "NEEDS_REVIEW"}:

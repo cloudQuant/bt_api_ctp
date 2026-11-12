@@ -280,7 +280,7 @@ def test_page_control_characters_are_unknown(control):
     assert result.page is None and result.source_authentication == "NOT_PROVEN"
 
 
-def test_timeout_kills_and_reaps_owned_child(monkeypatch):
+def test_timeout_kills_and_reaps_owned_child(monkeypatch, calendar_supported_host):
     original = subprocess.Popen
     spawned = []
 
@@ -297,7 +297,7 @@ def test_timeout_kills_and_reaps_owned_child(monkeypatch):
     assert len(spawned) == 1 and spawned[0].poll() is not None
 
 
-def test_child_output_limit_is_enforced_while_reading(monkeypatch):
+def test_child_output_limit_is_enforced_while_reading(monkeypatch, calendar_supported_host):
     original = subprocess.Popen
     spawned = []
     monkeypatch.setattr(fetch, "_MAX_RESULT", 128)

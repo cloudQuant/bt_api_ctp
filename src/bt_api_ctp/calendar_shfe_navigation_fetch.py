@@ -302,7 +302,7 @@ def _mark_uncertain(exc):
         raise ChildCleanupUncertain("CHILD_CLEANUP_UNCERTAIN") from exc
 
 
-def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes):
+def _run_child_core(connect_timeout, read_timeout, total_timeout, max_bytes):
     if (
         os.name != "posix"
         or not hasattr(signal, "SIGCHLD")
@@ -352,6 +352,14 @@ def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes):
     if handler_changed:
         return "CHILD_CLEANUP_UNCERTAIN", None
     return result
+
+
+def _run_child(connect_timeout, read_timeout, total_timeout, max_bytes):
+    try:
+        return _run_child_core(connect_timeout, read_timeout, total_timeout, max_bytes)
+    except BaseException as exc:
+        _mark_uncertain(exc)
+        raise
 
 
 def _run_owned_child(connect_timeout, read_timeout, total_timeout, max_bytes, interrupted, stop):

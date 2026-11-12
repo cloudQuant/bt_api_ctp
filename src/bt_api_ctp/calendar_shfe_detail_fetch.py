@@ -10,19 +10,19 @@ No request occurs on import; injected runners and transports are test ports.
 Only parsed observations cross the owned process boundary, never raw HTML.
 OS process creation and uninterruptible waits cannot be strictly bounded;
 Windows, live account and production behavior have not been established.
+The default runner requires a POSIX single-Python-thread main thread with
+default SIGINT and SIGCHLD; unsupported hosts do not start it. SIGTERM,
+SA_NOCLDWAIT, native reapers and Popen without a handle remain unproven.
 """
 
 import http.client
 import importlib.util
 import json
 import math
-import os
-import selectors
 import socket
 import ssl
-import subprocess
+import subprocess  # noqa: F401 - existing offline test injection port
 import sys
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +45,7 @@ if __name__ == "__main__":
     MAX_BYTES, ProductPage = product.MAX_BYTES, product.ProductPage
     parse_shfe_product_page, _record = product.parse_shfe_product_page, product._record
 else:
+    from bt_api_ctp._calendar_child_supervisor import supervise
     from bt_api_ctp.calendar_shfe_product_navigation import _path_kind
     from bt_api_ctp.calendar_shfe_product_page import (
         MAX_BYTES,
@@ -71,6 +72,7 @@ _TRANSPORT = frozenset(
         "CHILD_ERROR",
         "CHILD_TIMEOUT",
         "CHILD_CLEANUP_UNCERTAIN",
+        "SUPERVISOR_UNSUPPORTED",
     }
 )
 _PARSE = frozenset({"CANDIDATE", "NEEDS_REVIEW", "INVALID_UTF8", "STRUCTURE_CHANGED"})
@@ -306,7 +308,6 @@ def _stop(child, status):
 
 
 def _run_child(path, connect_timeout, read_timeout, total_timeout, max_bytes):
-    deadline = time.monotonic() + total_timeout
     command = [
         sys.executable,
         str(Path(__file__).absolute()),
@@ -316,46 +317,9 @@ def _run_child(path, connect_timeout, read_timeout, total_timeout, max_bytes):
         str(read_timeout),
         str(max_bytes),
     ]
-    try:
-        child = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={},
-            shell=False,
-        )
-    except Exception:
-        return "CHILD_ERROR", None
-    try:
-        output = bytearray()
-        with selectors.DefaultSelector() as selector:
-            selector.register(child.stdout, selectors.EVENT_READ)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    return _stop(child, "CHILD_TIMEOUT")
-                part = os.read(child.stdout.fileno(), min(65536, _MAX_RESULT + 1 - len(output)))
-                if not part:
-                    break
-                output.extend(part)
-                if len(output) > _MAX_RESULT:
-                    return _stop(child, "RESULT_TOO_LARGE")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return _stop(child, "CHILD_TIMEOUT")
-        try:
-            child.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            return _stop(child, "CHILD_TIMEOUT")
-        if child.returncode != 0:
-            return "CHILD_ERROR", None
-        return _decode(bytes(output), path)
-    except Exception:
-        return _stop(child, "CHILD_ERROR")
-    finally:
-        if child.stdout is not None:
-            child.stdout.close()
+    return supervise(
+        command, total_timeout, _MAX_RESULT, lambda raw: _decode(raw, path), stop=_stop
+    )
 
 
 def collect_detail_page(
@@ -383,7 +347,7 @@ def collect_detail_page(
         transport, page = runner(path, connect_timeout, read_timeout, total_timeout, max_bytes)
         transport, page = _decode(_encode(transport, page), path)
     except Exception:
-        transport, page = "CHILD_ERROR", None
+        transport, page = "CHILD_CLEANUP_UNCERTAIN", None
     parse = page.status if page is not None else "NOT_OBSERVED"
     identity = "NOT_ASSESSED"
     if page is not None and parse in {"CANDIDATE", "NEEDS_REVIEW"}:

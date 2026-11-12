@@ -190,39 +190,24 @@ def test_output_amplification_has_explicit_bound():
     )
 
 
-def test_parent_enforces_child_deadline_and_reaps_owned_child(monkeypatch):
-    class SlowChild:
-        returncode = None
+def test_parent_enforces_child_deadline_and_reaps_owned_child(monkeypatch, calendar_supported_host):
+    original = subprocess.Popen
+    spawned = []
 
-        def __init__(self):
-            self.killed = False
-            self.calls = 0
-
-        def communicate(self, timeout):
-            self.calls += 1
-            if self.calls == 1:
-                raise subprocess.TimeoutExpired("child", timeout)
-            return b"", b""
-
-        def kill(self):
-            self.killed = True
-
-    child = SlowChild()
-    launched = []
-
-    def popen(command, **kwargs):
-        launched.append((command, kwargs))
+    def launch(command, **kwargs):
+        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        spawned.append((command, kwargs, child))
         return child
 
-    monkeypatch.setattr(fetcher.subprocess, "Popen", popen)
+    monkeypatch.setattr(fetcher.subprocess, "Popen", launch)
     result = fetcher.collect_shfe_page(total_timeout=0.1)
     assert result.status == result.transport_status == "CHILD_TIMEOUT"
-    assert child.killed and child.calls == 2
-    assert launched[0][1]["shell"] is False and launched[0][1]["env"] == {}
+    assert spawned[0][2].poll() is not None
+    assert spawned[0][1]["shell"] is False and spawned[0][1]["env"] == {}
     assert result.verification == "UNVERIFIED"
 
 
-def test_local_owned_sleeper_is_killed_and_reaped_on_timeout(monkeypatch):
+def test_local_owned_sleeper_is_killed_and_reaped_on_timeout(monkeypatch, calendar_supported_host):
     original = subprocess.Popen
     spawned = []
 
@@ -237,33 +222,59 @@ def test_local_owned_sleeper_is_killed_and_reaped_on_timeout(monkeypatch):
     assert len(spawned) == 1 and spawned[0].poll() is not None
 
 
-def test_uncertain_child_cleanup_is_not_misreported(monkeypatch):
-    class StuckChild:
-        def communicate(self, timeout):
-            raise subprocess.TimeoutExpired("child", timeout)
+def test_uncertain_child_cleanup_is_not_misreported(monkeypatch, calendar_supported_host):
+    original = subprocess.Popen
+    children = []
 
-        def kill(self):
-            pass
+    def launch(command, **kwargs):
+        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        child.actual_kill = child.kill
 
-    monkeypatch.setattr(fetcher.subprocess, "Popen", lambda *a, **k: StuckChild())
-    assert fetcher.collect_shfe_page(total_timeout=0.1).status == "CHILD_CLEANUP_UNCERTAIN"
+        def fail():
+            raise OSError("injected")
+
+        child.kill = fail
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(fetcher.subprocess, "Popen", launch)
+    try:
+        assert fetcher.collect_shfe_page(total_timeout=0.1).status == "CHILD_CLEANUP_UNCERTAIN"
+    finally:
+        for child in children:
+            child.actual_kill()
+            child.wait(timeout=3)
 
 
-def test_child_non_timeout_communication_error_is_not_called_timeout(monkeypatch):
-    class BrokenChild:
-        calls = 0
+def test_child_non_timeout_communication_error_is_not_called_timeout(
+    monkeypatch, calendar_supported_host
+):
+    from bt_api_ctp import _calendar_child_supervisor as supervisor
 
-        def communicate(self, timeout):
-            self.calls += 1
-            if self.calls == 1:
-                raise OSError("private")
-            return b"", b""
+    original_popen, original_read = subprocess.Popen, supervisor.os.read
+    children = []
 
-        def kill(self):
-            pass
+    def launch(command, **kwargs):
+        child = original_popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys,time; sys.stdout.write('x'); sys.stdout.flush(); time.sleep(30)",
+            ],
+            **kwargs,
+        )
+        children.append(child)
+        return child
 
-    monkeypatch.setattr(fetcher.subprocess, "Popen", lambda *a, **k: BrokenChild())
-    assert fetcher.collect_shfe_page().status == "CHILD_ERROR"
+    def fail_read(fd, size):
+        if children and fd == children[0].stdout.fileno():
+            raise OSError("private")
+        return original_read(fd, size)
+
+    monkeypatch.setattr(fetcher.subprocess, "Popen", launch)
+    monkeypatch.setattr(supervisor.os, "read", fail_read)
+    assert fetcher.collect_shfe_page(total_timeout=2).status == "CHILD_ERROR"
+    assert children[0].poll() is not None
 
 
 def test_real_child_bootstrap_rejects_bad_arguments_without_network():
@@ -406,7 +417,7 @@ def test_holiday_runner_exception_and_malformed_child_data_are_not_exposed():
         raise RuntimeError("secret exception")
 
     result = fetcher.collect_shfe_holiday(runner=broken)
-    assert result.status == "CHILD_ERROR"
+    assert result.status == "CHILD_CLEANUP_UNCERTAIN"
     assert "secret" not in repr(result)
     transport, page = fake_holiday_fetch(Connection(Response(body=holiday_html())))
     payload = json.loads(fetcher._encode_holiday_result(transport, page))
@@ -431,36 +442,38 @@ def test_holiday_invalid_settings_do_not_call_runner(kwargs):
     assert calls == []
 
 
-def test_holiday_timeout_and_unreaped_child_are_distinct(monkeypatch):
-    class Child:
-        def __init__(self, stuck):
-            self.stuck = stuck
-            self.calls = 0
-            self.killed = False
+def test_holiday_timeout_and_unreaped_child_are_distinct(monkeypatch, calendar_supported_host):
+    original = subprocess.Popen
+    children, calls = [], []
 
-        def communicate(self, timeout):
-            self.calls += 1
-            if self.calls == 1 or self.stuck:
-                raise subprocess.TimeoutExpired("child", timeout)
-            return b"", b""
+    def launch(command, **kwargs):
+        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        child.actual_kill = child.kill
+        if children:
 
-        def kill(self):
-            self.killed = True
+            def fail():
+                raise OSError("injected")
 
-    child = Child(False)
-    calls = []
-    monkeypatch.setattr(
-        fetcher.subprocess, "Popen", lambda cmd, **kw: (calls.append(cmd), child)[1]
-    )
-    result = fetcher.collect_shfe_holiday(total_timeout=0.1)
-    assert result.status == "CHILD_TIMEOUT" and child.killed
-    assert calls[0][2] == "--child-holiday"
-    child = Child(True)
-    result = fetcher.collect_shfe_holiday(total_timeout=0.1)
-    assert result.status == "CHILD_CLEANUP_UNCERTAIN" and child.killed
+            child.kill = fail
+        children.append(child)
+        calls.append(command)
+        return child
+
+    monkeypatch.setattr(fetcher.subprocess, "Popen", launch)
+    try:
+        assert fetcher.collect_shfe_holiday(total_timeout=0.1).status == "CHILD_TIMEOUT"
+        assert children[0].poll() is not None and calls[0][2] == "--child-holiday"
+        assert fetcher.collect_shfe_holiday(total_timeout=0.1).status == "CHILD_CLEANUP_UNCERTAIN"
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.actual_kill()
+                child.wait(timeout=3)
 
 
-def test_holiday_child_bootstrap_and_real_parser_without_network(monkeypatch):
+def test_holiday_child_bootstrap_and_real_parser_without_network(
+    monkeypatch, calendar_supported_host
+):
     import base64
 
     encoded = base64.b64encode(holiday_html()).decode("ascii")

@@ -17,6 +17,11 @@ wired into trading behavior here. No requests occur on import. Only parsed
 candidates, never raw HTML or exception text, are returned from the child.
 ``collected_at`` is a local UTC observation after the runner finishes, not an
 exchange publication time or trading date.
+
+The default runner requires a POSIX single-Python-thread main thread with
+default SIGINT and SIGCHLD dispositions. Unsupported hosts do not start it.
+SIGTERM, SA_NOCLDWAIT, native reapers and interruption without a returned
+Popen handle remain unproven; injection is an unverified substitute.
 """
 
 from __future__ import annotations
@@ -27,9 +32,8 @@ import json
 import math
 import socket
 import ssl
-import subprocess
+import subprocess  # noqa: F401 - existing offline test injection port
 import sys
-import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -64,6 +68,7 @@ if __name__ == "__main__":
         HolidayRow = _holiday_module.HolidayRow
         parse_shfe_holiday = _holiday_module.parse_shfe_holiday
 else:
+    from bt_api_ctp._calendar_child_supervisor import supervise
     from bt_api_ctp.calendar_shfe_holiday import HolidayCandidate, HolidayRow, parse_shfe_holiday
     from bt_api_ctp.calendar_shfe_page import (
         MAX_BYTES,
@@ -98,6 +103,7 @@ _TRANSPORT_STATUSES = frozenset(
         "CHILD_ERROR",
         "CHILD_TIMEOUT",
         "CHILD_CLEANUP_UNCERTAIN",
+        "SUPERVISOR_UNSUPPORTED",
     }
 )
 _PAGE_STATUSES = frozenset(
@@ -122,6 +128,7 @@ class ShfeFetchResult:
     page: Optional[PageCandidate] = None
     source: str = _SOURCE
     verification: str = "UNVERIFIED"
+    transport_assurance: str = "INJECTED_UNVERIFIED"
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,7 @@ class ShfeHolidayFetchResult:
     source: str = _HOLIDAY_SOURCE
     verification: str = "UNVERIFIED"
     coverage: str = "NOT_PROVEN"
+    transport_assurance: str = "INJECTED_UNVERIFIED"
 
 
 def _fetch_and_parse(
@@ -467,7 +475,6 @@ def _run_child(
     *,
     _holiday: bool = False,
 ) -> tuple[str, Optional[PageCandidate]]:
-    deadline = time.monotonic() + total_timeout
     command = [
         sys.executable,
         str(Path(__file__).absolute()),
@@ -476,36 +483,8 @@ def _run_child(
         str(read_timeout),
         str(max_bytes),
     ]
-    try:
-        child = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env={},
-            shell=False,
-        )
-    except Exception:
-        return "CHILD_ERROR", None
-    try:
-        output, _ = child.communicate(timeout=max(0.0, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
-        try:
-            child.kill()
-            child.communicate(timeout=1.0)
-        except Exception:
-            return "CHILD_CLEANUP_UNCERTAIN", None
-        return "CHILD_TIMEOUT", None
-    except Exception:
-        try:
-            child.kill()
-            child.communicate(timeout=1.0)
-        except Exception:
-            return "CHILD_CLEANUP_UNCERTAIN", None
-        return "CHILD_ERROR", None
-    if child.returncode != 0 or len(output) > _MAX_RESULT:
-        return "CHILD_ERROR", None
-    return _decode_holiday_result(output) if _holiday else _decode_result(output)
+    decoder = _decode_holiday_result if _holiday else _decode_result
+    return supervise(command, total_timeout, _MAX_RESULT, decoder, oversize="CHILD_ERROR")
 
 
 def _run_holiday_child(connect_timeout, read_timeout, total_timeout, max_bytes):
@@ -526,7 +505,10 @@ def collect_shfe_page(
             raise ValueError("invalid timeout")
     if type(max_bytes) is not int or not 0 < max_bytes <= MAX_BYTES or not callable(runner):
         raise ValueError("invalid fetch settings")
-    transport, page = runner(connect_timeout, read_timeout, total_timeout, max_bytes)
+    try:
+        transport, page = runner(connect_timeout, read_timeout, total_timeout, max_bytes)
+    except Exception:
+        transport, page = "CHILD_CLEANUP_UNCERTAIN", None
     if transport not in _TRANSPORT_STATUSES or (transport == "HTTP_OK") != (page is not None):
         raise ValueError("invalid runner result")
     if page is not None and (
@@ -541,6 +523,9 @@ def collect_shfe_page(
         transport_status=transport,
         collected_at=datetime.now(timezone.utc),
         page=page,
+        transport_assurance="SUPERVISED_DEFAULT_TLS_POLICY"
+        if runner is _run_child
+        else "INJECTED_UNVERIFIED",
     )
 
 
@@ -561,7 +546,7 @@ def collect_shfe_holiday(
     try:
         transport, page = runner(connect_timeout, read_timeout, total_timeout, max_bytes)
     except Exception:
-        transport, page = "CHILD_ERROR", None
+        transport, page = "CHILD_CLEANUP_UNCERTAIN", None
     if transport not in _TRANSPORT_STATUSES or (transport == "HTTP_OK") != (page is not None):
         raise ValueError("invalid runner result")
     if page is not None and (
@@ -577,6 +562,9 @@ def collect_shfe_holiday(
         transport_status=transport,
         collected_at=datetime.now(timezone.utc),
         page=page,
+        transport_assurance="SUPERVISED_DEFAULT_TLS_POLICY"
+        if runner is _run_holiday_child
+        else "INJECTED_UNVERIFIED",
     )
 
 
