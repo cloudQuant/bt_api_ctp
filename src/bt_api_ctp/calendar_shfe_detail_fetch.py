@@ -75,6 +75,22 @@ _TRANSPORT = frozenset(
         "SUPERVISOR_UNSUPPORTED",
     }
 )
+# These are the only statuses emitted by the fixed fetch child. Supervisor
+# outcomes must come from the owning parent, never from child-controlled IPC.
+_CHILD_TRANSPORT = frozenset(
+    {
+        "HTTP_OK",
+        "HTTP_ERROR",
+        "REDIRECT",
+        "TLS_ERROR",
+        "NETWORK_TIMEOUT",
+        "NETWORK_ERROR",
+        "RESPONSE_TOO_LARGE",
+        "EMPTY_RESPONSE",
+        "PARSER_ERROR",
+        "RESULT_TOO_LARGE",
+    }
+)
 _PARSE = frozenset({"CANDIDATE", "NEEDS_REVIEW", "INVALID_UTF8", "STRUCTURE_CHANGED"})
 
 
@@ -307,6 +323,14 @@ def _stop(child, status):
     return status, None
 
 
+def _decode_child(output, path):
+    """Reject supervisor-only or malformed statuses in the child payload."""
+    status, page = _decode(output, path)
+    if status not in _CHILD_TRANSPORT:
+        return "CHILD_CLEANUP_UNCERTAIN", None
+    return status, page
+
+
 def _run_child(path, connect_timeout, read_timeout, total_timeout, max_bytes):
     command = [
         sys.executable,
@@ -318,7 +342,7 @@ def _run_child(path, connect_timeout, read_timeout, total_timeout, max_bytes):
         str(max_bytes),
     ]
     return supervise(
-        command, total_timeout, _MAX_RESULT, lambda raw: _decode(raw, path), stop=_stop
+        command, total_timeout, _MAX_RESULT, lambda raw: _decode_child(raw, path), stop=_stop
     )
 
 

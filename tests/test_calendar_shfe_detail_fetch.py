@@ -245,6 +245,66 @@ def test_child_protocol_rejects_tampering_wrong_path_and_control_chars():
     assert fetch._decode(fetch._encode(*control), FUTURE) == ("CHILD_ERROR", None)
 
 
+@pytest.mark.parametrize(
+    "status", ["CHILD_ERROR", "CHILD_TIMEOUT", "CHILD_CLEANUP_UNCERTAIN", "SUPERVISOR_UNSUPPORTED"]
+)
+def test_supervisor_only_child_ipc_is_cleanup_uncertain(
+    monkeypatch, calendar_supported_host, status
+):
+    payload = fetch._encode(status, None)
+    # The existing general-purpose round-trip remains unchanged.
+    assert fetch._decode(payload, FUTURE) == (status, None)
+    assert fetch._decode_child(payload, FUTURE) == ("CHILD_CLEANUP_UNCERTAIN", None)
+    original = subprocess.Popen
+    children = []
+
+    def synthetic_child(_cmd, **kwargs):
+        child = original(
+            [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({payload!r})"], **kwargs
+        )
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(fetch.subprocess, "Popen", synthetic_child)
+    result = fetch.collect_detail_page(path=FUTURE, total_timeout=3)
+    assert result.status == "UNKNOWN" and result.transport_status == "CHILD_CLEANUP_UNCERTAIN"
+    assert result.transport_assurance == "SUPERVISED_DEFAULT_TLS_POLICY"
+    assert result.source_authentication == "NOT_PROVEN"
+    assert len(children) == 1 and children[0].poll() is not None
+
+
+def test_child_network_timeout_remains_transport_timeout(monkeypatch, calendar_supported_host):
+    observed = fake(Connection(Response(error=socket.timeout("private"))))
+    assert observed == ("NETWORK_TIMEOUT", None)
+    payload = fetch._encode(*observed)
+    assert fetch._decode_child(payload, FUTURE) == observed
+    original = subprocess.Popen
+    children = []
+
+    def synthetic_child(_cmd, **kwargs):
+        child = original(
+            [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({payload!r})"], **kwargs
+        )
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(fetch.subprocess, "Popen", synthetic_child)
+    result = fetch.collect_detail_page(path=FUTURE, total_timeout=3)
+    assert result.transport_status == "NETWORK_TIMEOUT" and result.status == "UNKNOWN"
+    assert result.source_authentication == "NOT_PROVEN"
+    assert len(children) == 1 and children[0].poll() is not None
+
+
+def test_malformed_child_ipc_is_cleanup_uncertain():
+    assert fetch._decode_child(b"not-json", FUTURE) == ("CHILD_CLEANUP_UNCERTAIN", None)
+
+
+@pytest.mark.parametrize("status", sorted(fetch._CHILD_TRANSPORT - {"HTTP_OK"}))
+def test_legitimate_child_failure_statuses_remain_compatible(status):
+    payload = fetch._encode(status, None)
+    assert fetch._decode_child(payload, FUTURE) == (status, None)
+
+
 def test_default_import_and_invalid_settings_do_not_start_network(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("must not start")
@@ -346,3 +406,19 @@ def test_cleanup_failure_remains_explicitly_unknown():
             raise subprocess.TimeoutExpired("child", timeout)
 
     assert fetch._stop(Stuck(), "CHILD_TIMEOUT") == ("CHILD_CLEANUP_UNCERTAIN", None)
+
+    class KillFailure:
+        def kill(self):
+            raise OSError("synthetic failure")
+
+        def wait(self, timeout):
+            pytest.fail("must not infer a reaped child")
+
+    assert fetch._stop(KillFailure(), "CHILD_TIMEOUT") == ("CHILD_CLEANUP_UNCERTAIN", None)
+
+
+def test_injected_runner_timeout_remains_unverified():
+    result = fetch.collect_detail_page(path=FUTURE, runner=lambda *args: ("CHILD_TIMEOUT", None))
+    assert result.transport_status == "CHILD_TIMEOUT"
+    assert result.transport_assurance == "INJECTED_UNVERIFIED"
+    assert result.source_authentication == "NOT_PROVEN"
