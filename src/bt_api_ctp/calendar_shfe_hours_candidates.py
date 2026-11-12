@@ -18,6 +18,7 @@ from datetime import date
 from typing import Optional
 
 from bt_api_ctp.calendar_shfe_page import (
+    MAX_ROWS,
     PageCandidate,
     ProductCandidate,
     StageCandidate,
@@ -77,12 +78,15 @@ def _cell(value):
     return "<br>".join(html.escape(line) for line in value.split("\n"))
 
 
-def _recheck_page(page):
+def _recheck_page(page, *, source_url=_SOURCE):
     if (
         type(page) is not PageCandidate
+        or type(page.status) is not str
         or page.status not in {"CANDIDATE", "NEEDS_REVIEW"}
         or page.verification != "UNVERIFIED"
-        or page.source_id != _SOURCE
+        or type(page.verification) is not str
+        or type(page.source_id) is not str
+        or page.source_id != source_url
         or type(page.sha256) is not str
         or _HASH.fullmatch(page.sha256) is None
         or type(page.products) is not tuple
@@ -109,6 +113,11 @@ def _recheck_page(page):
             or type(product.stages) is not tuple
             or not 1 <= len(product.stages) <= 256
             or any(type(stage) is not StageCandidate for stage in product.stages)
+            or any(
+                type(getattr(stage, field)) is not str
+                for stage in product.stages
+                for field in ("session", "phase", "start", "end", "day_transition", "raw_line")
+            )
         ):
             raise ValueError("invalid product")
         key = (product.kind, product.name)
@@ -123,10 +132,13 @@ def _recheck_page(page):
         if type(note) is not str or len(note) > 8192:
             raise ValueError("invalid note")
         rows.append(f'<tr><td colspan="2">{_cell(note)}</td></tr>')
-    document = ("<table>" + "".join(rows) + "</table>").encode("utf-8", "strict")
+    document = "".join(
+        "<table>" + "".join(rows[index : index + MAX_ROWS]) + "</table>"
+        for index in range(0, len(rows), MAX_ROWS)
+    ).encode("utf-8", "strict")
     if len(document) > _MAX_RAW:
         raise ValueError("page budget exceeded")
-    reparsed = parse_shfe_page(source_id=_SOURCE, html=document)
+    reparsed = parse_shfe_page(source_id=source_url, html=document)
     replay = {(p.kind, p.name): p for p in reparsed.products}
     if (
         reparsed.status != page.status
@@ -143,8 +155,14 @@ def convert_shfe_hours(
     page: PageCandidate, *, selections: tuple[HoursSelection, ...]
 ) -> HoursCandidateResult:
     """Project explicitly selected day phases, never infer night or identity."""
+    return _convert_hours(
+        page, selections=selections, source_url=_SOURCE, prefix="shfe", venues={"SHFE", "INE"}
+    )
+
+
+def _convert_hours(page, *, selections, source_url, prefix, venues):
     try:
-        products = _recheck_page(page)
+        products = _recheck_page(page, source_url=source_url)
         if type(selections) is not tuple or not 1 <= len(selections) <= _MAX_SELECTIONS:
             raise ValueError("invalid selections")
         page_keys = set()
@@ -155,7 +173,7 @@ def convert_shfe_hours(
             if (
                 type(selected) is not HoursSelection
                 or type(selected.venue) is not str
-                or selected.venue not in {"SHFE", "INE"}
+                or selected.venue not in venues
                 or type(selected.kind) is not str
                 or selected.kind not in {"future", "option"}
                 or type(selected.page_product_name) is not str
@@ -183,7 +201,7 @@ def convert_shfe_hours(
             total_contracts += len(selected.contracts)
             if total_contracts > _MAX_CONTRACTS:
                 raise ValueError("selection budget exceeded")
-        source_id = f"shfe.hours.{page.sha256}"
+        source_id = f"{prefix}.hours.{page.sha256}"
         hours = []
         unresolved = []
         for selected in sorted(selections, key=lambda s: (s.venue, s.kind, s.product)):
@@ -246,7 +264,7 @@ def convert_shfe_hours(
                 )
             )
         content = {
-            "sources": [{"id": source_id, "description": f"{_SOURCE} sha256:{page.sha256}"}],
+            "sources": [{"id": source_id, "description": f"{source_url} sha256:{page.sha256}"}],
             "trading_days": [],
             "trading_hours": hours,
             "exceptions": [],

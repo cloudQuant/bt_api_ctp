@@ -63,6 +63,21 @@ def selections():
     )
 
 
+def test_stage_fields_reject_string_subclasses():
+    class Deceptive(str):
+        def __eq__(self, other):
+            return True
+
+        __hash__ = str.__hash__
+
+    original = page()
+    product = original.products[0]
+    forged = replace(product.stages[0], phase=Deceptive(product.stages[0].phase))
+    altered = replace(product, stages=(forged,) + product.stages[1:])
+    candidate = replace(original, products=(altered,) + original.products[1:])
+    assert convert_shfe_hours(candidate, selections=selections()).status == "INVALID_INPUT"
+
+
 def test_explicit_multi_venue_future_option_day_phases_and_unresolved_nights():
     source = page()
     chosen = selections()
