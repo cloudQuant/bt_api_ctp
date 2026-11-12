@@ -400,7 +400,8 @@ def _run_owned_child(connect_timeout, read_timeout, total_timeout, max_bytes, in
                 shell=False,
             )
         except Exception:
-            return "CHILD_ERROR", None
+            # Popen did not return a handle; it cannot prove that no child exists.
+            return "CHILD_CLEANUP_UNCERTAIN", None
         if interrupted[0]:
             interrupt()
         output = bytearray()

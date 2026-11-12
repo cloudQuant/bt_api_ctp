@@ -308,6 +308,28 @@ def test_runner_exception_cannot_assert_child_cleanup():
     assert result.status == "UNKNOWN" and result.transport_status == "CHILD_CLEANUP_UNCERTAIN"
 
 
+def test_popen_exception_without_handle_cannot_assert_no_child(monkeypatch, supported_fake_host):
+    original = subprocess.Popen
+    children = []
+
+    def spawn_then_raise(command, **kwargs):
+        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        children.append(child)
+        raise OSError("injected after child start")
+
+    monkeypatch.setattr(fetch.subprocess, "Popen", spawn_then_raise)
+    try:
+        result = fetch.collect_navigation(total_timeout=1)
+        assert result.status == "UNKNOWN"
+        assert result.transport_status == "CHILD_CLEANUP_UNCERTAIN"
+        assert len(children) == 1 and children[0].poll() is None
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=3)
+
+
 _SIGNAL_SCRIPT = r"""
 import os, signal, subprocess, sys, threading
 from bt_api_ctp import calendar_shfe_navigation_fetch as fetch
