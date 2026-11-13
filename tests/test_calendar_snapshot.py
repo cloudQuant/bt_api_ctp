@@ -253,6 +253,122 @@ def test_snapshot_is_detached_and_read_only():
         snapshot._values[("x",)] = ()
 
 
+@pytest.mark.parametrize("slot", CalendarSnapshot.__slots__)
+def test_sealed_snapshot_rejects_slot_deletion(slot):
+    snapshot = CalendarSnapshot(synthetic(), calendar_ref="synthetic-v1")
+    with pytest.raises(AttributeError, match="read-only"):
+        delattr(snapshot, slot)
+    assert query(snapshot).status == "COMPLETE"
+    assert (
+        snapshot.query_venue_day(venue="XSH", trading_day=date(2026, 10, 12)).day_status == "open"
+    )
+
+
+def test_unsealed_snapshot_allows_slot_deletion():
+    snapshot = CalendarSnapshot.__new__(CalendarSnapshot)
+    snapshot._ref = "temporary"
+    del snapshot._ref
+    assert not hasattr(snapshot, "_ref")
+
+
+@pytest.mark.parametrize("venue", ["SHFE", "DCE", "CZCE", "CFFEX", "INE", "GFEX"])
+def test_venue_day_returns_explicit_open_and_closed_with_daily_sources(venue):
+    data = synthetic()
+    data["trading_days"].extend(
+        {"venue": venue, "day": day, "status": status, "source_ids": ["synthetic-exception"]}
+        for day, status in (("2026-10-12", "open"), ("2026-10-13", "closed"))
+    )
+    snapshot = CalendarSnapshot(data, calendar_ref="synthetic-v1")
+    for day, declared in ((date(2026, 10, 12), "open"), (date(2026, 10, 13), "closed")):
+        result = snapshot.query_venue_day(venue=venue, trading_day=day)
+        assert (result.status, result.reason, result.day_status) == (
+            "COMPLETE",
+            "EXPLICIT_DATA",
+            declared,
+        )
+        assert (result.venue, result.trading_day, result.calendar_ref) == (
+            venue,
+            day,
+            query(snapshot).calendar_ref,
+        )
+        assert result.source_ids == ("synthetic-exception",)
+        assert result.sources_verified is False
+
+
+def test_venue_day_is_not_inferred_from_contract_windows_or_completeness():
+    data = synthetic()
+    data["trading_hours"][0]["windows_complete"] = False
+    snapshot = CalendarSnapshot(data, calendar_ref="synthetic-v1")
+    day = date(2026, 10, 12)
+    assert query(snapshot, contract="cu2601").status == "UNKNOWN"
+    venue = snapshot.query_venue_day(venue="XSH", trading_day=day)
+    assert (venue.status, venue.day_status, venue.source_ids) == (
+        "COMPLETE",
+        "open",
+        ("synthetic",),
+    )
+    # An explicit contract closure also cannot imply a venue closure.
+    complete = CalendarSnapshot(synthetic(), calendar_ref="synthetic-v1")
+    assert query(complete, contract="cu2601").windows == ()
+    assert complete.query_venue_day(venue="XSH", trading_day=day).day_status == "open"
+
+
+def test_venue_day_missing_scope_coverage_and_source():
+    data = synthetic()
+    data["trading_days"] = [
+        row
+        for row in data["trading_days"]
+        if row["venue"] != "XDCE" and not (row["venue"] == "XSH" and row["day"] == "2026-10-11")
+    ]
+    data["trading_hours"][1]["night_mappings"] = []
+    snapshot = CalendarSnapshot(data, calendar_ref="synthetic-v1")
+    missing = snapshot.query_venue_day(venue="XDCE", trading_day=date(2026, 10, 12))
+    assert (missing.status, missing.reason, missing.day_status, missing.source_ids) == (
+        "UNKNOWN",
+        "COVERAGE_INSUFFICIENT",
+        None,
+        (),
+    )
+    for day in (date(2026, 10, 8), date(2026, 10, 11), date(2026, 10, 14)):
+        assert snapshot.query_venue_day(venue="XSH", trading_day=day).status == "UNKNOWN"
+    unknown = snapshot.query_venue_day(venue="ABSENT", trading_day=date(2026, 10, 12))
+    assert (unknown.status, unknown.reason, unknown.day_status, unknown.source_ids) == (
+        "OUT_OF_SCOPE",
+        "VENUE_NOT_IN_SNAPSHOT",
+        None,
+        (),
+    )
+    for source_ids in ([], ["missing"]):
+        data = synthetic()
+        data["trading_days"][0]["source_ids"] = source_ids
+        with pytest.raises(CalendarSnapshotError):
+            CalendarSnapshot(data, calendar_ref="synthetic-v1")
+
+
+def test_venue_day_date_boundaries_validation_and_mutation_isolation():
+    data = synthetic()
+    data["trading_days"].extend(
+        {"venue": "XSH", "day": day, "status": status, "source_ids": ["synthetic"]}
+        for day, status in (("0001-01-01", "closed"), ("9999-12-31", "open"))
+    )
+    snapshot = CalendarSnapshot(data, calendar_ref="synthetic-v1")
+    for day, declared in ((date.min, "closed"), (date.max, "open")):
+        assert snapshot.query_venue_day(venue="XSH", trading_day=day).day_status == declared
+    for invalid in ("2026-10-12", datetime(2026, 10, 12), None):
+        with pytest.raises(CalendarSnapshotError):
+            snapshot.query_venue_day(venue="XSH", trading_day=invalid)
+    with pytest.raises(CalendarSnapshotError):
+        snapshot.query_venue_day(venue="", trading_day=date.min)
+    data["trading_days"][-1]["status"] = "closed"
+    data["trading_days"][-1]["source_ids"].clear()
+    result = snapshot.query_venue_day(venue="XSH", trading_day=date.max)
+    assert (result.day_status, result.source_ids) == ("open", ("synthetic",))
+    with pytest.raises(AttributeError):
+        result.day_status = "closed"
+    with pytest.raises(TypeError):
+        snapshot._days[("XSH", date.max)] = ("closed", ())
+
+
 @pytest.mark.parametrize(
     "change",
     [

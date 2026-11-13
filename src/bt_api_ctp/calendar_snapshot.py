@@ -56,6 +56,18 @@ class CalendarResult:
     sources_verified: bool = False
 
 
+@dataclass(frozen=True)
+class VenueDayResult:
+    status: str
+    reason: str
+    calendar_ref: str
+    venue: str
+    trading_day: date
+    day_status: str | None
+    source_ids: tuple[str, ...]
+    sources_verified: bool = False
+
+
 def _object(value: Any, keys: set[str]) -> dict[str, Any]:
     if type(value) is not dict or set(value) != keys:
         raise CalendarSnapshotError("unexpected or missing fields")
@@ -154,12 +166,17 @@ class CalendarSnapshot:
     about current venue state or a query over arbitrary UTC coverage.
     """
 
-    __slots__ = ("_ref", "_scopes", "_values", "_sealed")
+    __slots__ = ("_ref", "_scopes", "_values", "_days", "_day_venues", "_sealed")
 
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "_sealed", False):
             raise AttributeError("calendar snapshot is read-only")
         object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("calendar snapshot is read-only")
+        object.__delattr__(self, name)
 
     def __init__(self, content: dict[str, Any], *, calendar_ref: str):
         self._ref = _identifier(calendar_ref)
@@ -383,7 +400,32 @@ class CalendarSnapshot:
                 raise CalendarSnapshotError("overlapping trading day ownership")
         self._scopes = frozenset(scopes)
         self._values = MappingProxyType(values)
+        self._days = MappingProxyType(days)
+        self._day_venues = frozenset({venue for venue, _ in days} | {scope[0] for scope in scopes})
         self._sealed = True
+
+    def query_venue_day(self, *, venue: str, trading_day: date) -> VenueDayResult:
+        """Return the explicit venue-day declaration, without inferring from windows.
+
+        Source IDs identify snapshot references only; they do not authenticate
+        those sources or establish trading authority.
+        """
+        if type(trading_day) is not date:
+            raise CalendarSnapshotError("trading_day must be a date")
+        venue = _identifier(venue)
+        if venue not in self._day_venues:
+            status, reason, day_status, sources = (
+                "OUT_OF_SCOPE",
+                "VENUE_NOT_IN_SNAPSHOT",
+                None,
+                (),
+            )
+        elif (venue, trading_day) not in self._days:
+            status, reason, day_status, sources = ("UNKNOWN", "COVERAGE_INSUFFICIENT", None, ())
+        else:
+            day_status, sources = self._days[(venue, trading_day)]
+            status, reason = "COMPLETE", "EXPLICIT_DATA"
+        return VenueDayResult(status, reason, self._ref, venue, trading_day, day_status, sources)
 
     def query(
         self, *, venue: str, kind: str, product: str, contract: str, trading_day: date
