@@ -36,6 +36,8 @@ _MAX_CACHED_WINDOWS = 16384
 _MAX_CACHED_SCOPES = 8
 _MAX_CACHED_YEARS = 12
 _MAX_CACHED_DAYS = 4800
+_PREPARED_DEFAULT_WINDOWS = 131072
+_PREPARED_MAX_WINDOWS = 262144
 
 
 class SimulationCalendarUnavailable(FuturesExpectedCalendarError):
@@ -62,6 +64,8 @@ class SimulationCalendarUnavailable(FuturesExpectedCalendarError):
             "SIMULATION_WINDOW_SOURCE_UNAVAILABLE",
             "SIMULATION_WINDOW_UNAVAILABLE",
             "SIMULATION_YEAR_UNAVAILABLE",
+            "SIMULATION_PREPARED_SCOPE_UNAVAILABLE",
+            "SIMULATION_PREPARED_BUDGET_UNAVAILABLE",
         }
     )
 
@@ -191,6 +195,31 @@ class SimulationCalendarPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class SimulationPreparedLimits:
+    required_instruments: tuple[str, ...]
+    required_years: tuple[tuple[str, int], ...]
+    max_instruments: int
+    max_years: int
+    max_owner_days: int
+    max_windows_per_owner: int
+    max_cached_windows: int
+    hard_max_cached_windows: int
+    cached_windows: int
+
+
+@dataclass(frozen=True, slots=True)
+class SimulationPreparedCalendarPorts:
+    """Eagerly validated simulation scopes, not authenticated venue facts."""
+
+    identity: SimulationIdentity
+    mappings: tuple[SimulationMapping, ...]
+    closure: SimulationOwnerClosure
+    expected_days: Any
+    schedule: Any
+    limits: SimulationPreparedLimits
+
+
+@dataclass(frozen=True, slots=True)
 class _DayDeclaration:
     day_status: str
 
@@ -280,8 +309,9 @@ class _Shared:
 
 
 class _ExpectedDays:
-    def __init__(self, shared: _Shared):
+    def __init__(self, shared: _Shared, *, allowed: frozenset[tuple[str, int]] | None = None):
         self._shared = shared
+        self._allowed = allowed
         self._cache: OrderedDict[tuple[str, int], tuple[date, ...]] = OrderedDict()
 
     def build(self, request: Any) -> Any:
@@ -299,6 +329,8 @@ class _ExpectedDays:
         ):
             raise SimulationCalendarUnavailable("SIMULATION_YEAR_UNAVAILABLE")
         start, end = date(year, 1, 1), date(year, 12, 31)
+        if self._allowed is not None and (venue, year) not in self._allowed:
+            raise SimulationCalendarUnavailable("SIMULATION_PREPARED_SCOPE_UNAVAILABLE")
         with self._shared.lock:
             self._shared.check(self._shared.view.status())
             key = (venue, year)
@@ -426,10 +458,15 @@ class _Schedule:
         shared: _Shared,
         mappings: tuple[SimulationMapping, ...],
         closure: SimulationOwnerClosure,
+        *,
+        pinned: bool = False,
+        max_windows: int = _MAX_CACHED_WINDOWS,
     ):
         self._shared = shared
         self._mappings = {m.instrument_id: m for m in mappings}
         self._closure = closure
+        self._pinned = pinned
+        self._max_windows = max_windows
         self._cache: OrderedDict[
             str,
             tuple[
@@ -525,7 +562,9 @@ class _Schedule:
                                 w.window_id,
                             )
                         )
-                        if len(windows) > _MAX_CACHED_WINDOWS:
+                        if len(windows) > self._max_windows or (
+                            self._pinned and self._cached_count + len(windows) > self._max_windows
+                        ):
                             raise SimulationCalendarUnavailable("SIMULATION_WINDOW_LIMIT")
                 except SimulationCalendarUnavailable:
                     raise
@@ -543,9 +582,13 @@ class _Schedule:
                 continuous,
                 tuple(w.start_utc for w in continuous),
             )
-            while self._cache and (
-                len(self._cache) >= _MAX_CACHED_SCOPES
-                or self._cached_count + len(windows) > _MAX_CACHED_WINDOWS
+            while (
+                not self._pinned
+                and self._cache
+                and (
+                    len(self._cache) >= _MAX_CACHED_SCOPES
+                    or self._cached_count + len(windows) > _MAX_CACHED_WINDOWS
+                )
             ):
                 _, removed = self._cache.popitem(last=False)
                 self._cached_count -= len(removed[0])
@@ -674,6 +717,117 @@ def create_simulation_calendar_ports(
         shared.check(view.status())
         return SimulationCalendarPorts(
             identity, mappings, closure, _ExpectedDays(shared), _Schedule(shared, mappings, closure)
+        )
+    except SimulationCalendarUnavailable:
+        raise
+    except Exception:
+        raise SimulationCalendarUnavailable("SIMULATION_COMPOSITION_UNAVAILABLE") from None
+
+
+def create_prepared_simulation_calendar_ports(
+    *,
+    mode: str,
+    view: SimulationReadView,
+    mappings: tuple[SimulationMapping, ...],
+    closure: SimulationOwnerClosure,
+    required_instruments: tuple[str, ...],
+    required_years: tuple[tuple[str, int], ...],
+    max_cached_windows: int = _PREPARED_DEFAULT_WINDOWS,
+) -> SimulationPreparedCalendarPorts:
+    """Eagerly validate and pin only explicitly requested simulation scopes.
+
+    Failure exposes no ports. The caller's owner closure and identities remain
+    declarations, not proof of exchange facts or permission to trade.
+    """
+    try:
+        if (
+            type(max_cached_windows) is not int
+            or not 1 <= max_cached_windows <= _PREPARED_MAX_WINDOWS
+        ):
+            raise SimulationCalendarUnavailable("SIMULATION_PREPARED_BUDGET_UNAVAILABLE")
+        if (
+            type(required_instruments) is not tuple
+            or not 1 <= len(required_instruments) <= _MAX_MAPPINGS
+            or any(not _text(item) for item in required_instruments)
+            or len(set(required_instruments)) != len(required_instruments)
+            or type(required_years) is not tuple
+            or not 1 <= len(required_years) <= _MAX_CACHED_YEARS
+            or any(
+                type(row) is not tuple
+                or len(row) != 2
+                or type(row[0]) is not str
+                or row[0] not in _VENUES
+                or type(row[1]) is not int
+                or not 1 <= row[1] <= 9999
+                for row in required_years
+            )
+            or len(set(required_years)) != len(required_years)
+            or type(mappings) is not tuple
+            or any(
+                type(item) is not SimulationMapping
+                or any(
+                    type(getattr(item, name)) is not str
+                    for name in ("instrument_id", "venue", "kind", "product", "mock_contract")
+                )
+                for item in mappings
+            )
+            or type(closure) is not SimulationOwnerClosure
+            or type(closure.version_sha256) is not str
+        ):
+            raise SimulationCalendarUnavailable("SIMULATION_PREPARED_SCOPE_UNAVAILABLE")
+        # The legacy factory retains its normal construction and LRU behavior.
+        # Its transient objects are private and never returned to callers here.
+        baseline = create_simulation_calendar_ports(
+            mode=mode, view=view, mappings=mappings, closure=closure
+        )
+        by_instrument = {item.instrument_id: item for item in baseline.mappings}
+        if any(item not in by_instrument for item in required_instruments):
+            raise SimulationCalendarUnavailable("SIMULATION_PREPARED_SCOPE_UNAVAILABLE")
+        selected = tuple(
+            SimulationMapping(
+                by_instrument[name].instrument_id,
+                by_instrument[name].venue,
+                by_instrument[name].kind,
+                by_instrument[name].product,
+                by_instrument[name].mock_contract,
+            )
+            for name in required_instruments
+        )
+        years = tuple((venue, year) for venue, year in required_years)
+        needed = frozenset(
+            (item.venue, year)
+            for item in selected
+            for year in range(
+                baseline.closure.owner_start.year, baseline.closure.owner_end.year + 1
+            )
+        )
+        if not needed <= frozenset(years):
+            raise SimulationCalendarUnavailable("SIMULATION_PREPARED_SCOPE_UNAVAILABLE")
+        shared = _Shared(view, baseline.identity)
+        dates = _ExpectedDays(shared, allowed=frozenset(years))
+        schedule = _Schedule(
+            shared, selected, baseline.closure, pinned=True, max_windows=max_cached_windows
+        )
+        for venue, year in years:
+            dates.expected_trading_days(venue, year)
+        for item in selected:
+            schedule.windows(
+                item.instrument_id, baseline.closure.start_utc, baseline.closure.end_utc
+            )
+        shared.check(view.status())
+        limits = SimulationPreparedLimits(
+            tuple(required_instruments),
+            years,
+            _MAX_MAPPINGS,
+            _MAX_CACHED_YEARS,
+            _MAX_OWNERS,
+            _MAX_WINDOWS_PER_DAY,
+            max_cached_windows,
+            _PREPARED_MAX_WINDOWS,
+            schedule._cached_count,
+        )
+        return SimulationPreparedCalendarPorts(
+            baseline.identity, selected, baseline.closure, dates, schedule, limits
         )
     except SimulationCalendarUnavailable:
         raise

@@ -11,6 +11,7 @@ from bt_api_ctp.simulation_calendar_ports import (
     SimulationCalendarUnavailable,
     SimulationMapping,
     SimulationOwnerClosure,
+    create_prepared_simulation_calendar_ports,
     create_simulation_calendar_ports,
 )
 
@@ -219,7 +220,7 @@ def test_no_unknown_result_is_cached_and_success_is_cached(tmp_path):
     assert proxy.calls == count
 
 
-def simulated_store(tmp_path, data, start, end):
+def simulated_store(tmp_path, data, start, end, *, return_binding=False):
     import json
 
     pytest.importorskip("bt_api_py.trading_calendar_binding")
@@ -259,7 +260,8 @@ def simulated_store(tmp_path, data, start, end):
         trading_day=start,
         last_sequence=1,
     )
-    return bound.capture_read_view(mode="SIMULATION_ONLY")
+    view = bound.capture_read_view(mode="SIMULATION_ONLY")
+    return (store, bound, view) if return_binding else view
 
 
 def simulated_content(start, end, open_days):
@@ -760,3 +762,249 @@ def test_standalone_mixed_time_precision_without_sdk(field, delta):
     setattr(window, field, getattr(window, field) + delta)
     with pytest.raises(SimulationCalendarUnavailable):
         _window_sources(query, result, MAPPING)
+
+
+class PreparedFakeView:
+    """One simulated owner day per instrument, plus explicit daily year rows."""
+
+    def __init__(self, *, fail_instrument=None):
+        self.owner = date(2026, 1, 2)
+        self.fail_instrument = fail_instrument
+        self.query_calls = 0
+        self.day_calls = 0
+        self._status = SimpleNamespace(
+            mode="SIMULATION_ONLY",
+            route="route",
+            source_generation="gen",
+            calendar_ref="fake-v1",
+            publication_id="fake-p1",
+            content_sha256="a" * 64,
+            coverage_manifest_sha256="b" * 64,
+            binding_sha256="c" * 64,
+            version_sha256="d" * 64,
+            bound_trading_day=self.owner,
+            last_sequence=1,
+            coverage_status="DECLARED_UNVERIFIED",
+            load_error=None,
+            data_origin="UNSPECIFIED",
+            declared_coverage=tuple(
+                SimpleNamespace(venue=venue, start_day=date(2026, 1, 1), end_day=date(2027, 12, 31))
+                for venue in ("SHFE", "INE", "CZCE", "DCE", "CFFEX", "GFEX")
+            ),
+        )
+
+    def status(self):
+        return self._status
+
+    def query_venue_day(self, *, mode, venue, trading_day):
+        self.day_calls += 1
+        return SimpleNamespace(
+            binding=self._status,
+            status="COMPLETE",
+            mode=mode,
+            venue=venue,
+            trading_day=trading_day,
+            day_status="open" if trading_day == self.owner else "closed",
+            source_ids=("MOCK.simulation_only",),
+            source_authentication="NOT_PROVEN",
+            trade_authorization="NONE",
+        )
+
+    def query(self, *, venue, kind, product, contract, trading_day):
+        self.query_calls += 1
+        day = self.owner
+        window = SimpleNamespace(
+            window_id="w",
+            phase="continuous",
+            trading_day=day,
+            start_utc=datetime(2026, 1, 2, 1, tzinfo=UTC),
+            end_utc=datetime(2026, 1, 2, 2, tzinfo=UTC),
+        )
+        result = SimpleNamespace(
+            status="UNKNOWN" if contract == self.fail_instrument else "COMPLETE",
+            calendar_ref="fake-v1",
+            sources_verified=False,
+            venue=venue,
+            kind=kind,
+            product=product,
+            contract=contract,
+            trading_day=trading_day,
+            source_ids=("MOCK.simulation_only",),
+            windows=(window,),
+        )
+        provenance = {
+            "schema": "bt_api.calendar-declared-mock-windows/1",
+            "environment": "SIMULATION_ONLY",
+            "windows": [
+                {
+                    "window_id": "w",
+                    "scope": "DAY",
+                    "source_type": "MOCK",
+                    "source_id": "MOCK.simulation_only",
+                    "source_authentication": "NOT_PROVEN",
+                }
+            ],
+        }
+        return SimpleNamespace(
+            binding=self._status,
+            result=result,
+            simulation_provenance=None,
+            declared_mock_provenance=provenance,
+        )
+
+
+def prepared_inputs():
+    venues = ("SHFE", "INE", "CZCE", "DCE", "CFFEX", "GFEX")
+    mappings = tuple(
+        SimulationMapping(
+            f"sim.{i}", venues[i % 6], "option" if i % 2 else "future", f"p{i}", f"mock_{i}"
+        )
+        for i in range(42)
+    )
+    years = tuple((venue, year) for venue in venues for year in (2026, 2027))
+    start, end = datetime(2026, 1, 2, 0, tzinfo=UTC), datetime(2026, 1, 2, 3, tzinfo=UTC)
+    closure = SimulationOwnerClosure("d" * 64, start, end, date(2026, 1, 2), date(2026, 1, 2), 0, 0)
+    return mappings, years, closure
+
+
+def make_prepared(view, *, budget=131072):
+    mappings, years, closure = prepared_inputs()
+    return create_prepared_simulation_calendar_ports(
+        mode="SIMULATION_ONLY",
+        view=view,
+        mappings=mappings,
+        closure=closure,
+        required_instruments=tuple(item.instrument_id for item in mappings[:41]),
+        required_years=years,
+        max_cached_windows=budget,
+    )
+
+
+def test_prepared_41_one_day_fake_scopes_are_pinned_not_yearly_product_baseline():
+    from concurrent.futures import ThreadPoolExecutor
+
+    view = PreparedFakeView()
+    mappings, years, closure = prepared_inputs()
+    ports = make_prepared(view)
+    assert len(ports.mappings) == len(ports.limits.required_instruments) == 41
+    assert len(ports.limits.required_years) == 12
+    assert ports.limits.max_instruments == 128 and ports.limits.max_years == 12
+    assert ports.limits.cached_windows == 41
+    assert (
+        ports.limits.max_cached_windows == 131072 and ports.limits.hard_max_cached_windows == 262144
+    )
+    assert view.query_calls == 41
+
+    def read(item):
+        return ports.schedule.windows(item.instrument_id, closure.start_utc, closure.end_utc)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(read, mappings[:41]))
+    assert len(results) == 41 and all(len(item) == 1 for item in results)
+    assert view.query_calls == 41
+    for venue, year in years:
+        assert ports.expected_days.expected_trading_days(venue, year) == (
+            (date(2026, 1, 2),) if year == 2026 else ()
+        )
+    before = (view.query_calls, view.day_calls)
+    with pytest.raises(SimulationCalendarUnavailable):
+        ports.schedule.windows(mappings[41].instrument_id, closure.start_utc, closure.end_utc)
+    with pytest.raises(SimulationCalendarUnavailable):
+        ports.expected_days.expected_trading_days("SHFE", 2028)
+    assert (view.query_calls, view.day_calls) == before
+    assert ports.identity.source_authentication == "NOT_PROVEN"
+
+
+def test_prepared_rejects_budget_failed_scope_and_missing_year_without_partial_ports():
+    mappings, years, closure = prepared_inputs()
+    with pytest.raises(SimulationCalendarUnavailable) as info:
+        make_prepared(PreparedFakeView(), budget=40)
+    assert info.value.reason == "SIMULATION_WINDOW_LIMIT"
+    with pytest.raises(SimulationCalendarUnavailable):
+        make_prepared(PreparedFakeView(fail_instrument=mappings[40].mock_contract))
+    with pytest.raises(SimulationCalendarUnavailable):
+        create_prepared_simulation_calendar_ports(
+            mode="SIMULATION_ONLY",
+            view=PreparedFakeView(),
+            mappings=mappings,
+            closure=closure,
+            required_instruments=tuple(item.instrument_id for item in mappings[:41]),
+            required_years=tuple(row for row in years if row != ("GFEX", 2026)),
+        )
+    for bad in (0, True, 262145):
+        with pytest.raises(SimulationCalendarUnavailable):
+            make_prepared(PreparedFakeView(), budget=bad)
+
+
+def test_original_factory_retains_eight_scope_lru():
+    view = PreparedFakeView()
+    mappings, _, closure = prepared_inputs()
+    ports = create_simulation_calendar_ports(
+        mode="SIMULATION_ONLY", view=view, mappings=mappings, closure=closure
+    )
+    for item in mappings[:9]:
+        ports.schedule.windows(item.instrument_id, closure.start_utc, closure.end_utc)
+    assert view.query_calls == 9
+    ports.schedule.windows(mappings[0].instrument_id, closure.start_utc, closure.end_utc)
+    assert view.query_calls == 10
+
+
+def test_prepared_real_store_year_and_v1_v2_are_independently_pinned(tmp_path):
+    import json
+
+    pytest.importorskip("bt_api_py.trading_calendar_binding")
+    pytest.importorskip("tests.calendar_test_store")
+    from bt_api_py.trading_calendar_binding import GateDecision
+    from bt_api_py.trading_calendar_composite import compose_simulated
+    from bt_api_py.trading_calendar_update_simulation import VenueContent
+
+    from bt_api_ctp.calendar_snapshot import CalendarSnapshot
+
+    first, last, owner = date(2026, 1, 1), date(2026, 12, 31), date(2026, 1, 2)
+    original = simulated_content(first, last, {owner})
+    store, bound, view = simulated_store(tmp_path, original, first, last, return_binding=True)
+    start, end = datetime(2026, 1, 2, 0, tzinfo=UTC), datetime(2026, 1, 2, 4, tzinfo=UTC)
+
+    def prepared(selected_view):
+        closure = SimulationOwnerClosure(
+            selected_view.status().version_sha256, start, end, owner, owner, 0, 0
+        )
+        return create_prepared_simulation_calendar_ports(
+            mode="SIMULATION_ONLY",
+            view=selected_view,
+            mappings=(MAPPING,),
+            closure=closure,
+            required_instruments=(MAPPING.instrument_id,),
+            required_years=(("SHFE", 2026),),
+        )
+
+    old = prepared(view)
+    assert old.expected_days.expected_trading_days("SHFE", 2026) == (owner,)
+    assert old.schedule.windows(MAPPING.instrument_id, start, end)[0].start_utc.hour == 1
+    changed = simulated_content(first, last, {owner})
+    changed["trading_hours"][0]["day_windows"][0].update(start="10:00", end="11:00")
+    group = VenueContent.from_layers("SHFE", first, last, changed)
+    bundle = compose_simulated(
+        mode="SIMULATION_ONLY", venues=(group,), snapshot_factory=CalendarSnapshot
+    )
+    assert bundle.status == "READY_SIMULATED"
+    result = store.publish(
+        json.loads(bundle.snapshot_bytes),
+        publication_id="pub-v2",
+        version_id="v2",
+        coverage_manifest_bytes=bundle.manifest_bytes,
+        coverage_manifest_sha256=bundle.manifest_sha256,
+        binding_bytes=bundle.binding_bytes,
+        binding_sha256=bundle.binding_sha256,
+    )
+    assert result.visibility == "COMMITTED"
+    assert (
+        bound.activate(GateDecision(True, "route", "gen", owner, 2, "event-v2")).outcome
+        == "ACTIVATED"
+    )
+    new = prepared(bound.capture_read_view(mode="SIMULATION_ONLY"))
+    assert old.identity.calendar_ref == "v-year" and new.identity.calendar_ref == "v2"
+    assert old.schedule.windows(MAPPING.instrument_id, start, end)[0].start_utc.hour == 1
+    assert new.schedule.windows(MAPPING.instrument_id, start, end)[0].start_utc.hour == 2
+    assert old.expected_days.expected_trading_days("SHFE", 2026) == (owner,)
+    assert new.expected_days.expected_trading_days("SHFE", 2026) == (owner,)
