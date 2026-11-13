@@ -41,6 +41,16 @@ def test_success_retains_original_rows_and_unverified_time():
     assert result.required_version == result.observed_version == fetch.VERSION
     assert result.candidate.source_version == fetch.VERSION
     assert result.time_candidate.source_id == result.capture_id
+    assert result.raw_rows == (("交易时间", "日盘 09:00-10:15 未知"), ("名称", "螺纹"))
+
+
+def test_typed_rows_preserve_numeric_value_and_old_default():
+    result = capture(packet([["交易时间", 12], ["x", None]]))
+    assert result.status == "MISSING_TRADING_TIME"
+    assert result.raw_rows == (("交易时间", 12), ("x", None))
+    from dataclasses import replace
+
+    assert replace(result, raw_rows=None).raw_rows is None
 
 
 @pytest.mark.parametrize(

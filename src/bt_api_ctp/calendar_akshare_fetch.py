@@ -66,6 +66,9 @@ class AkshareCapture:
     verification: str = "UNVERIFIED"
     authorization: str = "NOT_AUTHORIZED"
     coverage: str = "UNKNOWN"
+    # Exact bounded child-IPC scalar types, not original upstream bytes.
+    # None keeps older callers compatible and means types were not retained.
+    raw_rows: Optional[tuple[tuple[object, object], ...]] = None
 
     @property
     def captured_at(self):
@@ -323,6 +326,7 @@ def collect_akshare_contract(
         timeout_retry=(
             "NOT_PROVEN_SAFE" if status in {"FETCH_TIMEOUT", "UNKNOWN"} else "NOT_APPLICABLE"
         ),
+        raw_rows=(tuple(tuple(row) for row in packet["rows"]) if observed_version else None),
     )
 
 
