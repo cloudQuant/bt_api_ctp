@@ -322,6 +322,15 @@ class CalendarSnapshot:
                 (scope, contract, day, action, name, _refs(row["source_ids"], sources))
             )
 
+        # Retain original indices and order: wildcard and contract-specific
+        # exceptions must still interact exactly as they did in input order.
+        exception_groups = {}
+        for index, exception in enumerate(exceptions):
+            exception_groups.setdefault((exception[0], exception[2]), []).append((index, exception))
+        exception_index = MappingProxyType(
+            {key: tuple(group) for key, group in exception_groups.items()}
+        )
+
         values: dict[
             tuple[str, str, str, str, date],
             tuple[tuple[CalendarWindow, ...], tuple[str, ...], bool],
@@ -358,14 +367,10 @@ class CalendarSnapshot:
                     provenance = set(day_sources + rule_sources + mapping_sources)
                     used_names: set[str] = set()
                     closed = False
-                    for index, (ex_scope, ex_contract, ex_day, action, name, refs) in enumerate(
-                        exceptions
+                    for index, (_, ex_contract, _, action, name, refs) in exception_index.get(
+                        (scope, day), ()
                     ):
-                        if (
-                            ex_scope != scope
-                            or ex_day != day
-                            or ex_contract not in (None, contract)
-                        ):
+                        if ex_contract not in (None, contract):
                             continue
                         applied.add(index)
                         if closed or (action == "close_day" and used_names):
