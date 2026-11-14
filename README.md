@@ -117,6 +117,10 @@ The working-tree isolated SimNow trader probe resides in `bt_api_ctp.simnow_prob
 pip install bt_api_ctp
 ```
 
+For explicit AKShare calendar capture, install `bt_api_ctp[calendar-akshare]`.
+The current collector requires AKShare 1.18.64. Mock calendars do not need this
+extra, and installing it does not verify real data or its source.
+
 Or install from source:
 
 ```bash
