@@ -351,6 +351,137 @@ class _ExpectedDays:
             return result
 
 
+def _mock_interruption_sources(
+    query: Any, result: Any, mapping: SimulationMapping, attribution: dict
+) -> None:
+    """Check versioned mock segment structure; this does not authenticate it."""
+    from bt_api_ctp.calendar_snapshot import _interruption_ids, _interruption_utc
+
+    expected_fields = {
+        "scope",
+        "window_id",
+        "source_type",
+        "source_id",
+        "source_authentication",
+        "declaration",
+        "original_window_id",
+        "segment",
+        "parent_start_utc",
+        "parent_end_utc",
+        "interruption",
+        "trading_day",
+        "phase",
+        "start_utc",
+        "end_utc",
+    }
+    binding = query.binding
+    if (
+        set(attribution) != {"schema", "environment", "binding", "scope", "windows"}
+        or attribution["binding"]
+        != {
+            "calendar_ref": binding.calendar_ref,
+            "version_sha256": binding.version_sha256,
+            "content_sha256": binding.content_sha256,
+        }
+        or attribution["scope"]
+        != {
+            "venue": mapping.venue,
+            "kind": mapping.kind,
+            "product": mapping.product,
+            "contract": mapping.mock_contract,
+            "trading_day": result.trading_day.isoformat(),
+        }
+        or result.source_ids != ("MOCK.simulation_only",)
+    ):
+        raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+    windows = {window.window_id: window for window in result.windows}
+    groups = {}
+    for row in attribution["windows"]:
+        if (
+            set(row) != expected_fields
+            or row["source_type"] != "MOCK"
+            or row["source_id"] != "MOCK.simulation_only"
+            or row["source_authentication"] != "NOT_PROVEN"
+            or row["declaration"] != "PINNED_RULE_AND_OWNER_DAY"
+            or row["scope"] not in {"DAY", "NIGHT"}
+            or not _text(row["original_window_id"])
+            or row["segment"] not in {"WHOLE", "PRE", "POST"}
+            or row["trading_day"] != result.trading_day.isoformat()
+        ):
+            raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+        window = windows[row["window_id"]]
+        start, end = _interruption_utc(row["start_utc"]), _interruption_utc(row["end_utc"])
+        parent_start = _interruption_utc(row["parent_start_utc"])
+        parent_end = _interruption_utc(row["parent_end_utc"])
+        if (
+            type(window.trading_day) is not date
+            or window.trading_day != result.trading_day
+            or window.phase != row["phase"]
+            or window.start_utc != start
+            or window.end_utc != end
+            or not parent_start <= start < end <= parent_end
+        ):
+            raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+        groups.setdefault(row["original_window_id"], []).append(
+            (row, start, end, parent_start, parent_end)
+        )
+    parents = []
+    saw_interruption = False
+    if any(
+        row["segment"] != "WHOLE" and row["window_id"] in groups for row in attribution["windows"]
+    ):
+        raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+    for name, items in groups.items():
+        if len(items) == 1 and items[0][0]["segment"] == "WHOLE":
+            row, start, end, parent_start, parent_end = items[0]
+            if (
+                row["window_id"] != name
+                or row["interruption"] is not None
+                or (start, end) != (parent_start, parent_end)
+            ):
+                raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+        elif len(items) == 2 and {item[0]["segment"] for item in items} == {"PRE", "POST"}:
+            saw_interruption = True
+            pre = next(item for item in items if item[0]["segment"] == "PRE")
+            post = next(item for item in items if item[0]["segment"] == "POST")
+            p, q = pre[0], post[0]
+            interruption = p["interruption"]
+            if (
+                type(interruption) is not dict
+                or set(interruption)
+                != {"start_utc", "end_utc", "source_id", "source_authentication"}
+                or interruption != q["interruption"]
+                or interruption["source_id"] != "MOCK.simulation_only"
+                or interruption["source_authentication"] != "NOT_PROVEN"
+                or p["scope"] != q["scope"]
+                or p["phase"] != q["phase"]
+                or pre[3:] != post[3:]
+            ):
+                raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+            first, last = (
+                _interruption_utc(interruption["start_utc"]),
+                _interruption_utc(interruption["end_utc"]),
+            )
+            if not pre[3] == pre[1] < first == pre[2] < last == post[1] < post[2] == pre[4]:
+                raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+            pre_id, post_id = _interruption_ids(
+                (mapping.venue, mapping.kind, mapping.product),
+                mapping.mock_contract,
+                result.trading_day,
+                name,
+                first,
+                last,
+            )
+            if p["window_id"] != pre_id or q["window_id"] != post_id:
+                raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+        else:
+            raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+        parents.append((items[0][3], items[0][4]))
+    parents.sort()
+    if not saw_interruption or any(left[1] > right[0] for left, right in zip(parents, parents[1:])):
+        raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+
+
 def _window_sources(query: Any, result: Any, mapping: SimulationMapping) -> None:
     attribution = query.simulation_provenance
     if attribution is None:
@@ -437,6 +568,8 @@ def _window_sources(query: Any, result: Any, mapping: SimulationMapping) -> None
                 != {"value": window.phase, "basis": "MOCK_ASSUMPTION"}
             ):
                 raise SimulationCalendarUnavailable("SIMULATION_WINDOW_SOURCE_UNAVAILABLE")
+    elif schema == "bt_api.calendar-declared-mock-windows/2":
+        _mock_interruption_sources(query, result, mapping, attribution)
     elif schema == "bt_api.calendar-declared-mock-windows/1":
         if any(
             row.get("source_type") != "MOCK"
