@@ -117,7 +117,10 @@ def _valid_source_tags(value: Any) -> bool:
         and type(value[4]) is int
         and value[4] > 0
         and type(value[5]) is int
-        and value[5] > 0
+        # This is the SPI registration generation, captured before the first
+        # front connection.  The live query-session generation is checked
+        # independently and must remain strictly positive.
+        and value[5] >= 0
     )
 
 
