@@ -14,6 +14,8 @@ the input claims both completeness flags. That status expresses the supplied
 structural completeness claim, not verified source truth or publication approval;
 ``sources_verified`` remains false. Candidate verification does not travel with
 the plain content dictionary. Never use that result alone for automatic release.
+Versioned mock-only interruption records are rejected by older readers and
+confer no source authentication or exchange authority.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ import re
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
+
+from bt_api_ctp.calendar_snapshot import CalendarSnapshotError, _interruption_utc
 
 MAX_INPUT_BYTES = 262144
 MAX_YAML_EVENTS = 20000
@@ -194,6 +198,7 @@ def _validate(content: Any) -> SupplementCandidate:
             _refs(mapping["source_ids"], sources, used)
         _refs(row["source_ids"], sources, used)
     for item in layers["exceptions"]:
+        interruption = type(item) is dict and item.get("action") == "interrupt_window"
         row = _object(
             item,
             {
@@ -205,20 +210,39 @@ def _validate(content: Any) -> SupplementCandidate:
                 "action",
                 "window_id",
                 "source_ids",
-            },
+            }
+            | ({"exception_schema", "start_utc", "end_utc"} if interruption else set()),
         )
         _scope(row)
         if row["contract"] is not None:
             _id(row["contract"])
         _date(row["trading_day"])
         action = row["action"]
-        if type(action) is not str or action not in {"close_day", "cancel_window"}:
+        if type(action) is not str or action not in {
+            "close_day",
+            "cancel_window",
+            "interrupt_window",
+        }:
             raise SupplementError("unsupported exception action")
         if action == "close_day" and row["window_id"] is not None:
             raise SupplementError("close_day cannot specify a window")
-        if action == "cancel_window":
+        if action in {"cancel_window", "interrupt_window"}:
             _id(row["window_id"])
         _refs(row["source_ids"], sources, used)
+        if interruption:
+            if (
+                type(row["exception_schema"]) is not str
+                or row["exception_schema"] != "bt_api.calendar-window-interruption/1"
+                or row["source_ids"] != ["MOCK.simulation_only"]
+            ):
+                raise SupplementError("interruption requires explicit mock source")
+            try:
+                start = _interruption_utc(row["start_utc"])
+                end = _interruption_utc(row["end_utc"])
+            except CalendarSnapshotError:
+                raise SupplementError("invalid interruption timestamp") from None
+            if start >= end:
+                raise SupplementError("invalid interruption interval")
     return SupplementCandidate(content=content, unused_source_ids=tuple(sorted(sources - used)))
 
 

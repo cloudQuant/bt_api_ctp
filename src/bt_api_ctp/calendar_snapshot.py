@@ -2,16 +2,18 @@
 
 Input is the SDK store's four content layers, not its publication envelope.
 Dates are explicit, effective bounds are inclusive, and every open product-day
-requires a night mapping (null means explicitly no night). Only whole-window
-cancellation and whole-day closure are supported. No identifiers or sessions
+requires a night mapping (null means explicitly no night). Versioned mock-only
+intra-window interruptions, whole-window cancellation and whole-day closure
+are supported. Old readers reject the new exception shape. No identifiers or sessions
 are inferred, and source IDs establish references, not correctness or authority.
 This module is not wired into an existing CTP or research calendar interface.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
@@ -20,6 +22,8 @@ from zoneinfo import ZoneInfo
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
+_INTERRUPTION_SCHEMA = "bt_api.calendar-window-interruption/1"
+_MOCK_SOURCE = "MOCK.simulation_only"
 
 
 class CalendarSnapshotError(ValueError):
@@ -107,6 +111,26 @@ def _time(value: Any) -> time:
 def _utc(value: Any) -> None:
     if type(value) is not datetime or value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise CalendarSnapshotError("an aware UTC datetime is required")
+
+
+def _interruption_utc(value: Any) -> datetime:
+    """Parse a canonical UTC ISO timestamp ending in Z, including microseconds."""
+    if type(value) is not str or not value.endswith("Z"):
+        raise CalendarSnapshotError("invalid interruption UTC timestamp")
+    try:
+        result = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise CalendarSnapshotError("invalid interruption UTC timestamp") from exc
+    if result.isoformat().replace("+00:00", "Z") != value:
+        raise CalendarSnapshotError("noncanonical interruption UTC timestamp")
+    return result
+
+
+def _interruption_ids(scope, contract, day, name, start, end) -> tuple[str, str]:
+    """Produce stable bounded IDs; callers must still reject collisions."""
+    values = (*scope, contract, day.isoformat(), name, start.isoformat(), end.isoformat())
+    digest = hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()
+    return f"interrupt.{digest}.pre", f"interrupt.{digest}.post"
 
 
 def _refs(value: Any, source_ids: set[str]) -> tuple[str, ...]:
@@ -292,6 +316,7 @@ class CalendarSnapshot:
 
         exceptions = []
         for item in _list(content["exceptions"]):
+            interruption = type(item) is dict and item.get("action") == "interrupt_window"
             row = _object(
                 item,
                 {
@@ -303,24 +328,36 @@ class CalendarSnapshot:
                     "action",
                     "window_id",
                     "source_ids",
-                },
+                }
+                | ({"exception_schema", "start_utc", "end_utc"} if interruption else set()),
             )
             scope = _scope(row)
             contract = None if row["contract"] is None else _identifier(row["contract"])
             day = _date(row["trading_day"])
             action = row["action"]
             name = row["window_id"]
-            if action not in ("close_day", "cancel_window"):
+            if action not in ("close_day", "cancel_window", "interrupt_window"):
                 raise CalendarSnapshotError("unsupported exception action")
             if action == "close_day" and name is not None:
                 raise CalendarSnapshotError("close_day must not specify a window")
-            if action == "cancel_window":
+            if action in ("cancel_window", "interrupt_window"):
                 name = _identifier(name)
             if days.get((scope[0], day), (None,))[0] != "open":
                 raise CalendarSnapshotError("exception requires known open day")
-            exceptions.append(
-                (scope, contract, day, action, name, _refs(row["source_ids"], sources))
-            )
+            interval = None
+            refs = _refs(row["source_ids"], sources)
+            if interruption:
+                if (
+                    type(action) is not str
+                    or type(row["exception_schema"]) is not str
+                    or row["exception_schema"] != _INTERRUPTION_SCHEMA
+                    or refs != (_MOCK_SOURCE,)
+                ):
+                    raise CalendarSnapshotError("interruption requires explicit mock source")
+                interval = (_interruption_utc(row["start_utc"]), _interruption_utc(row["end_utc"]))
+                if interval[0] >= interval[1]:
+                    raise CalendarSnapshotError("invalid interruption interval")
+            exceptions.append((scope, contract, day, action, name, refs, interval))
 
         # Retain original indices and order: wildcard and contract-specific
         # exceptions must still interact exactly as they did in input order.
@@ -336,6 +373,9 @@ class CalendarSnapshot:
             tuple[tuple[CalendarWindow, ...], tuple[str, ...], bool],
         ] = {}
         applied = set()
+        # Templates can recur across dates and scopes, but no generated ID may
+        # collide with any template or another generated segment anywhere.
+        reserved_names = {template[0] for row in rows for template in row[4] + row[5]}
         for (
             scope,
             contracts,
@@ -366,10 +406,17 @@ class CalendarSnapshot:
                     local_windows = list(windows)
                     provenance = set(day_sources + rule_sources + mapping_sources)
                     used_names: set[str] = set()
+                    original_names = {window.window_id for window in windows}
                     closed = False
-                    for index, (_, ex_contract, _, action, name, refs) in exception_index.get(
-                        (scope, day), ()
-                    ):
+                    for index, (
+                        _,
+                        ex_contract,
+                        _,
+                        action,
+                        name,
+                        refs,
+                        interval,
+                    ) in exception_index.get((scope, day), ()):
                         if ex_contract not in (None, contract):
                             continue
                         applied.add(index)
@@ -379,14 +426,51 @@ class CalendarSnapshot:
                             closed = True
                             local_windows.clear()
                         else:
-                            if name in used_names or not any(
-                                w.window_id == name for w in local_windows
+                            if (
+                                name not in original_names
+                                or name in used_names
+                                or not any(w.window_id == name for w in local_windows)
                             ):
                                 raise CalendarSnapshotError(
                                     "duplicate or unmatched exception window"
                                 )
                             used_names.add(name)
-                            local_windows = [w for w in local_windows if w.window_id != name]
+                            selected = next(w for w in local_windows if w.window_id == name)
+                            if action == "interrupt_window":
+                                first, last = interval
+                                if not selected.start_utc < first < last < selected.end_utc:
+                                    raise CalendarSnapshotError("interruption outside window")
+                                pre_id, post_id = _interruption_ids(
+                                    scope, contract, day, name, first, last
+                                )
+                                if (
+                                    pre_id == post_id
+                                    or pre_id in reserved_names
+                                    or post_id in reserved_names
+                                ):
+                                    raise CalendarSnapshotError("interruption window id collision")
+                                _identifier(pre_id)
+                                _identifier(post_id)
+                                reserved_names.update((pre_id, post_id))
+                                parts = (
+                                    replace(
+                                        selected,
+                                        window_id=pre_id,
+                                        end_utc=first,
+                                        end_local=first.astimezone(_SHANGHAI),
+                                    ),
+                                    replace(
+                                        selected,
+                                        window_id=post_id,
+                                        start_utc=last,
+                                        start_local=last.astimezone(_SHANGHAI),
+                                    ),
+                                )
+                                local_windows = [w for w in local_windows if w.window_id != name]
+                                local_windows.extend(parts)
+                                local_windows.sort(key=lambda window: window.start_utc)
+                            else:
+                                local_windows = [w for w in local_windows if w.window_id != name]
                         provenance.update(refs)
                     values[(*scope, contract, day)] = (
                         tuple(local_windows),
