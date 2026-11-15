@@ -733,6 +733,9 @@ _SAFE_INSTRUMENT_STATUS_FIELDS = (
     "ExchangeInstID",
     "InstrumentID",
     "InstrumentStatus",
+    "TradingSegmentSN",
+    "EnterTime",
+    "EnterReason",
 )
 
 # Exact return types in ctp_wrap.cpp getter wrappers for the safe fields below.
@@ -754,6 +757,7 @@ SAFE_FIELD_KINDS: Mapping[str, str] = MappingProxyType(
                 "CombOffsetFlag",
                 "CreateDate",
                 "EndDelivDate",
+                "EnterTime",
                 "ExchangeID",
                 "ExchangeInstID",
                 "ExpireDate",
@@ -782,6 +786,7 @@ SAFE_FIELD_KINDS: Mapping[str, str] = MappingProxyType(
             for name in (
                 "ActionFlag",
                 "Direction",
+                "EnterReason",
                 "HedgeFlag",
                 "InstrumentStatus",
                 "OffsetFlag",
@@ -815,6 +820,7 @@ SAFE_FIELD_KINDS: Mapping[str, str] = MappingProxyType(
                 "SessionID",
                 "SettlementID",
                 "TodayPosition",
+                "TradingSegmentSN",
                 "UpdateMillisec",
                 "Volume",
                 "VolumeMultiple",
