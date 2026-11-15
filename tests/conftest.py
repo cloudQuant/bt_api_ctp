@@ -31,3 +31,18 @@ def _isolated_instrument_catalog_cache_dir(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(
         "BT_API_CTP_CATALOG_CACHE_DIR", str(tmp_path_factory.mktemp("ctp-catalog-cache"))
     )
+
+
+@pytest.fixture
+def calendar_supported_host(monkeypatch):
+    """For test-owned child mocks; actual host restrictions have isolated tests."""
+    import signal
+    import threading
+
+    old = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, old)

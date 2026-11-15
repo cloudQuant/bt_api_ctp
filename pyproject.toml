@@ -25,10 +25,12 @@ classifiers = [
 requires-python = ">=3.9"
 dependencies = [
     "bt_api_base>=0.16.0.dev63,<1.0",
+    "tzdata>=2023.3",
 ]
 
 [project.optional-dependencies]
 managed_execution = ["bt_api_execution>=0.2.0"]
+calendar-akshare = ["akshare==1.18.64", "pandas>=2.0.0"]
 # 迭代06 数据清洗：SFTP 拉取后端（Windows 分片机）需要 paramiko。
 # rsync / local 后端不需要额外依赖。
 cleaner = ["paramiko>=3.0"]
