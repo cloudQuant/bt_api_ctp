@@ -642,15 +642,9 @@ class CtpQuoteV2MarketProvider:
                 return False
             self._remove_handle(handle)
             recovery.symbols = frozenset(recovery.symbols - {symbol})
-        if (
-            recovery.state == "reset_pending"
-            and self._active_handles
-            and all(not active.source_epoch_reset_pending for active in self._active_handles.values())
-        ):
-            # Every remaining channel already took its new epoch.
-            self._source_scope = recovery.new_scope
-            self._native_client = getattr(stream, "_md_client", None)
-            self._source_recovery = None
+        with stream._md_callback_lock:
+            if self._recovery_completion_members_ready(recovery):
+                self._complete_source_recovery_if_acknowledged(recovery)
         return True
 
     def poll(self, handle: object, *, limit: int) -> tuple[MarketProviderEvent, ...]:
@@ -837,28 +831,68 @@ class CtpQuoteV2MarketProvider:
         ):
             return False
         recovery = self._source_recovery
-        current_scope = self._current_source_scope(handle.stream)
-        if (
-            recovery is None
-            or recovery.state != "reset_pending"
-            or recovery.new_scope is None
-            or handle.stream is not recovery.stream
-            or handle.source_scope is not recovery.new_scope
-            or current_scope is not recovery.new_scope
-            or handle.source_epoch_reset_pending is not True
-            or (handle.last_hub_epoch is not None and epoch == handle.last_hub_epoch)
+        with handle.stream._md_callback_lock:
+            valid = bool(
+                recovery is not None
+                and self._recovery_completion_members_ready(recovery)
+                and handle.stream is recovery.stream
+                and handle.source_epoch_reset_pending is True
+                and (handle.last_hub_epoch is None or epoch != handle.last_hub_epoch)
+            )
+            if valid:
+                handle.source_epoch_reset_pending = False
+                handle.source_epoch_reset_epoch = epoch
+                handle.last_hub_epoch = epoch
+                self._complete_source_recovery_if_acknowledged(recovery)
+                return True
+        if recovery is not None and recovery.state == "reset_pending":
+            self._fail_source_recovery(reason="epoch_acknowledgement_invalid")
+        return False
+
+    def _recovery_completion_members_ready(self, recovery: _SourceRecovery) -> bool:
+        """Validate the current member set while holding the native callback lock."""
+
+        stream = recovery.stream
+        scope = recovery.new_scope
+        handles = tuple(self._active_handles.values())
+        symbols = self._session_symbols()
+        return bool(
+            self._source_recovery is recovery
+            and recovery.state == "reset_pending"
+            and self._stream is stream
+            and scope is not None
+            and handles
+            and self._current_source_scope(stream) is scope
+            and stream._md_client is recovery.reconnected_client
+            and symbols == recovery.symbols
+            and set(stream._quote_v2_subscription_metadata) == set(symbols)
+            and stream._quote_v2_service_required_symbols == set(symbols)
+            and len(self._handles_by_symbol) == len(handles)
+            and all(
+                handle.active
+                and handle.public_handle is not None
+                and self._active_handles.get(id(handle.public_handle)) is handle
+                and self._known_handles.get(handle.public_handle) is handle
+                and self._handles_by_symbol.get(handle.key.instrument.native_symbol) is handle
+                and handle.stream is stream
+                and handle.source_scope is scope
+                for handle in handles
+            )
+            and self._valid_reconnected_scope(recovery, scope)
+        )
+
+    def _complete_source_recovery_if_acknowledged(self, recovery: _SourceRecovery) -> None:
+        """Commit the checked remaining set under the native callback lock."""
+
+        if all(
+            active.source_epoch_reset_pending is False
+            and type(active.source_epoch_reset_epoch) is str
+            and bool(active.source_epoch_reset_epoch)
+            for active in self._active_handles.values()
         ):
-            if recovery is not None and recovery.state == "reset_pending":
-                self._fail_source_recovery(reason="epoch_acknowledgement_invalid")
-            return False
-        handle.source_epoch_reset_pending = False
-        handle.source_epoch_reset_epoch = epoch
-        handle.last_hub_epoch = epoch
-        if all(not active.source_epoch_reset_pending for active in self._active_handles.values()):
             self._source_scope = recovery.new_scope
-            self._native_client = getattr(recovery.stream, "_md_client", None)
+            self._native_client = recovery.stream._md_client
             self._source_recovery = None
-        return True
 
     def _start_shared_stream(
         self, key: MarketSubscriptionKey, generation: str

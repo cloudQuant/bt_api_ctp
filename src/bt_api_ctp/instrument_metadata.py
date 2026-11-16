@@ -6,6 +6,10 @@ query and verifies the live TraderClient-issued query source, current-session
 readback, terminal callback state, and the exact CTP market stream's opaque
 quote-clock source scope.  It does not claim an atomic account snapshot or
 price-limit data absent from ``InstrumentField``.
+
+The local ProductID projection is not connected to Monitor grouping and does
+not establish complete functionality or real-account acceptance. ServiceHost
+v1 serialization remains unchanged.
 """
 
 from __future__ import annotations
@@ -88,6 +92,7 @@ class CtpInstrumentMetadata:
     clock_source_session_id: str
     clock_source: str
     _seal: object = field(repr=False, compare=False)
+    product_id: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self._seal is not _CTP_INSTRUMENT_METADATA_SEAL:
@@ -216,8 +221,8 @@ class CtpInstrumentMetadataReader:
                 exchange_id,
                 timeout_value,
             )
-        except CtpNativeQueryCertificateError as exc:
-            raise CtpInstrumentMetadataError("INSTRUMENT_QUERY_UNPROVEN") from exc
+        except CtpNativeQueryCertificateError:
+            raise CtpInstrumentMetadataError("INSTRUMENT_QUERY_UNPROVEN") from None
 
         final_quote_scope = self._current_quote_scope()
         final_quote_identity = _quote_scope_identity(
@@ -235,6 +240,7 @@ class CtpInstrumentMetadataReader:
             price_tick = _positive_decimal_field(row, "PriceTick", "price_tick")
             volume_multiple = _positive_integer_field(row, "VolumeMultiple", "multiplier")
             product_class = _product_class(row)
+            product_id = _product_id(row)
             asset_type = {
                 "1": "future",
                 "2": "option",
@@ -246,8 +252,8 @@ class CtpInstrumentMetadataReader:
                 "I": "mi",
             }[product_class]
             lower, upper, limits_available, limits_source = _price_limits(row)
-        except CtpNativeQueryCertificateError as exc:
-            raise CtpInstrumentMetadataError("INSTRUMENT_QUERY_UNPROVEN") from exc
+        except CtpNativeQueryCertificateError:
+            raise CtpInstrumentMetadataError("INSTRUMENT_QUERY_UNPROVEN") from None
 
         source_started = source.started_at_utc
         source_completed = source.completed_at_utc
@@ -255,7 +261,7 @@ class CtpInstrumentMetadataReader:
         if not math.isfinite(elapsed) or elapsed < 0 or elapsed > timeout_value:
             raise CtpInstrumentMetadataError("INSTRUMENT_QUERY_LATE")
 
-        return CtpInstrumentMetadata(
+        metadata = CtpInstrumentMetadata(
             instrument_id=instrument_id,
             exchange_id=exchange_id,
             product_class=product_class,
@@ -285,6 +291,8 @@ class CtpInstrumentMetadataReader:
             clock_source=initial_quote_identity[4],
             _seal=_CTP_INSTRUMENT_METADATA_SEAL,
         )
+        object.__setattr__(metadata, "product_id", product_id)
+        return metadata
 
     def _current_trader(self) -> object:
         trader = self._request_feed.trader_client
@@ -559,6 +567,17 @@ def _product_class(record: object) -> str:
         value = str(value)
     if type(value) is not str or value not in {"1", "2", "3", "4", "5", "6", "7", "I"}:
         raise CtpInstrumentMetadataError("PRODUCT_CLASS_INVALID")
+    return value
+
+
+def _product_id(record: object) -> str | None:
+    present, value = _record_value(record, "ProductID")
+    if not present or value is None or (type(value) is str and value == ""):
+        return None
+    try:
+        _require_identifier(value, "PRODUCT_ID_INVALID")
+    except CtpInstrumentMetadataError:
+        raise CtpInstrumentMetadataError("PRODUCT_ID_INVALID") from None
     return value
 
 

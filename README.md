@@ -58,6 +58,21 @@ acknowledging events. It may advance the existing recovery and still return
 False for that call. This owner-thread observation supports the SDK's retained
 delivery bridge; it cannot make later cross-thread or network delivery atomic.
 
+Recovery completion now checks the current scope, generations, full remaining
+subscription set and consumer epoch acknowledgements under the stream's
+native callback lock before clearing the owner recovery state. A released
+member changes that set; completion does not recover the original removed
+member. This covers callbacks already processed by the stream, not a global
+SPI/network snapshot, sustained health or a durable recovery observation log.
+
+`CtpInstrumentMetadataReader.read()` also exposes the certified native row's
+`product_id` locally. Missing or empty ProductID remains `None`; no symbol or
+ProductClass inference is used. Invalid values are rejected with finite errors.
+The ServiceHost v1 wire shape is unchanged and Monitor grouping is not yet
+connected. This reader-only, immutable field is not a constructor argument;
+`dataclasses.replace()` resets it to `None`, so a copy is not a replacement for
+the original reader result or a new source observation.
+
 The working-tree `execution_instrument` module owns CTP execution and native-wire instrument normalization. The SDK retains its proof and authorization checks and loads the provider parser lazily; the client uses the same parser. The shared parser changes a trust dependency and has not passed behavior or distribution acceptance.
 
 This package implements the native CTP client, request feed, market/trade stream adapters, and typed provider data. Its `bt_api.plugins` entry point registers only `CTP___FUTURE` feeds, exchange data, balance handling, and stream handlers when `bt_api_base.PluginLoader` loads it; importing the package alone does not register it. `bt_api_py` provides the `BtApi` facade and event queue, while Backtrader supplies the strategy and engine layer. Managed live-order execution uses `ServiceExecutionSession`/service-v2 only when this provider is integrated with ServiceHost; provider APIs or SimNow support do not establish that integration or real-account acceptance. See [Trading System Architecture](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md).
