@@ -10993,17 +10993,17 @@ class TraderClient:
                 spi._native_api_generation = self._native_api_generation
                 spi._native_client_epoch = self._native_client_epoch
                 spi._native_api_source_id = self._native_api_source_id
-                if self._callback_ingress is not None:
-                    from .callback_ingress import CtpTraderCallbackSourceTagsV2
+                from .callback_ingress import CtpTraderCallbackSourceTagsV2
 
-                    spi._callback_source_tags = CtpTraderCallbackSourceTagsV2(
-                        source_instance_id=self._callback_source_instance_id,
-                        native_client_epoch=self._native_client_epoch,
-                        native_api_source_id=self._native_api_source_id,
-                        native_spi_source_id=spi._native_spi_source_id,
-                        native_api_generation=self._native_api_generation,
-                        connection_generation=self._connection_generation,
-                    )
+                spi._callback_source_tags = CtpTraderCallbackSourceTagsV2(
+                    source_instance_id=self._callback_source_instance_id,
+                    native_client_epoch=self._native_client_epoch,
+                    native_api_source_id=self._native_api_source_id,
+                    native_spi_source_id=spi._native_spi_source_id,
+                    native_api_generation=self._native_api_generation,
+                    connection_generation=self._connection_generation,
+                )
+                if self._callback_ingress is not None:
                     self._callback_ingress.current_source_tags = (
                         spi._callback_source_tags.source_instance_id,
                         spi._callback_source_tags.native_client_epoch,

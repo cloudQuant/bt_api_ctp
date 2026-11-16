@@ -25,9 +25,20 @@ from __future__ import annotations
 
 import threading
 
+from bt_api_ctp.ctp.callback_ingress import (
+    _MAX_RECORD_BYTES,
+    CtpTraderCallbackArgumentV2,
+    CtpTraderCallbackClass,
+    CtpTraderCallbackFieldValueV2,
+    CtpTraderCallbackIngressRecordV2,
+    CtpTraderCallbackPhase,
+    _canonical_bytes,
+)
 from bt_api_ctp.instrument_status_observation import (
     ACTION_REFUSED,
+    CODE_FIELDS_INCOMPLETE,
     CODE_FIELDS_INVALID,
+    CODE_GENERATION_MISMATCH,
     CODE_OBSERVATION_INVALID,
     CODE_RECEIVE_TIME_INVALID,
     CODE_SEQUENCE_INVALID,
@@ -47,6 +58,87 @@ __all__ = ("InstrumentStatusIngressBridge",)
 
 def _refused(code: str) -> InstrumentStatusApplyResult:
     return InstrumentStatusApplyResult(False, ACTION_REFUSED, code)
+
+
+def _snapshot_payload(payload: object) -> object:
+    """Detach bounded exact built-in values before validating any fields."""
+
+    remaining = [_MAX_RECORD_BYTES]
+
+    def copy_value(value: object, depth: int) -> object:
+        remaining[0] -= 1
+        if remaining[0] < 0 or depth > 16:
+            raise ValueError("callback snapshot exceeds bounds")
+        if type(value) is str:
+            remaining[0] -= len(value.encode("utf-8", errors="strict"))
+            if remaining[0] < 0:
+                raise ValueError("callback snapshot exceeds bounds")
+            return value
+        if type(value) in (int, float, bool) or value is None:
+            return value
+        if type(value) is list:
+            return [copy_value(item, depth + 1) for item in value]
+        if type(value) is dict:
+            result = {}
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise ValueError("callback snapshot key invalid")
+                result[copy_value(key, depth + 1)] = copy_value(item, depth + 1)
+            return result
+        raise ValueError("callback snapshot type invalid")
+
+    return copy_value(payload, 0)
+
+
+def _record_from_snapshot(payload: dict[str, object]) -> CtpTraderCallbackIngressRecordV2:
+    """Apply the native record contract to a detached scalar-only snapshot."""
+
+    arguments = tuple(
+        CtpTraderCallbackArgumentV2(
+            slot=item["argument_slot"],
+            name=item["name"],
+            present=item["present"],
+            scalar_captured=item["scalar_captured"],
+            value=item["value"],
+            pointer_is_null=item["pointer_is_null"],
+        )
+        for item in payload["named_args"]
+    )
+    fields = tuple(
+        (
+            item["argument_slot"],
+            item["field_name"],
+            CtpTraderCallbackFieldValueV2(
+                present=item["present"],
+                scalar_captured=item["scalar_captured"],
+                value=item["value"],
+            ),
+        )
+        for item in payload["flattened_fields"]
+    )
+    record = CtpTraderCallbackIngressRecordV2(
+        owner_intent_id=payload["owner_intent_id"],
+        callback_name=payload["callback_name"],
+        callback_class=CtpTraderCallbackClass(payload["callback_class"]),
+        source_phase=CtpTraderCallbackPhase(payload["phase"]),
+        source_instance_id=payload["source_instance_id"],
+        native_client_epoch=payload["native_client_epoch"],
+        native_api_source_id=payload["native_api_source_id"],
+        native_spi_source_id=payload["native_spi_source_id"],
+        native_api_generation=payload["native_api_generation"],
+        source_connection_generation=payload["source_connection_generation"],
+        connection_generation=payload["connection_generation"],
+        source_sequence=payload["sequence"],
+        callback_monotonic_ns=payload["monotonic_ns"],
+        callback_arguments=arguments,
+        flattened_fields=fields,
+        capture_complete=payload["capture_complete"],
+        missing_field_names=tuple(payload["missing_getters"]),
+        canonical_sha256=payload["digest"],
+    )
+    if record.to_payload() != payload:
+        raise ValueError("callback snapshot shape invalid")
+    return record
 
 
 class InstrumentStatusIngressBridge:
@@ -101,27 +193,66 @@ class InstrumentStatusIngressBridge:
         try:
             if type(payload) is not dict:
                 return _refused(CODE_FIELDS_INVALID)
-            sequence = payload.get("sequence")
-            receive_time = payload.get("monotonic_ns")
+            snapshot = _snapshot_payload(payload)
+            encoded = _canonical_bytes(snapshot)
+            if len(encoded) > _MAX_RECORD_BYTES:
+                return _refused(CODE_FIELDS_INVALID)
+            sequence = snapshot.get("sequence")
+            receive_time = snapshot.get("monotonic_ns")
             if type(sequence) is not int or sequence < 1:
                 return _refused(CODE_SEQUENCE_INVALID)
             if type(receive_time) is not int or receive_time < 1:
                 return _refused(CODE_RECEIVE_TIME_INVALID)
+            if snapshot.get("capture_complete") is not True:
+                return _refused(CODE_FIELDS_INCOMPLETE)
+            if (
+                set(snapshot)
+                != {
+                    "schema",
+                    "owner_intent_id",
+                    "callback_name",
+                    "callback_class",
+                    "phase",
+                    "source_instance_id",
+                    "native_client_epoch",
+                    "native_api_source_id",
+                    "native_spi_source_id",
+                    "native_api_generation",
+                    "source_connection_generation",
+                    "connection_generation",
+                    "sequence",
+                    "monotonic_ns",
+                    "named_args",
+                    "flattened_fields",
+                    "capture_complete",
+                    "missing_getters",
+                    "digest",
+                }
+                or type(snapshot.get("named_args")) is not list
+            ):
+                return _refused(CODE_FIELDS_INVALID)
+            record = _record_from_snapshot(snapshot)
+            if (
+                record.source_phase is not CtpTraderCallbackPhase.ACTIVE
+                or record.callback_class is not CtpTraderCallbackClass.AUDIT_INFORMATIONAL
+            ):
+                return _refused(CODE_FIELDS_INVALID)
+            fields = native_fields_from_ingress_payload(record.to_payload())
             with self._lock:
-                session_generation = self._session_generation
-                trading_day = self._trading_day
-            observation = project_native_instrument_status(
-                native_fields_from_ingress_payload(payload),
-                session=InstrumentStatusSessionFacts(
-                    session_generation=session_generation,
-                    trading_day=trading_day,
-                    source_sequence=sequence,
-                    receive_clock_domain=RECEIVE_CLOCK_MONOTONIC_NS,
-                    receive_time=receive_time,
-                    source_available=True,
-                ),
-            )
-            return self._ledger.observe(observation)
+                if str(record.connection_generation) != self._session_generation:
+                    return _refused(CODE_GENERATION_MISMATCH)
+                observation = project_native_instrument_status(
+                    fields,
+                    session=InstrumentStatusSessionFacts(
+                        session_generation=self._session_generation,
+                        trading_day=self._trading_day,
+                        source_sequence=sequence,
+                        receive_clock_domain=RECEIVE_CLOCK_MONOTONIC_NS,
+                        receive_time=receive_time,
+                        source_available=True,
+                    ),
+                )
+                return self._ledger.observe(observation)
         except CtpInstrumentStatusObservationError as exc:
             # Keep the provider's one finite refusal code (fields, receive
             # time, generation, ...).  It never carries a value.

@@ -75,6 +75,22 @@ failure leaves trading behavior unchanged and makes observation unavailable.
 These are process-local lower bounds, with no UTC, calendar or Monitor claim.
 The Gateway Session forwards this option; the SDK owns explicit disk recording.
 
+Direct Trader startup now creates the same immutable SPI registration tags used
+by managed callbacks. The registration's connection generation can precede the
+active connection generation; status ingress checks the active generation
+against the current read session. It validates a bounded detached snapshot using
+the existing v2 native record contract before projecting any status fields.
+Provider listeners bind the original trader, and version checks prevent a late
+callback or session sample from replacing a newer observation. Native session
+sampling happens outside the status lock to avoid callback lock inversion.
+
+If contention invalidates the status source, the entire ledger stays unavailable
+for that session scope; another callback in the same scope does not restore it.
+A new session generation/day or trader binding is required. These checks do not
+prove uninterrupted callback coverage, exclude source-identity ABA, or make a
+discarded incomplete native callback fresh evidence. Gateway status transport
+and the calendar/recovery trading decision remain separate integration work.
+
 `CtpInstrumentMetadataReader.read()` also exposes the certified native row's
 `product_id` locally. Missing or empty ProductID remains `None`; no symbol or
 ProductClass inference is used. Invalid values are rejected with finite errors.

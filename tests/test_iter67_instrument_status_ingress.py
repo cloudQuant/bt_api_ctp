@@ -42,7 +42,7 @@ def native(status="2", **overrides):
     return SimpleNamespace(**values)
 
 
-def status_payload(status="2", *, sequence=1, monotonic_ns=777, field=None):
+def status_payload(status="2", *, sequence=1, monotonic_ns=777, field=None, generation=7):
     record = ingress.build_callback_ingress_record_v2(
         owner_intent_id="ctp-status-test",
         callback_name="OnRtnInstrumentStatus",
@@ -53,9 +53,9 @@ def status_payload(status="2", *, sequence=1, monotonic_ns=777, field=None):
             native_api_source_id="api-1",
             native_spi_source_id="spi-1",
             native_api_generation=1,
-            connection_generation=7,
+            connection_generation=generation,
         ),
-        connection_generation=7,
+        connection_generation=generation,
         source_sequence=sequence,
         callback_monotonic_ns=monotonic_ns,
         args=(field if field is not None else native(status),),
@@ -124,7 +124,7 @@ def test_generation_and_trading_day_changes_stale_prior_observations():
     assert stale.reason_code == "ctp_instrument_status_stale_generation"
 
     # A new observation in the new generation is current again.
-    assert target.observe_payload(status_payload("2", sequence=2)).applied
+    assert target.observe_payload(status_payload("2", sequence=2, generation=8)).applied
     assert target.view(VENUE, SYMBOL).effective_status_category == STATUS_CONTINUOUS
 
     day_changed = target.begin_session_generation("8", "20261117")
@@ -269,6 +269,8 @@ class FakeTrader:
         self.session_id = 2
         self.trading_day = DAY
         self.session_state = {
+            "connected": True,
+            "read_only_ready": True,
             "trading_day": DAY,
             "connection_generation": 7,
             "front_id": 1,
