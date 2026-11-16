@@ -237,6 +237,9 @@ def test_ctp_account_provider_projects_complete_generation_bound_readonly_snapsh
 
     assert feed.connect_calls == 1
     assert observation.account_key is _ACCOUNT_KEY
+    from bt_api_ctp.account_resource_coverage import CTP_ACCOUNT_RESOURCE_COVERAGE
+
+    assert observation.coverage == CTP_ACCOUNT_RESOURCE_COVERAGE
     assert observation.consistency == "multi_query"
     assert observation.balances_complete is True
     assert observation.positions_complete is True

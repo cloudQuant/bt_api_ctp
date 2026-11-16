@@ -38,7 +38,6 @@ from bt_api_base.account_protocol import (
     AccountObservation,
     AccountOpenOrder,
     AccountPosition,
-    AccountResourceKey,
     AccountValuation,
     account_venue_contains_instrument_venue,
 )
@@ -52,6 +51,7 @@ from bt_api_base.execution_row_observation_protocol import (
 )
 from bt_api_base.market_protocol import MarketInstrumentKey
 
+from bt_api_ctp.account_resource_coverage import CTP_ACCOUNT_RESOURCE_COVERAGE
 from bt_api_ctp.ctp.client import (
     CtpNativeStartupAttempt,
     CtpNativeStartupStopReceipt,
@@ -68,7 +68,7 @@ from bt_api_ctp.query import (
     _QuerySource,
 )
 
-_RESOURCE = AccountResourceKey(product_type="future", margin_pool="futures")
+_RESOURCE, = CTP_ACCOUNT_RESOURCE_COVERAGE
 _QUERY_METHODS = {
     "account": "query_account_result",
     "positions": "query_positions_result",
