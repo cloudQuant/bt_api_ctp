@@ -19,6 +19,8 @@ from types import MappingProxyType
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from bt_api_base.trading_calendar_owner_bounds import SimulationCalendarOwnerBounds
+
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
@@ -190,7 +192,7 @@ class CalendarSnapshot:
     about current venue state or a query over arbitrary UTC coverage.
     """
 
-    __slots__ = ("_ref", "_scopes", "_values", "_days", "_day_venues", "_sealed")
+    __slots__ = ("_ref", "_scopes", "_values", "_days", "_day_venues", "_owner_bounds", "_sealed")
 
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "_sealed", False):
@@ -489,9 +491,40 @@ class CalendarSnapshot:
                 raise CalendarSnapshotError("overlapping trading day ownership")
         self._scopes = frozenset(scopes)
         self._values = MappingProxyType(values)
+        observations = {}
+        for key, (windows, _, complete) in values.items():
+            scope, owner = key[:4], key[4]
+            previous = observations.get(scope, (True, 0, 0))
+            advance, spill = previous[1:]
+            for window in windows:
+                start_day = window.start_utc.astimezone(_SHANGHAI).date()
+                end_day = (window.end_utc - timedelta(microseconds=1)).astimezone(_SHANGHAI).date()
+                advance = max(advance, (owner - start_day).days)
+                spill = max(spill, (end_day - owner).days)
+            observations[scope] = (previous[0] and complete, advance, spill)
+        self._owner_bounds = MappingProxyType(observations)
         self._days = MappingProxyType(days)
         self._day_venues = frozenset({venue for venue, _ in days} | {scope[0] for scope in scopes})
         self._sealed = True
+
+    def owner_day_bounds(
+        self, *, venue: str, kind: str, product: str, contract: str
+    ) -> SimulationCalendarOwnerBounds:
+        """Observe all compiled rows for an exact scope, not missing owners."""
+        scope = tuple(_identifier(value) for value in (venue, kind, product, contract))
+        if scope not in self._scopes:
+            status, reason, advance, spill = "OUT_OF_SCOPE", "IDENTITY_NOT_IN_SNAPSHOT", None, None
+        elif scope not in self._owner_bounds:
+            status, reason, advance, spill = "UNKNOWN", "NO_COMPILED_ROWS", None, None
+        else:
+            complete, advance, spill = self._owner_bounds[scope]
+            if complete:
+                status, reason = "COMPLETE", "COMPILED_SCOPE_COMPLETE"
+            else:
+                status, reason, advance, spill = "UNKNOWN", "RULE_COVERAGE_INCOMPLETE", None, None
+        return SimulationCalendarOwnerBounds(
+            status, reason, self._ref, *scope, advance, spill
+        )
 
     def query_venue_day(self, *, venue: str, trading_day: date) -> VenueDayResult:
         """Return the explicit venue-day declaration, without inferring from windows.
