@@ -18,9 +18,11 @@ import math
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 
 from bt_api_ctp.containers.ctp.ctp_native_query_certificate import (
     CtpNativeQueryCertificateError,
@@ -33,6 +35,7 @@ from bt_api_ctp.containers.ctp.ctp_native_query_certificate import (
     _validate_bound_filters,
     _validate_returned_rows,
 )
+from bt_api_ctp.ctp.client import _QueryRecordSnapshot
 from bt_api_ctp.feeds.live_ctp_feed import (
     CtpMarketStream,
     CtpQuoteClockSourceScope,
@@ -48,6 +51,9 @@ _SOURCE = "ctp.native.instruments"
 _SOURCE_REVISION = "ctp.native.instrument-query.v1"
 _MARKET_SOURCE = "ctp.native.md"
 _MAX_IDENTIFIER_BYTES = 128
+_MAX_ROW_SNAPSHOT_BYTES = 256 * 1024
+_MAX_ROW_SNAPSHOT_ITEMS = 4096
+_MAX_ROW_SNAPSHOT_DEPTH = 16
 _CTP_INSTRUMENT_METADATA_SEAL = object()
 _QUOTE_CLOCK_DOMAIN = re.compile(r"^ctp-md-process:[1-9][0-9]*:monotonic:([0-9a-f]{32})$")
 
@@ -58,6 +64,66 @@ class CtpInstrumentMetadataError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _snapshot_query_result(result: QueryResult) -> QueryResult:
+    """Detach one bounded immutable row while preserving the original source.
+
+    The query certificate's digest is checked against this snapshot, and the
+    reader projects every native field from that same checked row. Unsupported
+    object types fail closed rather than retaining mutable/native references.
+    """
+
+    if len(result.records) != 1:
+        raise CtpNativeQueryCertificateError("query_not_complete_terminal_row")
+    budget = [_MAX_ROW_SNAPSHOT_BYTES, _MAX_ROW_SNAPSHOT_ITEMS]
+
+    def freeze(value: object, depth: int) -> object:
+        budget[1] -= 1
+        if budget[1] < 0 or depth > _MAX_ROW_SNAPSHOT_DEPTH:
+            raise ValueError("snapshot bounds exceeded")
+        kind = type(value)
+        if kind is str:
+            if len(value) > budget[0]:
+                raise ValueError("snapshot bounds exceeded")
+            budget[0] -= len(value.encode("utf-8", errors="strict"))
+        elif kind is bytes:
+            budget[0] -= len(value)
+        elif kind is int:
+            budget[0] -= max(1, (value.bit_length() + 2) // 3)
+        elif kind is Decimal:
+            budget[0] -= len(str(value))
+        elif kind is datetime:
+            if value.tzinfo is not None and type(value.tzinfo) is not timezone:
+                raise ValueError("snapshot time zone unsupported")
+            budget[0] -= len(value.isoformat())
+        elif kind in (float, bool) or value is None:
+            budget[0] -= 1
+        elif kind in (dict, _QueryRecordSnapshot):
+            values = {}
+            for key, item in dict.items(value):
+                if type(key) is not str:
+                    raise ValueError("snapshot key invalid")
+                frozen_key = freeze(key, depth + 1)
+                values[frozen_key] = freeze(item, depth + 1)
+            return MappingProxyType(values)
+        elif kind in (tuple, list):
+            return tuple(freeze(item, depth + 1) for item in value)
+        else:
+            raise ValueError("snapshot value unsupported")
+        if budget[0] < 0:
+            raise ValueError("snapshot bounds exceeded")
+        return value
+
+    try:
+        row = freeze(result.records[0], 0)
+        if not isinstance(row, Mapping):
+            raise ValueError("snapshot row invalid")
+        detached = replace(result, records=(row,))
+        object.__setattr__(detached, "_source", result.query_source)
+        return detached
+    except Exception:
+        raise CtpNativeQueryCertificateError("query_payload_invalid") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +275,7 @@ class CtpInstrumentMetadataReader:
             current_query_scope = _scope_for_client(trader)
             if not _same_scope(initial_query_scope, current_query_scope):
                 raise CtpInstrumentMetadataError("TRADER_SESSION_CHANGED")
-            source = self._validate_query_result(
+            source, row = self._validate_query_result(
                 trader,
                 result,
                 # The query starts after the initial scope is captured.  The
@@ -235,7 +301,6 @@ class CtpInstrumentMetadataReader:
         if initial_quote_identity != final_quote_identity:
             raise CtpInstrumentMetadataError("QUOTE_SESSION_CHANGED")
 
-        row = result.records[0]
         try:
             price_tick = _positive_decimal_field(row, "PriceTick", "price_tick")
             volume_multiple = _positive_integer_field(row, "VolumeMultiple", "multiplier")
@@ -320,10 +385,11 @@ class CtpInstrumentMetadataReader:
         instrument_id: str,
         exchange_id: str,
         timeout: float,
-    ) -> _QuerySource:
+    ) -> tuple[_QuerySource, Mapping[str, object]]:
         if type(result) is not QueryResult:
             raise CtpNativeQueryCertificateError("query_result_type_invalid")
         _query_result_shape(result)
+        result = _snapshot_query_result(result)
         if (
             result.request_type != "instruments"
             or not result.complete
@@ -394,6 +460,7 @@ class CtpInstrumentMetadataReader:
         if type(current) is not QueryResult:
             raise CtpNativeQueryCertificateError("query_current_result_mismatch")
         _query_result_shape(current)
+        current = _snapshot_query_result(current)
         if (
             current.request_type != "instruments"
             or not current.complete
@@ -436,7 +503,7 @@ class CtpInstrumentMetadataReader:
             now_utc=datetime.now(timezone.utc),
             now_monotonic=time.monotonic(),
         )
-        return source
+        return source, result.records[0]
 
     def _check_owner(self) -> None:
         if threading.get_ident() != self._owner_thread_id:

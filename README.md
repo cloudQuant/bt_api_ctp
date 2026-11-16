@@ -111,6 +111,15 @@ connected. This reader-only, immutable field is not a constructor argument;
 `dataclasses.replace()` resets it to `None`, so a copy is not a replacement for
 the original reader result or a new source observation.
 
+The metadata reader detaches the query row and current readback into recursive
+immutable snapshots before checking their original source digests. Native field
+projection uses that same checked row, so subsequent mutation of the returned
+query dictionaries cannot change the projected metadata. Snapshot construction
+limits scalar content to a 256 KiB budget, traversal to 4096 items and nesting
+to 16 levels; unsupported values or exceeded bounds fail closed. This is a
+local query-to-projection guarantee, not continuous session validity or remote
+native-source verification. The v1 response shape remains unchanged.
+
 The working-tree `execution_instrument` module owns CTP execution and native-wire instrument normalization. The SDK retains its proof and authorization checks and loads the provider parser lazily; the client uses the same parser. The shared parser changes a trust dependency and has not passed behavior or distribution acceptance.
 
 This package implements the native CTP client, request feed, market/trade stream adapters, and typed provider data. Its `bt_api.plugins` entry point registers only `CTP___FUTURE` feeds, exchange data, balance handling, and stream handlers when `bt_api_base.PluginLoader` loads it; importing the package alone does not register it. `bt_api_py` provides the `BtApi` facade and event queue, while Backtrader supplies the strategy and engine layer. Managed live-order execution uses `ServiceExecutionSession`/service-v2 only when this provider is integrated with ServiceHost; provider APIs or SimNow support do not establish that integration or real-account acceptance. See [Trading System Architecture](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md).
