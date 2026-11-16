@@ -329,6 +329,17 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ### Provider 与框架职责边界
 
+`CtpGatewayInstrumentQueryReader` also exposes an explicit `product_id` on its
+sealed single-contract rules observation. It reads native `ProductID` from the
+same bounded immutable query-row snapshot used for source-digest and futures-rule
+validation, without deriving a product from the symbol or opening another
+session. Current-observation checks revalidate both projections. This async path
+still requires all existing futures-rule fields; it does not establish a complete
+product membership set or grant trading permission. Rows exceeding 256 KiB,
+4,096 items or 16 levels, or containing unsupported types, fail closed. Synthetic
+source tests cover the snapshot race and session fences; actual account and
+remote Monitor consumption require separate acceptance.
+
 本包实现原生 CTP 客户端、请求 feed、行情/交易流适配及类型化 provider 数据。`bt_api.plugins` 入口由 `bt_api_base.PluginLoader` 加载时，仅注册 `CTP___FUTURE` 的 feed、交易所数据、余额处理器和流处理器；单独导入不会注册。`bt_api_py` 提供 `BtApi` 外观和事件队列，Backtrader 提供策略与引擎层。只有将该 provider 接入 ServiceHost 后，managed 实盘订单执行才由 `ServiceExecutionSession`/service-v2 管理；provider API 或 SimNow 支持本身不代表已完成该集成或通过真实账户验收。参见[交易系统架构](https://github.com/cloudQuant/backtrader/blob/dev/docs/TRADING_SYSTEM_ARCHITECTURE.md)。
 
 ### 支持的交易所

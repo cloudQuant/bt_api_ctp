@@ -8,23 +8,33 @@ import os
 import threading
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 
 from bt_api_base.account_protocol import AccountKey, account_venue_contains_instrument_venue
 from bt_api_base.market_protocol import MarketInstrumentKey
+
+from bt_api_ctp.ctp.client import _QueryRecordSnapshot
 from bt_api_ctp.gateway_return_query import CtpGatewayReturnQueryReader
 from bt_api_ctp.query import (
-    QueryResult, _QuerySource, _QUERY_SOURCE_SEAL, _QUERY_MONOTONIC_CLOCK_DOMAIN,
-    _QUERY_EVIDENCE_MAX_TTL_SECONDS, _query_records_digest,
+    _QUERY_EVIDENCE_MAX_TTL_SECONDS,
+    _QUERY_MONOTONIC_CLOCK_DOMAIN,
+    _QUERY_SOURCE_SEAL,
+    QueryResult,
+    _attach_query_source,
+    _query_records_digest,
+    _QuerySource,
 )
 
 _UTC = timezone.utc
 _SEAL = object()
 _MAX_OUTSTANDING = 8
 _MAX_OBSERVATIONS = 128
+_MAX_SNAPSHOT_BYTES = 256 * 1024
+_MAX_SNAPSHOT_ITEMS = 4096
+_MAX_SNAPSHOT_DEPTH = 16
 
 
 class CtpGatewayInstrumentQueryError(RuntimeError):
@@ -39,6 +49,7 @@ class CtpGatewayInstrumentQueryError(RuntimeError):
 class CtpGatewayInstrumentRules:
     instrument: MarketInstrumentKey
     rules: Mapping[str, object]
+    product_id: str
     connection_generation: int
     trading_day: str
     completed_at_utc: datetime
@@ -59,10 +70,67 @@ class _Handle:
 
 def _text(row: Mapping, field_name: str) -> str:
     value = row.get(field_name)
-    if (type(value) is not str or not value or value != value.strip()
-            or not value.isprintable() or len(value.encode("utf-8")) > 256):
+    try:
+        valid = (type(value) is str and bool(value) and value == value.strip()
+                 and value.isprintable() and len(value.encode("utf-8", errors="strict")) <= 256)
+    except UnicodeError:
+        valid = False
+    if not valid:
         raise CtpGatewayInstrumentQueryError("ROW_INVALID")
     return value
+
+
+def _snapshot_result(result: object) -> QueryResult:
+    """Detach bounded native rows before verifying or projecting their digest."""
+
+    try:
+        if type(result) is not QueryResult or type(result.records) is not tuple or len(result.records) > 2:
+            raise ValueError
+        budget = [_MAX_SNAPSHOT_BYTES, _MAX_SNAPSHOT_ITEMS]
+
+        def freeze(value: object, depth: int) -> object:
+            budget[1] -= 1
+            if budget[1] < 0 or depth > _MAX_SNAPSHOT_DEPTH:
+                raise ValueError
+            kind = type(value)
+            if kind is str:
+                if len(value) > budget[0]:
+                    raise ValueError
+                budget[0] -= len(value.encode("utf-8", errors="strict"))
+            elif kind is bytes:
+                budget[0] -= len(value)
+            elif kind is int:
+                budget[0] -= max(1, (value.bit_length() + 2) // 3)
+            elif kind is Decimal:
+                budget[0] -= len(str(value))
+            elif kind is datetime:
+                if value.tzinfo is not None and type(value.tzinfo) is not timezone:
+                    raise ValueError
+                budget[0] -= len(value.isoformat())
+            elif kind in (float, bool) or value is None:
+                budget[0] -= 1
+            elif kind in (dict, _QueryRecordSnapshot, MappingProxyType):
+                values = {}
+                items = value.items() if kind is MappingProxyType else dict.items(value)
+                for key, item in items:
+                    if type(key) is not str:
+                        raise ValueError
+                    values[freeze(key, depth + 1)] = freeze(item, depth + 1)
+                return MappingProxyType(values)
+            elif kind in (tuple, list):
+                return tuple(freeze(item, depth + 1) for item in value)
+            else:
+                raise ValueError
+            if budget[0] < 0:
+                raise ValueError
+            return value
+
+        rows = tuple(freeze(row, 0) for row in result.records)
+        if any(not isinstance(row, Mapping) for row in rows):
+            raise ValueError
+        return _attach_query_source(replace(result, records=rows), result.query_source)
+    except Exception:
+        raise CtpGatewayInstrumentQueryError("QUERY_UNTRUSTED") from None
 
 
 def _positive_int(row: Mapping, field_name: str) -> int:
@@ -72,6 +140,10 @@ def _positive_int(row: Mapping, field_name: str) -> int:
     return value
 
 
+def _product_id(row: Mapping) -> str:
+    return _text(row, "ProductID")
+
+
 def _rules(row: object, instrument: MarketInstrumentKey) -> Mapping[str, object]:
     if not isinstance(row, Mapping):
         raise CtpGatewayInstrumentQueryError("ROW_INVALID")
@@ -79,7 +151,7 @@ def _rules(row: object, instrument: MarketInstrumentKey) -> Mapping[str, object]
             or _text(row, "ExchangeID") != instrument.venue
             or row.get("ProductClass") != "1" or type(row.get("ProductClass")) is not str):
         raise CtpGatewayInstrumentQueryError("ROW_INVALID")
-    product = _text(row, "ProductID")
+    product = _product_id(row)
     multiplier = _positive_int(row, "VolumeMultiple")
     minimum = _positive_int(row, "MinLimitOrderVolume")
     maximum = _positive_int(row, "MaxLimitOrderVolume")
@@ -277,13 +349,15 @@ class CtpGatewayInstrumentQueryReader:
             entry[0] = None
         except Exception:
             raise CtpGatewayInstrumentQueryError("QUERY_FAILED") from None
+        result = _snapshot_result(result)
         source = self._validate_result(result, binding, instrument)
         if len(result.records) != 1:
             raise CtpGatewayInstrumentQueryError("ROW_COUNT_INVALID")
         rules = _rules(result.records[0], instrument)
+        product_id = _product_id(result.records[0])
         self._check_session()
         observation = CtpGatewayInstrumentRules(
-            instrument, rules, binding.connection_generation, binding.trading_day,
+            instrument, rules, product_id, binding.connection_generation, binding.trading_day,
             source.completed_at_utc, source.trusted_expires_monotonic,
             source, result, binding, _SEAL)
         with self._observations_lock:
@@ -372,12 +446,16 @@ class CtpGatewayInstrumentQueryReader:
             raise CtpGatewayInstrumentQueryError("OBSERVATION_UNTRUSTED")
         self._check_session()
         binding = self._guard._binding
-        source = self._validate_result(observation._result, binding, observation.instrument)
+        original_result = observation._result
+        snapshot = _snapshot_result(original_result)
+        source = self._validate_result(snapshot, binding, observation.instrument)
         if (observation._binding is not self._guard._binding or observation._source is not source
+                or observation._result is not original_result
                 or observation.connection_generation != binding.connection_generation
                 or observation.trading_day != binding.trading_day
                 or observation.completed_at_utc != source.completed_at_utc
-                or observation.expires_monotonic != source.trusted_expires_monotonic):
+                or observation.expires_monotonic != source.trusted_expires_monotonic
+                or not self._projection_matches(observation, snapshot)):
             raise CtpGatewayInstrumentQueryError("OBSERVATION_UNTRUSTED")
         self._check_session()
         if (time.monotonic() >= observation.expires_monotonic
@@ -401,13 +479,17 @@ class CtpGatewayInstrumentQueryReader:
             self._observations_lock.release()
         binding = self._guard._binding
         try:
-            source = self._validate_result(observation._result, binding, observation.instrument)
+            original_result = observation._result
+            snapshot = _snapshot_result(original_result)
+            source = self._validate_result(snapshot, binding, observation.instrument)
             if (observation._seal is not _SEAL or observation._binding is not binding
                     or observation._source is not source
+                    or observation._result is not original_result
                     or observation.connection_generation != binding.connection_generation
                     or observation.trading_day != binding.trading_day
                     or observation.completed_at_utc != source.completed_at_utc
-                    or observation.expires_monotonic != source.trusted_expires_monotonic):
+                    or observation.expires_monotonic != source.trusted_expires_monotonic
+                    or not self._projection_matches(observation, snapshot)):
                 return False
         except Exception:
             return False
@@ -451,3 +533,19 @@ class CtpGatewayInstrumentQueryReader:
             return False
         finally:
             trader._query_state_lock.release()
+
+    @staticmethod
+    def _projection_matches(observation: CtpGatewayInstrumentRules, result: QueryResult) -> bool:
+        try:
+            if (len(result.records) != 1
+                    or type(observation.product_id) is not str
+                    or type(observation.rules) is not MappingProxyType):
+                return False
+            row = result.records[0]
+            expected = _rules(row, observation.instrument)
+            return (observation.product_id == _product_id(row)
+                    and set(observation.rules) == set(expected)
+                    and all(type(observation.rules[key]) is type(value)
+                            and observation.rules[key] == value for key, value in expected.items()))
+        except Exception:
+            return False

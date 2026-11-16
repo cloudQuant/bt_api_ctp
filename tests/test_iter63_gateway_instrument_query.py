@@ -190,10 +190,16 @@ def test_expired_observation_and_mutated_source_are_rejected(monkeypatch):
     reader, _, native = setup()
     native.rows = [row()]
     value = finish(reader, reader.begin(KEY))
-    value._result.records[0]["MinLimitOrderVolume"] = 1
+    with pytest.raises(TypeError):
+        value._result.records[0]["MinLimitOrderVolume"] = 1
+    original_result = value._result
+    altered_row = dict(original_result.records[0])
+    altered_row["MinLimitOrderVolume"] = 1
+    altered = _attach_query_source(replace(original_result, records=(altered_row,)), value._source)
+    object.__setattr__(value, "_result", altered)
     with pytest.raises(CtpGatewayInstrumentQueryError):
         reader.assert_current(value)
-    value._result.records[0]["MinLimitOrderVolume"] = 3
+    object.__setattr__(value, "_result", original_result)
     reader.assert_current(value)
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: value.expires_monotonic))
     with pytest.raises(CtpGatewayInstrumentQueryError):
@@ -441,9 +447,15 @@ def test_cross_thread_observation_probe_is_read_only_and_rejects_relogin(monkeyp
     monkeypatch.setattr(client, "begin_instruments_query", forbid)
     monkeypatch.setattr(client, "poll_instruments_query", forbid)
     assert _probe_on_other_thread(reader, result) is True
-    result._result.records[0]["MinLimitOrderVolume"] = 4
+    with pytest.raises(TypeError):
+        result._result.records[0]["MinLimitOrderVolume"] = 4
+    original_result = result._result
+    altered_row = dict(original_result.records[0])
+    altered_row["MinLimitOrderVolume"] = 4
+    altered = _attach_query_source(replace(original_result, records=(altered_row,)), result._source)
+    object.__setattr__(result, "_result", altered)
     assert _probe_on_other_thread(reader, result) is False
-    result._result.records[0]["MinLimitOrderVolume"] = 3
+    object.__setattr__(result, "_result", original_result)
     assert _probe_on_other_thread(reader, result) is True
     assert _probe_on_other_thread(reader, replace(result)) is False
     # Restore the test login helper's session diagnostics before relogin.
