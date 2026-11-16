@@ -5457,6 +5457,12 @@ class _TraderSpi(CThostFtdcTraderSpi):
         )
 
     @_fence_trader_spi_callback
+    def OnRtnInstrumentStatus(self, pInstrumentStatus):
+        self._c._handle_instrument_status_return(
+            pInstrumentStatus, origin_api=self._native_api, origin_spi=self
+        )
+
+    @_fence_trader_spi_callback
     def OnRspOrderInsert(self, pInputOrder, pRspInfo, nRequestID, bIsLast):
         if not self._is_current():
             return
@@ -5768,6 +5774,13 @@ class TraderClient:
         # Additional observers of native order/trade/error returns.  Each is
         # called on the SPI thread with ``(kind, snapshot)`` and must not block.
         self._execution_listeners: list[Any] = []
+        # Iteration 67.06: read-only observers of the exact
+        # OnRtnInstrumentStatus ingress payload.  They never see raw native
+        # objects and are called after the callback record (when one exists)
+        # was built; the direct provider feeds its neutral ledger from here.
+        self._instrument_status_listeners: list[Any] = []
+        self._instrument_status_source_sequence = 0
+        self._instrument_status_source_id = uuid.uuid4().hex
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -6901,6 +6914,62 @@ class TraderClient:
             managed_cancel_intent_id=managed_cancel_intent_id,
         )
 
+    def _handle_instrument_status_return(
+        self, field: Any, *, origin_api: Any, origin_spi: _TraderSpi
+    ) -> None:
+        """Publish one direct-mode ``OnRtnInstrumentStatus`` ingress payload.
+
+        A managed callback owner already built and persisted the exact record;
+        in that mode ``_dispatch_callback_ingress`` publishes that same payload
+        and this handler returns so one native callback is observed once.  In
+        direct mode, the payload is built with the same bounded builder from
+        the current source tags and a dedicated per-client status sequence.
+        An incomplete capture, unknown source or absent login facts publish
+        nothing; they never become an invented status.
+        """
+
+        from .callback_ingress import (
+            CtpTraderCallbackPhase,
+            CtpTraderCallbackSourceTagsV2,
+            build_callback_ingress_record_v2,
+        )
+
+        with self._query_state_lock:
+            if origin_spi._native_api is not origin_api or not origin_spi._is_current_locked():
+                return
+            if self._callback_ingress is not None:
+                return  # the managed owner publishes its own record payload
+            if not self._instrument_status_listeners:
+                return
+            source_tags = getattr(origin_spi, "_callback_source_tags", None)
+            if type(source_tags) is not CtpTraderCallbackSourceTagsV2:
+                return
+            self._instrument_status_source_sequence += 1
+            sequence = self._instrument_status_source_sequence
+            generation = self._connection_generation
+            phase = (
+                CtpTraderCallbackPhase.ACTIVE
+                if self._connected and self._trading_day
+                else CtpTraderCallbackPhase.PRE_LOGIN
+            )
+            owner_intent_id = "ctp-status-" + self._instrument_status_source_id
+        try:
+            record = build_callback_ingress_record_v2(
+                owner_intent_id=owner_intent_id,
+                callback_name="OnRtnInstrumentStatus",
+                source_phase=phase,
+                source_tags=source_tags,
+                connection_generation=generation,
+                source_sequence=sequence,
+                callback_monotonic_ns=time.monotonic_ns(),
+                args=(field,),
+            )
+        except Exception:
+            _logger.debug("ctp instrument status callback capture was unusable")
+            return
+        if record.capture_complete:
+            self._emit_instrument_status_payload(record.to_payload())
+
     def _dispatch_callback_ingress(
         self,
         spi: _TraderSpi,
@@ -7169,6 +7238,15 @@ class TraderClient:
 
                     if poison_reason is not None:
                         disposition = CtpTraderCallbackDisposition.POISON
+                    if (
+                        disposition is not CtpTraderCallbackDisposition.POISON
+                        and callback_name == "OnRtnInstrumentStatus"
+                    ):
+                        # The managed owner persisted the exact record; publish
+                        # the same bounded payload to read-only observers so a
+                        # direct provider ledger and a managed owner never see
+                        # two different records for one native callback.
+                        self._emit_instrument_status_payload(record.to_payload())
                     if disposition is CtpTraderCallbackDisposition.POISON:
                         reason = poison_reason or (
                             "disconnect"
@@ -9565,6 +9643,37 @@ class TraderClient:
         with self._query_state_lock:
             if listener in self._execution_listeners:
                 self._execution_listeners.remove(listener)
+
+    def add_instrument_status_listener(self, listener: Any) -> None:
+        """Register an observer of the exact ``OnRtnInstrumentStatus`` payload.
+
+        ``listener(payload)`` runs on the SPI thread with the same bounded,
+        scalar-only mapping as the callback ingress record
+        (``ctp_trader_callback_ingress.v2``); it must not block, raise into
+        the native callback, or treat the payload as a trading permission.
+        """
+
+        if not callable(listener):
+            raise TypeError("instrument status listener must be callable")
+        with self._query_state_lock:
+            if listener not in self._instrument_status_listeners:
+                self._instrument_status_listeners.append(listener)
+
+    def remove_instrument_status_listener(self, listener: Any) -> None:
+        with self._query_state_lock:
+            if listener in self._instrument_status_listeners:
+                self._instrument_status_listeners.remove(listener)
+
+    def _emit_instrument_status_payload(self, payload: Any) -> None:
+        """Deliver one validated ingress payload to every current listener."""
+
+        with self._query_state_lock:
+            listeners = list(self._instrument_status_listeners)
+        for listener in listeners:
+            try:
+                listener(payload)
+            except Exception:
+                _logger.debug("ctp instrument status listener failed", exc_info=True)
 
     def _execution_listener_payload_locked(
         self, snapshot: Mapping[str, Any] | None, **extra: Any

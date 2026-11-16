@@ -588,6 +588,16 @@ class CtpDirectWriteProvider:
         self._dropped_events = 0
         self._dropped_logged_at: Optional[float] = None
         self._listening_trader: Any = None
+        # Iteration 67.06: the same provider owns a read-only
+        # OnRtnInstrumentStatus ledger for the exact current session scope.
+        # It is fed only by the trader's native callback payloads and never
+        # contacts a provider, reads a clock for ordering or sends an order.
+        self._instrument_status_bridge: Any = None
+        self._instrument_status_scope: Optional[tuple[str, str]] = None
+        self._instrument_status_listening_trader: Any = None
+        # A leaf lock: the status tap runs on the native callback thread and
+        # must never wait behind a write or settlement read that holds _lock.
+        self._instrument_status_lock = threading.Lock()
         self._reservations: dict[str, DirectOrderReservation] = {}
         self._cancel_reservations: dict[str, _PreparedCancelTicket] = {}
         self._place_reservations: dict[str, _PreparedPlaceTicket] = {}
@@ -656,7 +666,106 @@ class CtpDirectWriteProvider:
         if trader is not self._listening_trader:
             trader.add_execution_listener(self._on_native_return)
             self._listening_trader = trader
+        self._instrument_status_trader(trader)
         return trader
+
+    def _instrument_status_trader(self, trader: Any) -> None:
+        """Attach the read-only instrument-status tap once per trader.
+
+        The tap only receives already-built ingress payloads.  A trader without
+        the listener contract leaves the port inert; it never falls back to
+        reading native state or a calendar.
+        """
+        if trader is self._instrument_status_listening_trader:
+            return
+        add = getattr(trader, "add_instrument_status_listener", None)
+        if not callable(add):
+            return
+        add(self._on_instrument_status_payload)
+        self._instrument_status_listening_trader = trader
+
+    # ------------------------------------------------------------------
+    # iteration 67.06: read-only instrument-status observation (D67-08 B)
+    # ------------------------------------------------------------------
+    def _instrument_status_session_facts(self) -> Optional[tuple[str, str]]:
+        """Return trusted (generation text, trading day) or ``None``.
+
+        Both values come from the accepted login session facts the provider
+        already uses for order identity.  They are never derived from the
+        status callback, its stamp or a clock.
+        """
+        try:
+            trader = self._feed.trader_client
+            if trader is None:
+                return None
+            state = trader.get_session_state()
+            if not isinstance(state, dict):
+                return None
+            day = _text(state.get("trading_day"))
+            generation = _int_or_none(state.get("connection_generation"))
+            if not day or generation is None or generation < 0:
+                return None
+            return str(generation), day
+        except Exception:
+            return None
+
+    def _instrument_status_switch_scope(self, facts: tuple[str, str]) -> Any:
+        """Create or advance the ledger for the current trusted scope."""
+
+        from bt_api_ctp.instrument_status_ingress import InstrumentStatusIngressBridge
+
+        with self._instrument_status_lock:
+            if self._instrument_status_bridge is None:
+                bridge = InstrumentStatusIngressBridge(
+                    session_generation=facts[0], trading_day=facts[1]
+                )
+                self._instrument_status_bridge = bridge
+                self._instrument_status_scope = facts
+                return bridge
+            bridge = self._instrument_status_bridge
+            if self._instrument_status_scope != facts:
+                bridge.begin_session_generation(facts[0], facts[1])
+                self._instrument_status_scope = facts
+            return bridge
+
+    def _on_instrument_status_payload(self, payload: object) -> None:
+        """Consume one native ingress payload; never raise into the callback."""
+
+        try:
+            facts = self._instrument_status_session_facts()
+            if facts is None:
+                bridge = self._instrument_status_bridge
+                if bridge is not None:
+                    bridge.mark_source_unavailable()
+                return
+            self._instrument_status_switch_scope(facts).observe_payload(payload)
+        except Exception:
+            # A callback thread must never surface provider text or an
+            # exception.  The ledger keeps its previous scope; an unreadable
+            # session is handled above as an explicit source-unavailable.
+            _logger.debug("ctp direct instrument-status callback was not usable")
+
+    def instrument_status_view(self, venue: object, native_symbol: object) -> Any:
+        """Return the provider ledger's view for one identity.
+
+        ``None`` means this provider has no proven session scope yet, which
+        callers must treat as an explicit absence.  A previously usable bridge
+        whose session facts can no longer be read is marked unavailable so its
+        observations become stale instead of being reused.
+        """
+        bridge = self._instrument_status_bridge
+        if bridge is None:
+            facts = self._instrument_status_session_facts()
+            if facts is None:
+                return None
+            bridge = self._instrument_status_switch_scope(facts)
+        else:
+            facts = self._instrument_status_session_facts()
+            if facts is None:
+                bridge.mark_source_unavailable()
+            else:
+                bridge = self._instrument_status_switch_scope(facts)
+        return bridge.view(venue, native_symbol)
 
     def ensure_listening(self) -> None:
         """Connect the TD session (read-only login) and attach the return tap."""
@@ -2830,6 +2939,18 @@ class CtpDirectWriteProvider:
             except Exception:
                 if self._owner_thread_only:
                     return False
+        status_trader = self._instrument_status_listening_trader
+        if status_trader is not None:
+            remove = getattr(status_trader, "remove_instrument_status_listener", None)
+            if callable(remove):
+                try:
+                    remove(self._on_instrument_status_payload)
+                except Exception:
+                    _logger.debug("ctp direct instrument-status listener removal failed")
+        self._instrument_status_listening_trader = None
+        bridge = self._instrument_status_bridge
+        if bridge is not None:
+            bridge.mark_source_unavailable()
         self._listening_trader = None
         if self._owner_thread_only:
             self._settlement_ticket = None
