@@ -124,7 +124,8 @@ class CtpGatewaySession:
                  connect_timeout_seconds: float = 30.0, stop_timeout_seconds: float = 3.0,
                  queue_capacity: int = 1024, return_buffer_capacity: int = 1024,
                  observation_issuer: object | None = None,
-                 observation_instruments: tuple[MarketInstrumentKey, ...] | None = None) -> None:
+                 observation_instruments: tuple[MarketInstrumentKey, ...] | None = None,
+                 recovery_observation_capacity: int = 0) -> None:
         if (type(account_key) is not AccountKey or account_key.provider != "ctp"
                 or account_key.venue != "simnow" or account_key.environment != "simnow"
                 or not account_key.subaccount_id or not callable(request_feed_factory)
@@ -169,6 +170,7 @@ class CtpGatewaySession:
             stream_factory=self._checked_stream, source_ref=source_ref,
             entitlement_ref=entitlement_ref, queue_capacity=queue_capacity,
             connect_timeout_seconds=self._connect_timeout, stop_timeout_seconds=self._stop_timeout,
+            recovery_observation_capacity=recovery_observation_capacity,
         )
 
     def _check_owner(self) -> None:

@@ -65,6 +65,16 @@ member changes that set; completion does not recover the original removed
 member. This covers callbacks already processed by the stream, not a global
 SPI/network snapshot, sustained health or a durable recovery observation log.
 
+With explicit `recovery_observation_capacity` (2–4096), the provider records
+owner-observed recovery episodes in bounded memory. The default 0 disables this
+component. `read_recovery_observations(after_sequence=..., limit=...)` runs only
+on that owner and reads without acknowledging or removing entries. It reports
+retention gaps; retries and in-call recovery reentry preserve the original
+episode, while member changes and close invalidate its complete scope. Observer
+failure leaves trading behavior unchanged and makes observation unavailable.
+These are process-local lower bounds, with no UTC, calendar or Monitor claim.
+The Gateway Session forwards this option; the SDK owns explicit disk recording.
+
 `CtpInstrumentMetadataReader.read()` also exposes the certified native row's
 `product_id` locally. Missing or empty ProductID remains `None`; no symbol or
 ProductClass inference is used. Invalid values are rejected with finite errors.

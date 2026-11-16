@@ -125,6 +125,9 @@ class CtpQuoteV2MarketProviderError(RuntimeError):
             "CTP_MARKET_UNSUBSCRIBE_FAILED",
             "CTP_MARKET_STOP_UNCONFIRMED",
             "CTP_MARKET_RECOVERY_IN_PROGRESS",
+            "RECOVERY_OBSERVATION_DISABLED",
+            "RECOVERY_OBSERVATION_UNAVAILABLE",
+            "RECOVERY_OBSERVATION_INVALID",
         }
     )
 
@@ -354,6 +357,7 @@ class CtpQuoteV2MarketProvider:
         connect_timeout_seconds: float = 30.0,
         stop_timeout_seconds: float = 5.0,
         max_parked_symbols: int = DEFAULT_CTP_PARKED_SYMBOLS,
+        recovery_observation_capacity: int = 0,
     ) -> None:
         if (
             not callable(stream_factory)
@@ -363,6 +367,8 @@ class CtpQuoteV2MarketProvider:
             or not 1 <= queue_capacity <= MAX_CTP_QUOTE_QUEUE_CAPACITY
             or type(max_parked_symbols) is not int
             or not 0 <= max_parked_symbols <= MAX_CTP_PARKED_SYMBOLS
+            or type(recovery_observation_capacity) is not int
+            or not (recovery_observation_capacity == 0 or 2 <= recovery_observation_capacity <= 4096)
             or not _valid_timeout(connect_timeout_seconds, MAX_CTP_CONNECT_TIMEOUT_SECONDS)
             or not _valid_timeout(stop_timeout_seconds, MAX_CTP_STOP_TIMEOUT_SECONDS)
         ):
@@ -394,6 +400,16 @@ class CtpQuoteV2MarketProvider:
         self._pending_start_cleanup: list[_PendingStreamCleanup] = []
         self._invalid_events = 0
         self._source_recovery: _SourceRecovery | None = None
+        self._recovery_observation_enabled = recovery_observation_capacity != 0
+        self._recovery_observation_unavailable = False
+        self._recovery_observation = None
+        if self._recovery_observation_enabled:
+            try:
+                from bt_api_ctp.recovery_observation import RecoveryObservationBuffer
+
+                self._recovery_observation = RecoveryObservationBuffer(recovery_observation_capacity)
+            except Exception:
+                self._recovery_observation_unavailable = True
         # Throttle of the failed-attempt log lines of one recovery.
         self._recovery_retry_logged_at: float | None = None
         self._recovery_retry_suppressed = 0
@@ -412,6 +428,40 @@ class CtpQuoteV2MarketProvider:
                 handle.queue.dropped_oldest for handle in self._active_handles.values()
             ),
         }
+
+    def _observe_recovery(self, operation: str, *args: object) -> None:
+        if self._recovery_observation is None or self._recovery_observation_unavailable:
+            return
+        try:
+            getattr(self._recovery_observation, operation)(*args)
+        except Exception:
+            self._recovery_observation_unavailable = True
+
+    def read_recovery_observations(self, *, after_sequence: int, limit: int = 100):
+        """Read local owner observations; monotonic values are process-local only."""
+        self._check_owner(allow_closing=True)
+        if not self._recovery_observation_enabled:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_DISABLED")
+        if self._recovery_observation_unavailable or self._recovery_observation is None:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE")
+        from bt_api_ctp.recovery_observation import RecoveryObservationUnavailable
+
+        try:
+            if self._source_recovery is not None and self._source_recovery.stream is not self._stream:
+                self._observe_recovery("invalidate", "SCOPE_CHANGED", self._source_recovery)
+                if self._recovery_observation_unavailable:
+                    raise RecoveryObservationUnavailable
+            return self._recovery_observation.read(
+                after_sequence, limit, self._source_recovery, tuple(self._active_handles.values())
+            )
+        except ValueError:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_INVALID") from None
+        except RecoveryObservationUnavailable:
+            self._recovery_observation_unavailable = True
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
+        except Exception:
+            self._recovery_observation_unavailable = True
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
 
     def subscribe(self, key: MarketSubscriptionKey, *, generation: str) -> CtpQuoteV2MarketHandle:
         """Acquire one key; a typed refusal says that no handle exists for it.
@@ -510,6 +560,7 @@ class CtpQuoteV2MarketProvider:
         """
 
         self._check_owner(allow_closing=True)
+        self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         stream = self._stream
         recovery = self._source_recovery
         recovery_stop_confirmed = False
@@ -890,6 +941,7 @@ class CtpQuoteV2MarketProvider:
             and bool(active.source_epoch_reset_epoch)
             for active in self._active_handles.values()
         ):
+            self._observe_recovery("complete", recovery, tuple(self._active_handles.values()))
             self._source_scope = recovery.new_scope
             self._native_client = recovery.stream._md_client
             self._source_recovery = None
@@ -1127,7 +1179,7 @@ class CtpQuoteV2MarketProvider:
                 return None
         return state
 
-    def _begin_source_recovery(self, stream: CtpMarketStream) -> None:
+    def _begin_source_recovery(self, stream: CtpMarketStream, *, _reentry: bool = False) -> None:
         if (
             self._source_recovery is not None
             or stream is not self._stream
@@ -1136,6 +1188,19 @@ class CtpQuoteV2MarketProvider:
             or not self._active_handles
             or any(handle.stream is not stream for handle in self._active_handles.values())
         ):
+            if self._recovery_observation is not None:
+                try:
+                    if (
+                        self._source_recovery is None
+                        and stream is self._stream
+                        and stream.quote_v2_service_recovery_required
+                    ):
+                        self._observe_recovery(
+                            "invalidate", "REENTRY_FAILED" if _reentry else "BEGIN_FAILED",
+                            None, tuple(self._active_handles.values()),
+                        )
+                except Exception:
+                    self._recovery_observation_unavailable = True
             return
         old_client = self._native_client
         old_scope = self._source_scope
@@ -1186,6 +1251,9 @@ class CtpQuoteV2MarketProvider:
             symbols=symbols,
             deadline=time.monotonic() + self._connect_timeout_seconds,
             state="stopping",
+        )
+        self._observe_recovery(
+            "begin", self._source_recovery, tuple(self._active_handles.values()), _reentry
         )
         self._recovery_retry_logged_at = None
         self._recovery_retry_suppressed = 0
@@ -1427,7 +1495,13 @@ class CtpQuoteV2MarketProvider:
                 self._source_recovery = None
                 self._source_scope = recovery.new_scope
                 self._native_client = getattr(stream, "_md_client", None)
-                self._begin_source_recovery(stream)
+                reentered = False
+                try:
+                    self._begin_source_recovery(stream, _reentry=True)
+                    reentered = self._source_recovery is not None
+                finally:
+                    if not reentered:
+                        self._observe_recovery("invalidate", "REENTRY_FAILED")
                 if self._source_recovery is not None:
                     self._drive_source_recovery()
 
@@ -1754,6 +1828,7 @@ class CtpQuoteV2MarketProvider:
             recovery.stop_done.set()
         self._native_client = origin
         self._source_recovery = recovery
+        self._observe_recovery("transfer", previous, recovery, tuple(self._active_handles.values()))
         self._log_source_recovery_retry(previous, reason, delay)
 
     def _log_source_recovery_retry(
@@ -1792,6 +1867,7 @@ class CtpQuoteV2MarketProvider:
         """
 
         recovery = self._source_recovery
+        self._observe_recovery("fail", recovery, tuple(self._active_handles.values()))
         if recovery is not None:
             if recovery.state != "failed":
                 _logger.error(
@@ -1837,6 +1913,7 @@ class CtpQuoteV2MarketProvider:
             handle.source_epoch_reset_epoch = None
 
     def _remove_handle(self, handle: _HandleState) -> None:
+        self._observe_recovery("invalidate", "MEMBERS_CHANGED", self._source_recovery)
         handle.active = False
         handle.queue.clear()
         handle.clock_events.clear()
@@ -1848,6 +1925,7 @@ class CtpQuoteV2MarketProvider:
         self._handles_by_symbol.pop(handle.key.instrument.native_symbol, None)
 
     def _reset_active_stream(self) -> None:
+        self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         self._stream = None
         self._parked_symbols.clear()
         self._fanout = None
@@ -2000,6 +2078,7 @@ class CtpQuoteV2MarketProvider:
 
     def _begin_close(self) -> None:
         self._check_owner(allow_closing=True)
+        self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         self._close_only = True
 
     def _check_owner(self, *, allow_closing: bool = False) -> None:
