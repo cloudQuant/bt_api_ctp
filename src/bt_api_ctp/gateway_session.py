@@ -23,12 +23,15 @@ from bt_api_ctp.account_provider import CtpReadOnlyAccountSessionProvider
 from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.direct_write_provider import CtpDirectWriteProvider
 from bt_api_ctp.feeds.live_ctp_feed import ConnectionState, CtpMarketStream, CtpRequestDataFuture
-from bt_api_ctp.market_provider import CtpQuoteV2MarketProvider
 from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer, CtpGatewayReturnRecord
-from bt_api_ctp.registered_sim_session import capture_query_session
 from bt_api_ctp.gateway_return_query import CtpGatewayReturnQueryReader
+from bt_api_ctp.market_provider import CtpQuoteV2MarketProvider
+from bt_api_ctp.registered_sim_session import (
+    CtpQuerySessionBinding,
+    capture_query_session,
+    validate_query_session,
+)
 from bt_api_ctp.trusted_flow import flow_binding, trusted_flow
-
 
 _LOG = logging.getLogger(__name__)
 
@@ -456,6 +459,58 @@ class CtpGatewaySession:
             raise CtpGatewaySessionError("SESSION_CHANGED") from None
         finally:
             trader._query_state_lock.release()
+
+    def _calendar_session_current_locked(self, owner: _ConnectionOwner, binding: object) -> bool:
+        """Validate under the owner's already-held, reentrant query-state lock."""
+
+        return bool(
+            type(binding) is CtpQuerySessionBinding
+            and binding.environment == owner.account.environment
+            and self.connection_status() == "ready"
+            and validate_query_session(owner.trader, binding, now_monotonic=time.monotonic())
+            and self.connection_status() == "ready"
+        )
+
+    def capture_calendar_session(self) -> CtpQuerySessionBinding:
+        """Capture the current authenticated read-only session for calendar selection.
+
+        This is a local instantaneous binding, not settlement, write authority,
+        source continuity, or a native query.
+        """
+
+        self._check_owner()
+        owner = self._connection_owner
+        if not self._connection_owner_matches(owner):
+            raise CtpGatewaySessionError("CALENDAR_SESSION_UNAVAILABLE")
+        if not owner.query_lock.acquire(blocking=False):
+            raise CtpGatewaySessionError("CALENDAR_SESSION_BUSY")
+        try:
+            if self.connection_status() != "ready":
+                raise CtpGatewaySessionError("CALENDAR_SESSION_UNAVAILABLE")
+            binding = capture_query_session(owner.trader, environment=owner.account.environment)
+            if not self._calendar_session_current_locked(owner, binding):
+                raise CtpGatewaySessionError("CALENDAR_SESSION_UNAVAILABLE")
+            return binding
+        except Exception:
+            raise CtpGatewaySessionError("CALENDAR_SESSION_UNAVAILABLE") from None
+        finally:
+            owner.query_lock.release()
+
+    def calendar_session_is_current(self, binding: object) -> bool:
+        """Check the exact session binding now; this grants no trading permission."""
+
+        self._check_owner()
+        owner = self._connection_owner
+        if not self._connection_owner_matches(owner):
+            return False
+        if not owner.query_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._calendar_session_current_locked(owner, binding)
+        except Exception:
+            return False
+        finally:
+            owner.query_lock.release()
 
     @property
     def return_buffer(self) -> CtpGatewayReturnBuffer:
