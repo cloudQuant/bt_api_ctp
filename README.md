@@ -91,6 +91,18 @@ prove uninterrupted callback coverage, exclude source-identity ABA, or make a
 discarded incomplete native callback fresh evidence. Gateway status transport
 and the calendar/recovery trading decision remain separate integration work.
 
+`CtpGatewaySession.capture_instrument_status(venue, native_symbol)` captures the
+original owner session, provider view and status revision. Its companion
+`snapshot_is_current(snapshot)` rejects a changed session, source object or
+revision. Both require the original process and thread; the native session lock
+is acquired without waiting, while internal status locks can still wait. The
+first read that initializes a status scope is refused once; a later explicit
+read can observe that scope. Neither method issues a native query or order.
+The snapshot is local diagnostic evidence only: continuity, freshness, product
+mapping and trading authority are not established. Synthetic tests include real
+Trader startup with a fake native API and disconnect/reconnect invalidation;
+actual account behavior and installed-wheel verification remain separate.
+
 `CtpInstrumentMetadataReader.read()` also exposes the certified native row's
 `product_id` locally. Missing or empty ProductID remains `None`; no symbol or
 ProductClass inference is used. Invalid values are rejected with finite errors.

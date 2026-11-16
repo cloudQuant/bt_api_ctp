@@ -23,8 +23,22 @@ from bt_api_ctp.account_provider import CtpReadOnlyAccountSessionProvider
 from bt_api_ctp.ctp.client import TraderClient, _TraderSpi
 from bt_api_ctp.direct_write_provider import CtpDirectWriteProvider
 from bt_api_ctp.feeds.live_ctp_feed import ConnectionState, CtpMarketStream, CtpRequestDataFuture
+from bt_api_ctp.gateway_instrument_status_snapshot import (
+    CtpGatewayInstrumentStatusSnapshot,
+    _make_snapshot,
+    _snapshot_is_sealed,
+)
 from bt_api_ctp.gateway_return_buffer import CtpGatewayReturnBuffer, CtpGatewayReturnRecord
 from bt_api_ctp.gateway_return_query import CtpGatewayReturnQueryReader
+from bt_api_ctp.instrument_status_observation import (
+    _MAX_EXCHANGE_ID_LENGTH,
+    _MAX_INSTRUMENT_ID_LENGTH,
+    NATIVE_STATUS_CATEGORIES,
+    STATE_CURRENT,
+    InstrumentStatusObservation,
+    InstrumentStatusView,
+    _identifier,
+)
 from bt_api_ctp.market_provider import CtpQuoteV2MarketProvider
 from bt_api_ctp.registered_sim_session import (
     CtpQuerySessionBinding,
@@ -507,6 +521,127 @@ class CtpGatewaySession:
             return False
         try:
             return self._calendar_session_current_locked(owner, binding)
+        except Exception:
+            return False
+        finally:
+            owner.query_lock.release()
+
+    @staticmethod
+    def _instrument_status_revision_locked(owner: _ConnectionOwner) -> tuple:
+        """Read a provider revision without waiting for native while holding its lock."""
+
+        provider = owner.direct
+        lock = provider._instrument_status_lock
+        with lock:
+            if (
+                provider._instrument_status_closed
+                or provider._instrument_status_listening_trader is not owner.trader
+                or provider._instrument_status_listener is None
+                or type(provider._instrument_status_version) is not int
+                or provider._instrument_status_version < 0
+                or provider._instrument_status_lock is not lock
+            ):
+                raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+            return (
+                provider._instrument_status_version,
+                provider._instrument_status_bridge,
+                provider._instrument_status_listener,
+                lock,
+            )
+
+    def capture_instrument_status(
+        self, venue: object, native_symbol: object
+    ) -> CtpGatewayInstrumentStatusSnapshot:
+        """Capture a local view, without granting authority or proving continuity."""
+
+        self._check_owner()
+        if not _identifier(venue, _MAX_EXCHANGE_ID_LENGTH) or not _identifier(
+            native_symbol, _MAX_INSTRUMENT_ID_LENGTH
+        ):
+            raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+        owner = self._connection_owner
+        if not self._connection_owner_matches(owner):
+            raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+        if not owner.query_lock.acquire(blocking=False):
+            raise CtpGatewaySessionError("INSTRUMENT_STATUS_BUSY")
+        try:
+            if self.connection_status() != "ready":
+                raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+            binding = capture_query_session(owner.trader, environment=owner.account.environment)
+            if not self._calendar_session_current_locked(owner, binding):
+                raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+            before = self._instrument_status_revision_locked(owner)
+            view = owner.direct.instrument_status_view(venue, native_symbol)
+            after = self._instrument_status_revision_locked(owner)
+            if (
+                before[0] != after[0]
+                or before[1] is not after[1]
+                or before[2] is not after[2]
+                or before[3] is not after[3]
+                or (view is not None and (
+                    type(view) is not InstrumentStatusView
+                    or view.venue != venue or view.native_symbol != native_symbol
+                    or view.session_generation != str(binding.connection_generation)
+                    or view.trading_day != binding.trading_day
+                    or type(view.usable) is not bool
+                    or (view.usable and (
+                        type(view.observation) is not InstrumentStatusObservation
+                        or view.state != STATE_CURRENT
+                        or view.reason_code is not None
+                        or view.observation.accepted is not True
+                        or view.observation.venue != venue
+                        or view.observation.native_symbol != native_symbol
+                        or view.observation.session_generation != str(binding.connection_generation)
+                        or view.observation.trading_day != binding.trading_day
+                        or view.effective_status_category not in NATIVE_STATUS_CATEGORIES.values()
+                        or view.observed_status_category != view.effective_status_category
+                        or view.observation.status_category != view.effective_status_category
+                    ))
+                ))
+                or not self._calendar_session_current_locked(owner, binding)
+            ):
+                raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+            provider = owner.direct
+            with after[3]:
+                if (
+                    provider._instrument_status_closed
+                    or provider._instrument_status_listening_trader is not owner.trader
+                    or provider._instrument_status_lock is not after[3]
+                    or provider._instrument_status_version != after[0]
+                    or provider._instrument_status_bridge is not after[1]
+                    or provider._instrument_status_listener is not after[2]
+                ):
+                    raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE")
+                return _make_snapshot(
+                    venue=venue, native_symbol=native_symbol, view=view, session=self,
+                    binding=binding, provider=provider, bridge=after[1], listener=after[2], lock=after[3],
+                    revision=after[0],
+                )
+        except Exception:
+            raise CtpGatewaySessionError("INSTRUMENT_STATUS_UNAVAILABLE") from None
+        finally:
+            owner.query_lock.release()
+
+    def snapshot_is_current(self, snapshot: object) -> bool:
+        """Check the same owner, source binding and provider revision only."""
+
+        self._check_owner()
+        if not _snapshot_is_sealed(snapshot) or snapshot._cut.session is not self:
+            return False
+        owner = self._connection_owner
+        if not self._connection_owner_matches(owner) or snapshot._cut.provider is not owner.direct:
+            return False
+        if not owner.query_lock.acquire(blocking=False):
+            return False
+        try:
+            cut = snapshot._cut
+            if not self._calendar_session_current_locked(owner, cut.binding):
+                return False
+            revision, bridge, listener, lock = self._instrument_status_revision_locked(owner)
+            return (
+                revision == cut.revision and bridge is cut.bridge and listener is cut.listener
+                and lock is cut.lock
+            )
         except Exception:
             return False
         finally:
