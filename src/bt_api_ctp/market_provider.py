@@ -27,6 +27,7 @@ from bt_api_base.market_protocol import (
     MarketSourceDescriptor,
     MarketSubscriptionKey,
 )
+from bt_api_base.market_recovery_observation import RecoveryObservationMember
 
 from bt_api_ctp.ctp.client import CtpNativeStopReceipt
 from bt_api_ctp.feeds.live_ctp_feed import (
@@ -38,6 +39,7 @@ from bt_api_ctp.feeds.live_ctp_feed import (
 )
 from bt_api_ctp.market_key_contract import CtpMarketKeyError, validate_ctp_market_key
 from bt_api_ctp.market_tick_projection import project_ctp_market_tick
+from bt_api_ctp.md_identity import MdIdentityObservation
 
 DEFAULT_CTP_QUOTE_QUEUE_CAPACITY = 1_024
 MAX_CTP_QUOTE_QUEUE_CAPACITY = 65_536
@@ -50,6 +52,8 @@ MAX_CTP_PARKED_SYMBOLS = 1_024
 MAX_CTP_QUOTE_EVENT_BYTES = 256 * 1024
 MAX_CTP_CONNECT_TIMEOUT_SECONDS = 300.0
 MAX_CTP_STOP_TIMEOUT_SECONDS = 30.0
+_MAX_RECOVERY_SNAPSHOT_MEMBERS = 1024
+_RECOVERY_MEMBER_SNAPSHOT_SEAL = object()
 
 _logger = logging.getLogger(__name__)
 
@@ -247,6 +251,109 @@ class CtpQuoteV2MarketHandle:
     generation: str
 
 
+@dataclass(frozen=True, eq=False)
+class CtpRecoveryMemberSnapshot:
+    """Owner-local point observation, without coverage or future authority.
+
+    This does not prove cross-TD/MD identity, a later BEGIN, historical
+    ProductID, or continuity after capture. Private references are only local
+    identity fences and this object has no serialization contract.
+    ``md_generation`` is the stream source scope's connection generation,
+    not a TD generation or an authorization fact.
+    """
+
+    source_epoch: str
+    sequence: int
+    md_generation: int
+    members: tuple[RecoveryObservationMember, ...]
+    _provider: object = dataclass_field(repr=False)
+    _owner_pid: int = dataclass_field(repr=False)
+    _owner_thread: object = dataclass_field(repr=False)
+    _buffer: object = dataclass_field(repr=False)
+    _stream: object = dataclass_field(repr=False)
+    _client: object = dataclass_field(repr=False)
+    _md_identity: object = dataclass_field(repr=False)
+    _scope: object = dataclass_field(repr=False)
+    _revision: int = dataclass_field(repr=False)
+    _states: tuple = dataclass_field(repr=False)
+    _seal: object = dataclass_field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _RECOVERY_MEMBER_SNAPSHOT_SEAL:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_INVALID")
+
+    def __copy__(self):
+        raise TypeError("recovery member snapshots cannot be copied")
+
+    def __deepcopy__(self, _memo):
+        raise TypeError("recovery member snapshots cannot be copied")
+
+    def __reduce_ex__(self, _protocol):
+        raise TypeError("recovery member snapshots cannot be serialized")
+
+
+@dataclass(frozen=True, eq=False)
+class _RecoveryMemberIssuance:
+    """Private issuance values and identity references, independent of the DTO."""
+
+    source_epoch: str
+    sequence: int
+    md_generation: int
+    members: tuple
+    provider: object
+    owner_pid: int
+    owner_thread: object
+    buffer: object
+    stream: object
+    client: object
+    md_identity: object
+    md_identity_values: tuple
+    scope: object
+    scope_values: tuple
+    revision: int
+    states: tuple
+
+
+def _md_identity_signature(identity: MdIdentityObservation) -> tuple:
+    """Freeze all native login observation fields independently of its object."""
+    if type(identity) is not MdIdentityObservation:
+        raise ValueError("invalid MD identity")
+    values = (identity.front, identity.broker_id, identity.user_id,
+              identity.connection_generation, identity.request_id,
+              identity.trading_day, identity.authenticated)
+    MdIdentityObservation(*values)
+    return tuple((type(value), value) for value in values)
+
+
+def _recovery_scope_signature(scope: CtpQuoteClockSourceScope) -> tuple:
+    """Freeze the public source identity without copying private capabilities."""
+    if type(scope) is not CtpQuoteClockSourceScope:
+        raise ValueError("invalid MD source scope")
+    values = (scope.source, scope.clock_domain_id, scope.clock_source_session_id,
+              scope.clock_source, scope.connection_generation)
+    if any(type(value) is not str for value in values[:4]) or type(values[4]) is not int:
+        raise ValueError("invalid MD source scope")
+    return values
+
+
+def _recovery_member_signature(members: tuple) -> tuple:
+    """Copy and validate every member dimension into immutable builtins."""
+    if type(members) is not tuple or not 1 <= len(members) <= _MAX_RECOVERY_SNAPSHOT_MEMBERS:
+        raise ValueError("invalid recovery members")
+    result = []
+    for member in members:
+        if type(member) is not RecoveryObservationMember or type(member.key) is not MarketSubscriptionKey:
+            raise ValueError("invalid recovery member")
+        key = MarketSubscriptionKey.from_dict(member.key.to_dict())
+        RecoveryObservationMember(key, member.generation)
+        instrument = key.instrument
+        result.append((key.source_ref, key.entitlement_ref, instrument.provider,
+                       instrument.venue, instrument.environment, instrument.product_type,
+                       instrument.instrument_id, instrument.native_symbol, key.channel,
+                       key.depth, key.timeframe, member.generation))
+    return tuple(result)
+
+
 @dataclass
 class _HandleState:
     key: MarketSubscriptionKey
@@ -400,6 +507,10 @@ class CtpQuoteV2MarketProvider:
         self._pending_start_cleanup: list[_PendingStreamCleanup] = []
         self._invalid_events = 0
         self._source_recovery: _SourceRecovery | None = None
+        self._recovery_member_revision = 0
+        self._recovery_member_snapshots: weakref.WeakKeyDictionary[
+            CtpRecoveryMemberSnapshot, _RecoveryMemberIssuance
+        ] = weakref.WeakKeyDictionary()
         self._recovery_observation_enabled = recovery_observation_capacity != 0
         self._recovery_observation_unavailable = False
         self._recovery_observation = None
@@ -461,6 +572,212 @@ class CtpQuoteV2MarketProvider:
             raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
         except Exception:
             self._recovery_observation_unavailable = True
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
+
+    def _recovery_member_inputs_locked(self, stream: CtpMarketStream, buffer: object) -> tuple:
+        """Capture only healthy owner-local membership under the MD callback lock."""
+        from bt_api_ctp.recovery_observation import RecoveryObservationBuffer
+
+        epoch = getattr(buffer, "_source_epoch", None)
+        sequence = getattr(buffer, "_sequence", None)
+        scope = self._source_scope
+        client = self._native_client
+        identity = getattr(client, "active_md_identity", None)
+        if not 1 <= len(self._active_handles) <= _MAX_RECOVERY_SNAPSHOT_MEMBERS:
+            raise ValueError("recovery members unavailable")
+        states = tuple(self._active_handles.values())
+        fanout = self._fanout
+        symbols = self._session_symbols()
+        if (
+            self._close_only
+            or self._stream is not stream
+            or self._recovery_observation_enabled is not True
+            or self._recovery_observation is not buffer
+            or type(buffer) is not RecoveryObservationBuffer
+            or self._recovery_observation_unavailable
+            or buffer._poisoned is not False
+            or buffer._episode is not None
+            or buffer._pid != self._owner_pid
+            or type(epoch) is not str
+            or len(epoch) != 32
+            or any(char not in "0123456789abcdef" for char in epoch)
+            or type(sequence) is not int
+            or not 0 <= sequence <= (1 << 63) - 1
+            or self._source_recovery is not None
+            or type(scope) is not CtpQuoteClockSourceScope
+            or client is None
+            or type(identity) is not MdIdentityObservation
+            or identity.authenticated is not True
+            or identity.connection_generation != scope._client_generation
+            or stream._md_client is not client
+            or scope._client is not client
+            or not stream.quote_v2_service_binding_matches()
+            or self._current_source_scope(stream) is not scope
+            or type(scope._client_generation) is not int
+            or scope._client_generation <= 0
+            or len(self._handles_by_symbol) != len(states)
+            or set(self._handles_by_symbol).intersection(self._parked_symbols)
+            or type(stream._quote_v2_subscription_metadata) is not dict
+            or set(stream._quote_v2_subscription_metadata) != set(symbols)
+            or stream._quote_v2_service_required_symbols != set(symbols)
+            or type(fanout) is not _CtpQuoteV2Fanout
+        ):
+            raise ValueError("recovery members unavailable")
+        pairs = []
+        for state in states:
+            public = state.public_handle
+            if (
+                type(state) is not _HandleState
+                or type(public) is not CtpQuoteV2MarketHandle
+                or state.active is not True
+                or state.source_epoch_reset_pending is not False
+                or self._active_handles.get(id(public)) is not state
+                or self._known_handles.get(public) is not state
+                or self._handles_by_symbol.get(state.key.instrument.native_symbol) is not state
+                or state.stream is not stream
+                or state.source_scope is not scope
+                or type(state.key) is not MarketSubscriptionKey
+                or state.key.instrument.environment != self._session_environment
+                or public.key is not state.key
+                or public.generation != state.generation
+                or state.key.instrument.native_symbol not in stream._quote_v2_service_acknowledged_symbols
+                or stream._quote_v2_service_symbol_request_ids.get(state.key.instrument.native_symbol)
+                not in stream._quote_v2_service_completed_request_ids
+            ):
+                raise ValueError("recovery members unavailable")
+            self._validate_key(state.key)
+            detached_key = MarketSubscriptionKey.from_dict(state.key.to_dict())
+            member = RecoveryObservationMember(detached_key, state.generation)
+            pairs.append((member, state, public))
+        pairs.sort(key=lambda item: (item[0].key.stream_id, item[0].generation))
+        ordering = tuple((item[0].key.stream_id, item[0].generation) for item in pairs)
+        if len(set(ordering)) != len(ordering):
+            raise ValueError("recovery members unavailable")
+        with fanout._lock:
+            if (set(fanout._queues) != set(self._handles_by_symbol)
+                    or any(fanout._queues.get(state.key.instrument.native_symbol) is not state.queue
+                           for _, state, _ in pairs)):
+                raise ValueError("recovery members unavailable")
+        if (getattr(client, "active_md_identity", None) is not identity
+                or not stream.quote_v2_service_binding_matches()):
+            raise ValueError("recovery members unavailable")
+        return (
+            epoch, sequence, scope.connection_generation, tuple(item[0] for item in pairs),
+            tuple((item[1], item[2]) for item in pairs), self._recovery_member_revision,
+            client, identity, scope, _md_identity_signature(identity),
+            _recovery_scope_signature(scope),
+        )
+
+    @staticmethod
+    def _recovery_member_inputs_match(issued: _RecoveryMemberIssuance, inputs: tuple) -> bool:
+        (epoch, sequence, generation, members, states, revision, client, identity, scope,
+         identity_values, scope_values) = inputs
+        return bool(
+            issued.source_epoch == epoch
+            and issued.sequence == sequence
+            and issued.md_generation == generation
+            and issued.members == _recovery_member_signature(members)
+            and issued.revision == revision
+            and issued.client is client
+            and issued.md_identity is identity
+            and issued.md_identity_values == identity_values
+            and issued.md_identity_values == _md_identity_signature(identity)
+            and issued.scope is scope
+            and issued.scope_values == scope_values
+            and issued.scope_values == _recovery_scope_signature(scope)
+            and len(issued.states) == len(states)
+            and all(old_state is state and old_handle is handle
+                    for (old_state, old_handle), (state, handle) in zip(issued.states, states))
+        )
+
+    @staticmethod
+    def _recovery_member_snapshot_matches(snapshot: CtpRecoveryMemberSnapshot,
+                                          issued: _RecoveryMemberIssuance) -> bool:
+        return bool(
+            type(snapshot.source_epoch) is str and snapshot.source_epoch == issued.source_epoch
+            and type(snapshot.sequence) is int and snapshot.sequence == issued.sequence
+            and type(snapshot.md_generation) is int and snapshot.md_generation == issued.md_generation
+            and _recovery_member_signature(snapshot.members) == issued.members
+            and snapshot._provider is issued.provider
+            and type(snapshot._owner_pid) is int and snapshot._owner_pid == issued.owner_pid
+            and snapshot._owner_thread is issued.owner_thread
+            and snapshot._buffer is issued.buffer and snapshot._stream is issued.stream
+            and snapshot._client is issued.client and snapshot._md_identity is issued.md_identity
+            and _md_identity_signature(snapshot._md_identity) == issued.md_identity_values
+            and snapshot._scope is issued.scope
+            and _recovery_scope_signature(snapshot._scope) == issued.scope_values
+            and type(snapshot._revision) is int and snapshot._revision == issued.revision
+            and snapshot._seal is _RECOVERY_MEMBER_SNAPSHOT_SEAL
+            and type(snapshot._states) is tuple and len(snapshot._states) == len(issued.states)
+            and all(type(pair) is tuple and len(pair) == 2
+                    and pair[0] is old[0] and pair[1] is old[1]
+                    for pair, old in zip(snapshot._states, issued.states))
+        )
+
+    def capture_recovery_member_snapshot(self) -> CtpRecoveryMemberSnapshot:
+        """Capture current local members without emitting recovery observations.
+
+        Only active handles are members; parked native symbols are excluded.
+        This point observation does not establish coverage, cross-TD/MD
+        identity, a future BEGIN, historical ProductID, or continuing validity.
+        """
+        self._check_owner()
+        if not self._recovery_observation_enabled:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_DISABLED")
+        stream, buffer = self._stream, self._recovery_observation
+        if type(stream) is not CtpMarketStream or buffer is None:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE")
+        try:
+            with stream._md_callback_lock:
+                inputs = self._recovery_member_inputs_locked(stream, buffer)
+                (epoch, sequence, generation, members, states, revision, client, identity, scope,
+                 identity_values, scope_values) = inputs
+                issued = _RecoveryMemberIssuance(
+                    epoch, sequence, generation, _recovery_member_signature(members), self,
+                    self._owner_pid, self._owner_thread, buffer, stream, client, identity,
+                    identity_values, scope, scope_values, revision, states,
+                )
+                snapshot = CtpRecoveryMemberSnapshot(
+                    epoch, sequence, generation, members, self, self._owner_pid,
+                    self._owner_thread, buffer, stream, client, identity, scope, revision, states,
+                    _RECOVERY_MEMBER_SNAPSHOT_SEAL,
+                )
+                if not self._recovery_member_inputs_match(
+                    issued, self._recovery_member_inputs_locked(stream, buffer)
+                ):
+                    raise ValueError("recovery members changed")
+                if not self._recovery_member_snapshot_matches(snapshot, issued):
+                    raise ValueError("recovery members changed")
+                self._recovery_member_snapshots[snapshot] = issued
+                return snapshot
+        except Exception:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
+
+    def assert_recovery_member_snapshot_current(self, snapshot: object) -> None:
+        """Recheck one originally issued point snapshot; no source I/O occurs."""
+        self._check_owner()
+        if type(snapshot) is not CtpRecoveryMemberSnapshot:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_INVALID")
+        issued = self._recovery_member_snapshots.get(snapshot)
+        try:
+            valid = (issued is not None and issued.provider is self
+                     and issued.owner_pid == self._owner_pid
+                     and issued.owner_thread is self._owner_thread
+                     and self._recovery_member_snapshot_matches(snapshot, issued))
+        except Exception:
+            valid = False
+        if not valid:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_INVALID")
+        stream, buffer = issued.stream, issued.buffer
+        if type(stream) is not CtpMarketStream:
+            raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE")
+        try:
+            with stream._md_callback_lock:
+                if not self._recovery_member_inputs_match(
+                    issued, self._recovery_member_inputs_locked(stream, buffer)
+                ) or not self._recovery_member_snapshot_matches(snapshot, issued):
+                    raise ValueError("recovery members changed")
+        except Exception:
             raise CtpQuoteV2MarketProviderError("RECOVERY_OBSERVATION_UNAVAILABLE") from None
 
     def subscribe(self, key: MarketSubscriptionKey, *, generation: str) -> CtpQuoteV2MarketHandle:
@@ -560,6 +877,7 @@ class CtpQuoteV2MarketProvider:
         """
 
         self._check_owner(allow_closing=True)
+        self._recovery_member_revision += 1
         self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         stream = self._stream
         recovery = self._source_recovery
@@ -1163,6 +1481,7 @@ class CtpQuoteV2MarketProvider:
         stream: CtpMarketStream,
         scope: CtpQuoteClockSourceScope,
     ) -> CtpQuoteV2MarketHandle:
+        self._recovery_member_revision += 1
         handle = CtpQuoteV2MarketHandle(key=key, generation=generation)
         state = _HandleState(key, generation, handle, callback_queue, stream, scope)
         self._known_handles[handle] = state
@@ -1180,6 +1499,7 @@ class CtpQuoteV2MarketProvider:
         return state
 
     def _begin_source_recovery(self, stream: CtpMarketStream, *, _reentry: bool = False) -> None:
+        self._recovery_member_revision += 1
         if (
             self._source_recovery is not None
             or stream is not self._stream
@@ -1913,6 +2233,7 @@ class CtpQuoteV2MarketProvider:
             handle.source_epoch_reset_epoch = None
 
     def _remove_handle(self, handle: _HandleState) -> None:
+        self._recovery_member_revision += 1
         self._observe_recovery("invalidate", "MEMBERS_CHANGED", self._source_recovery)
         handle.active = False
         handle.queue.clear()
@@ -1925,6 +2246,7 @@ class CtpQuoteV2MarketProvider:
         self._handles_by_symbol.pop(handle.key.instrument.native_symbol, None)
 
     def _reset_active_stream(self) -> None:
+        self._recovery_member_revision += 1
         self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         self._stream = None
         self._parked_symbols.clear()
@@ -2078,6 +2400,7 @@ class CtpQuoteV2MarketProvider:
 
     def _begin_close(self) -> None:
         self._check_owner(allow_closing=True)
+        self._recovery_member_revision += 1
         self._observe_recovery("invalidate", "CLOSED", self._source_recovery)
         self._close_only = True
 
@@ -2150,6 +2473,7 @@ def _valid_timeout(value: object, maximum: float) -> bool:
 
 __all__ = [
     "BoundedCtpQuoteV2Queue",
+    "CtpRecoveryMemberSnapshot",
     "CtpQuoteV2MarketHandle",
     "CtpQuoteV2MarketProvider",
     "CtpQuoteV2MarketProviderError",

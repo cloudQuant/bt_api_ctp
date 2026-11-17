@@ -738,3 +738,19 @@ This is only a local accepted-record window. It does not establish earlier
 acknowledged history, other ingress completeness, venue snapshot atomicity or
 Risk/trading authority. Synthetic native and source tests validate these local
 contracts; actual account integration remains unaccepted.
+
+
+`CtpQuoteV2MarketProvider.capture_recovery_member_snapshot()` provides an
+explicit owner-local snapshot of all active recovery members. Capture and
+`assert_recovery_member_snapshot_current()` check the original stream, native
+MD identity, source binding, handles and membership revision under the callback
+lock. Issuance keeps independent member, MD identity and public source-scope
+values, so modifying a returned object's nested fields cannot update the
+original record. The API emits no recovery watermark or network request.
+
+The snapshot includes only active handles, rejects empty or over-1024 member
+sets, and is process/thread bound and nonserializable. It describes a local
+instant; it does not establish TD/MD identity, historical ProductID, a future
+BEGIN, continuous validity or unobserved configuration changes that are later
+reversed. Final synthetic regression: 68 tests passed across three files.
+Actual service use and the downstream BEGIN mapping remain unverified.
