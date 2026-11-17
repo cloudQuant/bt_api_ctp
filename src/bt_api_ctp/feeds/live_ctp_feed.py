@@ -1760,7 +1760,12 @@ class CtpRequestData(Feed):
 
     def connect(self):
         with self._connect_lock:
-            self._ensure_read_only_connection_safe()
+            self._gateway_connect_failure_detail = "UNKNOWN"
+            try:
+                self._ensure_read_only_connection_safe()
+            except Exception:
+                self._gateway_connect_failure_detail = "FEED_PREFLIGHT_FAILED"
+                raise
             managed_binding = self._managed_runtime_binding
             if managed_binding is not None:
                 if self._execution_gate_capability is not None:
@@ -1824,14 +1829,26 @@ class CtpRequestData(Feed):
                 # Release(), so an observed generation's stop could never be
                 # proven. A no-Join generation releases once its leases drain;
                 # one that fails or stops before Init releases at once.
-                trader.start(block=False, join_observer=False)
+                try:
+                    trader.start(block=False, join_observer=False)
+                except Exception:
+                    self._gateway_connect_failure_detail = "NATIVE_START_FAILED"
+                    raise
             if getattr(trader, "is_read_only_ready", False):
                 self._connected = True
                 return
             wait_ready = getattr(trader, "wait_ready", None)
-            self._connected = bool(
-                callable(wait_ready) and wait_ready(timeout=self._connect_timeout)
-            )
+            try:
+                result = callable(wait_ready) and wait_ready(timeout=self._connect_timeout)
+                self._connected = bool(result)
+            except Exception:
+                self._gateway_connect_failure_detail = "NATIVE_WAIT_FAILED"
+                raise
+            if not self._connected:
+                if not callable(wait_ready):
+                    self._gateway_connect_failure_detail = "NATIVE_WAIT_FAILED"
+                elif result is False:
+                    self._gateway_connect_failure_detail = "READINESS_FALSE"
 
     def disconnect(self):
         with self._connect_lock:

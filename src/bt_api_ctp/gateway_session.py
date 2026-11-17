@@ -170,6 +170,7 @@ class CtpGatewaySession:
         self._connect_timeout = _timeout(connect_timeout_seconds, 300.0)
         self._stop_timeout = _timeout(stop_timeout_seconds, 30.0)
         self._state = "new"
+        self._gateway_connect_failure_detail = "UNKNOWN"
         self._service_generation: str | None = None
         self._market_dispatch_binding: _MarketDispatchBinding | None = None
         self._requested_timeout = self._connect_timeout
@@ -255,7 +256,11 @@ class CtpGatewaySession:
     def _checked_feed(self) -> CtpRequestDataFuture:
         self._check_owner()
         self._flow.verify_root()
-        feed = self._feed_factory()
+        try:
+            feed = self._feed_factory()
+        except Exception:
+            self._gateway_connect_failure_detail = "FEED_FACTORY_FAILED"
+            raise
         if (type(feed) is not CtpRequestDataFuture or feed._trader is not None
                 or feed._connected is not False or feed._managed_runtime_binding is not None
                 or feed._gateway_return_buffer is not None
@@ -271,6 +276,7 @@ class CtpGatewaySession:
                 or feed.ctp_environment != "simnow"
                 or feed._execution_bound_environment != "simnow"
                 or not feed._execution_bound_td_front or not feed._execution_bound_md_front):
+            self._gateway_connect_failure_detail = "FEED_PREFLIGHT_FAILED"
             raise CtpGatewaySessionError("FEED_BINDING_INVALID")
         feed._trusted_flow.verify_root()
         feed._install_gateway_return_buffer(self._return_buffer)
@@ -334,6 +340,7 @@ class CtpGatewaySession:
             self._assert_dispatch_coordinator_current(binding.coordinator)
         budget = _timeout(timeout, 300.0)
         self._requested_timeout = budget
+        self._gateway_connect_failure_detail = "UNKNOWN"
         self._state = "starting"
         started = time.monotonic()
         try:
@@ -341,6 +348,8 @@ class CtpGatewaySession:
             feed = self._reader.borrow_request_feed()
             trader = feed.trader_client
             if feed is not self._feed or type(trader) is not TraderClient or time.monotonic() - started > budget:
+                if feed is not self._feed or type(trader) is not TraderClient:
+                    self._gateway_connect_failure_detail = "SESSION_BINDING_CHANGED"
                 raise CtpGatewaySessionError("SESSION_NOT_CONNECTED")
             scope = feed.get_query_session_scope()
             self._trader = trader
@@ -350,6 +359,7 @@ class CtpGatewaySession:
             self._direct = direct
             direct.ensure_listening()
             if feed.trader_client is not trader:
+                self._gateway_connect_failure_detail = "SESSION_BINDING_CHANGED"
                 raise CtpGatewaySessionError("SESSION_CHANGED")
             with trader._query_state_lock:
                 spi = trader._spi
@@ -368,6 +378,7 @@ class CtpGatewaySession:
                         or scope.account_fingerprint != trader._account_fingerprint
                         or scope.broker_id != self._account_key.subaccount_id
                         or scope.investor_id != self._account_key.account_id):
+                    self._gateway_connect_failure_detail = "SESSION_BINDING_CHANGED"
                     raise CtpGatewaySessionError("SESSION_CHANGED")
                 self._connection_owner = _ConnectionOwner(
                     feed, trader, trader._query_state_lock, trader._api, spi, self._account_key, self._reader,
@@ -383,6 +394,19 @@ class CtpGatewaySession:
             self._service_generation = generation
             self._state = "connected"
         except BaseException:
+            try:
+                if (self._gateway_connect_failure_detail == "UNKNOWN"
+                        and type(self._reader) is CtpReadOnlyAccountSessionProvider):
+                    detail = getattr(self._reader, "_gateway_connect_failure_detail", "UNKNOWN")
+                    # _checked_feed alone distinguishes the actual factory
+                    # call from its subsequent checks.
+                    if type(detail) is str and detail in {
+                        "FEED_PREFLIGHT_FAILED", "NATIVE_START_FAILED", "NATIVE_WAIT_FAILED",
+                        "READINESS_FALSE", "SCOPE_UNTRUSTED",
+                    }:
+                        self._gateway_connect_failure_detail = detail
+            except BaseException:
+                pass
             self._state = "failed"
             raise
 

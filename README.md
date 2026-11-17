@@ -754,3 +754,10 @@ instant; it does not establish TD/MD identity, historical ProductID, a future
 BEGIN, continuous validity or unobserved configuration changes that are later
 reversed. Final synthetic regression: 68 tests passed across three files.
 Actual service use and the downstream BEGIN mapping remain unverified.
+
+Gateway connection failures retain their existing error codes and resource
+cleanup rules. The provider also records a finite local diagnostic category
+for observed feed construction, preflight, native start/wait, readiness, scope
+or session-binding failure. A false readiness observation is not a timeout
+proof; missing or ambiguous evidence stays UNKNOWN. No raw exception text,
+account identifiers or endpoints are included in this diagnostic projection.

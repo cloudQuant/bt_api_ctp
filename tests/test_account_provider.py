@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from bt_api_base.account_protocol import AccountKey
@@ -737,7 +738,11 @@ def test_production_feed_rejects_completed_preconnection_generation_zero_stop(
     api = ReleaseGateApi()
     monkeypatch.setattr(ctp_client_module, "_check_native_module", lambda: None)
     monkeypatch.setattr(ctp_client_module, "_flow_dir", lambda _prefix: "synthetic-flow")
-    monkeypatch.setattr(ctp_client_module, "_TraderSpi", lambda _client, _api: SimpleNamespace())
+    monkeypatch.setattr(
+        ctp_client_module,
+        "_TraderSpi",
+        lambda _client, _api: SimpleNamespace(_native_spi_source_id=uuid4().hex),
+    )
     monkeypatch.setattr(
         ctp_client_module,
         "CThostFtdcTraderApi",
@@ -838,7 +843,11 @@ def test_production_feed_preinit_start_failure_closes_with_released_startup_rece
     api = FrontFailureApi()
     monkeypatch.setattr(ctp_client_module, "_check_native_module", lambda: None)
     monkeypatch.setattr(ctp_client_module, "_flow_dir", lambda _prefix: "synthetic-flow")
-    monkeypatch.setattr(ctp_client_module, "_TraderSpi", lambda _client, _api: SimpleNamespace())
+    monkeypatch.setattr(
+        ctp_client_module,
+        "_TraderSpi",
+        lambda _client, _api: SimpleNamespace(_native_spi_source_id=uuid4().hex),
+    )
     monkeypatch.setattr(
         ctp_client_module,
         "CThostFtdcTraderApi",

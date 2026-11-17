@@ -137,6 +137,23 @@ def _is_exact_prestart_ctp_request_feed(feed: object) -> bool:
         return False
 
 
+def _native_feed_connect_detail(feed: object) -> str:
+    """Accept only fixed local categories from the exact provider feed."""
+    try:
+        module = sys.modules.get("bt_api_ctp.feeds.live_ctp_feed")
+        feed_type = vars(module).get("CtpRequestDataFuture") if module is not None else None
+        if feed_type is None or type(feed) is not feed_type:
+            return "UNKNOWN"
+        detail = object.__getattribute__(feed, "_gateway_connect_failure_detail")
+        if type(detail) is str and detail in {
+            "FEED_PREFLIGHT_FAILED", "NATIVE_START_FAILED", "NATIVE_WAIT_FAILED", "READINESS_FALSE"
+        }:
+            return detail
+    except BaseException:
+        pass
+    return "UNKNOWN"
+
+
 class CtpAccountSessionProviderError(RuntimeError):
     """Finite, value-free error from a read-only CTP account session."""
 
@@ -375,6 +392,7 @@ class CtpReadOnlyAccountSessionProvider:
         return MappingProxyType(dict(self._execution_counters))
 
     def connect(self, *, account_key: Any, generation: str, timeout: float) -> None:
+        self._gateway_connect_failure_detail = "UNKNOWN"
         if type(account_key) is not AccountKey:
             raise CtpAccountSessionProviderError("INVALID_ACCOUNT_KEY")
         if (
@@ -421,17 +439,21 @@ class CtpReadOnlyAccountSessionProvider:
         try:
             feed = self._request_feed_factory()
         except Exception:
+            self._gateway_connect_failure_detail = "FEED_FACTORY_FAILED"
             raise CtpAccountSessionProviderError("QUERY_FAILED") from None
         if feed is None or not callable(getattr(feed, "connect", None)):
+            self._gateway_connect_failure_detail = "FEED_PREFLIGHT_FAILED"
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
         try:
             nested_feed = getattr(feed, "_request_feed", None)
             existing_trader = getattr(feed, "_trader", None)
         except Exception:
+            self._gateway_connect_failure_detail = "FEED_PREFLIGHT_FAILED"
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION") from None
         if nested_feed is not None or existing_trader is not None:
             # We have not called into this feed, so any nested/existing native
             # owner belongs to its creator.  Never adopt or stop that object.
+            self._gateway_connect_failure_detail = "FEED_PREFLIGHT_FAILED"
             raise CtpAccountSessionProviderError("INVALID_PROVIDER_CONFIGURATION")
         # Keep the feed before calling into native code.  Gateway cleanup can
         # then retry against the exact TraderClient if startup is interrupted.
@@ -442,16 +464,27 @@ class CtpReadOnlyAccountSessionProvider:
             state_reader = getattr(feed, "get_session_state", None)
             scope_reader = getattr(feed, "get_query_session_scope", None)
             if trader is None or not callable(state_reader) or not callable(scope_reader):
+                self._gateway_connect_failure_detail = "SCOPE_UNTRUSTED"
                 raise CtpAccountSessionProviderError("SESSION_SCOPE_UNTRUSTED")
             state = state_reader()
+            state_is_mapping = isinstance(state, Mapping)
+            read_only_ready = state.get("read_only_ready") if state_is_mapping else None
             if (
-                not isinstance(state, Mapping)
-                or state.get("read_only_ready") is not True
+                not state_is_mapping
+                or read_only_ready is not True
                 or state.get("auto_settlement_confirm") is not False
             ):
+                detail = _native_feed_connect_detail(feed)
+                if detail == "UNKNOWN" and read_only_ready is False:
+                    detail = "READINESS_FALSE"
+                self._gateway_connect_failure_detail = detail
                 raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED")
             scope = scope_reader()
-            self._validate_scope(scope, trader, account_key)
+            try:
+                self._validate_scope(scope, trader, account_key)
+            except CtpAccountSessionProviderError:
+                self._gateway_connect_failure_detail = "SCOPE_UNTRUSTED"
+                raise
             self._trader = trader
             self._session_scope = scope
             self._native_owner_created = True
@@ -463,6 +496,11 @@ class CtpReadOnlyAccountSessionProvider:
             self._native_owner_created = self._startup_owner_state_after_failure(feed)
             raise
         except Exception:
+            try:
+                if self._gateway_connect_failure_detail == "UNKNOWN":
+                    self._gateway_connect_failure_detail = _native_feed_connect_detail(feed)
+            except BaseException:
+                pass
             self._capture_native_startup_attempt(feed)
             self._native_owner_created = self._startup_owner_state_after_failure(feed)
             raise CtpAccountSessionProviderError("SESSION_NOT_CONNECTED") from None
