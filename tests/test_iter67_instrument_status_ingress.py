@@ -294,6 +294,11 @@ class FakeTrader:
     def remove_instrument_status_listener(self, listener):
         self.status_listeners.remove(listener)
 
+    def instrument_status_listener_state(self, listener):
+        state = self.session_state or {}
+        return (state.get("connection_generation"), state.get("trading_day"),
+                any(item is listener for item in self.status_listeners), True, self)
+
 
 def _feed_with(trader):
     feed = CtpRequestDataFuture(

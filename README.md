@@ -761,3 +761,16 @@ for observed feed construction, preflight, native start/wait, readiness, scope
 or session-binding failure. A false readiness observation is not a timeout
 proof; missing or ambiguous evidence stays UNKNOWN. No raw exception text,
 account identifiers or endpoints are included in this diagnostic projection.
+
+Instrument-status capture and listener failures now invalidate the current
+local source and previously issued Gateway status snapshots. The binding includes
+the original trader, listener, connection generation, trading day and SPI object.
+Removing the listener invalidates its snapshots; a missing listener is not an
+available source. Valid duplicate or older records do not overwrite current
+observations, and delayed callbacks from an old generation or SPI cannot poison
+the new source. Failure diagnostics omit payload and exception text.
+
+This checks local registration and observed capture/projection failures only.
+It does not prove status-stream completeness, completed account recovery, or
+permission to resume a waiting order under D67-16. Managed-ingress recovery after
+poison still requires its original owner lifecycle.

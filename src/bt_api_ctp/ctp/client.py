@@ -5781,8 +5781,10 @@ class TraderClient:
         # objects and are called after the callback record (when one exists)
         # was built; the direct provider feeds its neutral ledger from here.
         self._instrument_status_listeners: list[Any] = []
+        self._instrument_status_provider_listeners: dict[int, tuple[Any, Any]] = {}
         self._instrument_status_source_sequence = 0
         self._instrument_status_source_id = uuid.uuid4().hex
+        self._instrument_status_unavailable_scope = None
         # A settlement confirmation deliberately invalidates every arm proof
         # issued before it.  It is a terminal account write, so a subsequent
         # order arm must be based on a fresh preflight rather than a cached
@@ -6945,10 +6947,12 @@ class TraderClient:
                 return
             source_tags = getattr(origin_spi, "_callback_source_tags", None)
             if type(source_tags) is not CtpTraderCallbackSourceTagsV2:
+                self._instrument_status_fail_locked(origin_spi, self._connection_generation, self._trading_day)
                 return
             self._instrument_status_source_sequence += 1
             sequence = self._instrument_status_source_sequence
             generation = self._connection_generation
+            trading_day = self._trading_day
             phase = (
                 CtpTraderCallbackPhase.ACTIVE
                 if self._connected and self._trading_day
@@ -6966,11 +6970,26 @@ class TraderClient:
                 callback_monotonic_ns=time.monotonic_ns(),
                 args=(field,),
             )
-        except Exception:
-            _logger.debug("ctp instrument status callback capture was unusable")
+        except BaseException:
+            with self._query_state_lock:
+                self._instrument_status_fail_locked(origin_spi, generation, trading_day)
+            try:
+                _logger.debug("ctp instrument status callback capture was unusable")
+            except BaseException:
+                pass
             return
-        if record.capture_complete:
-            self._emit_instrument_status_payload(record.to_payload())
+        try:
+            if record.capture_complete:
+                self._emit_instrument_status_payload(
+                    record.to_payload(), source_generation=generation, source_trading_day=trading_day,
+                    origin_spi=origin_spi
+                )
+            else:
+                with self._query_state_lock:
+                    self._instrument_status_fail_locked(origin_spi, generation, trading_day)
+        except BaseException:
+            with self._query_state_lock:
+                self._instrument_status_fail_locked(origin_spi, generation, trading_day)
 
     def _dispatch_callback_ingress(
         self,
@@ -7040,6 +7059,8 @@ class TraderClient:
 
             with self._query_state_lock:
                 if self._callback_ingress is not state or state.poisoned:
+                    if callback_name == "OnRtnInstrumentStatus":
+                        self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                     return _CALLBACK_INGRESS_SKIP_ORIGINAL
                 state = self._callback_ingress
                 if state is None:
@@ -7099,6 +7120,8 @@ class TraderClient:
                 if callback_without_ingress:
                     pass
                 elif type(source_tags) is not CtpTraderCallbackSourceTagsV2:
+                    if callback_name == "OnRtnInstrumentStatus":
+                        self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                     self._poison_callback_ingress_locked("source_identity_mismatch")
                     return _CALLBACK_INGRESS_SKIP_ORIGINAL
                 else:
@@ -7123,10 +7146,14 @@ class TraderClient:
                             kwargs=kwargs,
                         )
                     except BaseException:
+                        if callback_name == "OnRtnInstrumentStatus":
+                            self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                         self._poison_callback_ingress_locked("capture_incomplete")
                         return _CALLBACK_INGRESS_SKIP_ORIGINAL
 
                     if not record.capture_complete:
+                        if callback_name == "OnRtnInstrumentStatus":
+                            self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                         self._poison_callback_ingress_locked("capture_incomplete")
                         return _CALLBACK_INGRESS_SKIP_ORIGINAL
 
@@ -7235,6 +7262,8 @@ class TraderClient:
                             raise TypeError("callback ingress sink returned an untyped acknowledgement")
                         ack.validate_for(record)
                     except BaseException:
+                        if callback_name == "OnRtnInstrumentStatus":
+                            self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                         self._poison_callback_ingress_locked("append_commit_unknown")
                         return _CALLBACK_INGRESS_SKIP_ORIGINAL
 
@@ -7248,8 +7277,17 @@ class TraderClient:
                         # the same bounded payload to read-only observers so a
                         # direct provider ledger and a managed owner never see
                         # two different records for one native callback.
-                        self._emit_instrument_status_payload(record.to_payload())
+                        try:
+                            self._emit_instrument_status_payload(
+                                record.to_payload(), source_generation=record.connection_generation,
+                                source_trading_day=self._trading_day,
+                                origin_spi=spi,
+                            )
+                        except BaseException:
+                            self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                     if disposition is CtpTraderCallbackDisposition.POISON:
+                        if callback_name == "OnRtnInstrumentStatus":
+                            self._instrument_status_fail_locked(spi, self._connection_generation, self._trading_day)
                         reason = poison_reason or (
                             "disconnect"
                             if callback_name == "OnFrontDisconnected"
@@ -9663,19 +9701,82 @@ class TraderClient:
 
     def remove_instrument_status_listener(self, listener: Any) -> None:
         with self._query_state_lock:
+            private = self._instrument_status_provider_listeners.get(id(listener))
+            if private is not None and private[0] is listener:
+                try:
+                    private[1](self._connection_generation, self._trading_day, self._spi)
+                except BaseException:
+                    pass
             if listener in self._instrument_status_listeners:
                 self._instrument_status_listeners.remove(listener)
+            if private is not None and private[0] is listener:
+                del self._instrument_status_provider_listeners[id(listener)]
 
-    def _emit_instrument_status_payload(self, payload: Any) -> None:
+    def _add_instrument_status_provider_listener(self, listener: Any, failure: Any) -> None:
+        """Register the local direct provider's internal source-failure hook."""
+        if not callable(listener) or not callable(failure):
+            raise TypeError("instrument status listener must be callable")
+        with self._query_state_lock:
+            if not any(item is listener for item in self._instrument_status_listeners):
+                self._instrument_status_listeners.append(listener)
+            self._instrument_status_provider_listeners[id(listener)] = (listener, failure)
+
+    def _instrument_status_fail_locked(self, spi: Any, generation: int, trading_day: Any) -> None:
+        """Invalidate only the current native callback source's current scope."""
+        if (self._instrument_status_listeners and self._connected and self._trading_day
+                and type(generation) is int and generation == self._connection_generation
+                and type(trading_day) is str and trading_day == self._trading_day
+                and spi._native_api is self._api and spi._is_current_locked()):
+            self._instrument_status_unavailable_scope = (generation, self._trading_day, spi)
+            for listener, failure in tuple(self._instrument_status_provider_listeners.values()):
+                try:
+                    if any(item is listener for item in self._instrument_status_listeners):
+                        failure(generation, trading_day, spi)
+                except BaseException:
+                    pass
+
+    def instrument_status_listener_state(self, listener: Any) -> tuple[int, Any, bool, bool, Any]:
+        """Sample local listener registration and status capture health only."""
+        with self._query_state_lock:
+            generation, day = self._connection_generation, self._trading_day
+            spi = self._spi
+            failed = self._instrument_status_unavailable_scope
+            unavailable = (type(failed) is tuple and len(failed) == 3
+                           and failed[:2] == (generation, day) and failed[2] is spi)
+            return (generation, day, any(item is listener for item in self._instrument_status_listeners),
+                    not unavailable, spi)
+
+    def _emit_instrument_status_payload(
+        self, payload: Any, *, source_generation: int, source_trading_day: Any, origin_spi: Any
+    ) -> None:
         """Deliver one validated ingress payload to every current listener."""
 
         with self._query_state_lock:
-            listeners = list(self._instrument_status_listeners)
-        for listener in listeners:
+            if (source_generation != self._connection_generation
+                    or source_trading_day != self._trading_day
+                    or origin_spi._native_api is not self._api or not origin_spi._is_current_locked()):
+                return
+            listeners = [(listener, self._instrument_status_provider_listeners.get(id(listener)))
+                         for listener in self._instrument_status_listeners]
+        for listener, private in listeners:
             try:
-                listener(payload)
-            except Exception:
-                _logger.debug("ctp instrument status listener failed", exc_info=True)
+                if private is not None and private[0] is listener:
+                    result = listener(payload, _source_generation=source_generation,
+                                      _source_trading_day=source_trading_day, _source_spi=origin_spi)
+                    if result is False:
+                        with self._query_state_lock:
+                            self._instrument_status_fail_locked(
+                                origin_spi, source_generation, source_trading_day
+                            )
+                else:
+                    listener(payload)
+            except BaseException:
+                with self._query_state_lock:
+                    self._instrument_status_fail_locked(origin_spi, source_generation, source_trading_day)
+                try:
+                    _logger.debug("ctp instrument status listener failed")
+                except BaseException:
+                    pass
 
     def _execution_listener_payload_locked(
         self, snapshot: Mapping[str, Any] | None, **extra: Any

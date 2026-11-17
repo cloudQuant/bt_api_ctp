@@ -593,7 +593,7 @@ class CtpDirectWriteProvider:
         # It is fed only by the trader's native callback payloads and never
         # contacts a provider, reads a clock for ordering or sends an order.
         self._instrument_status_bridge: Any = None
-        self._instrument_status_scope: Optional[tuple[str, str]] = None
+        self._instrument_status_scope: Optional[tuple[str, str, object]] = None
         self._instrument_status_listening_trader: Any = None
         self._instrument_status_listener: Any = None
         # A leaf lock: the status tap runs on the native callback thread and
@@ -686,12 +686,36 @@ class CtpDirectWriteProvider:
         if not callable(add):
             return
 
-        def listener(payload: object) -> None:
-            self._on_instrument_status_payload(payload, trader=trader)
+        def listener(payload: object, *, _source_generation: object = None,
+                     _source_trading_day: object = None, _source_spi: object = None) -> object:
+            return self._on_instrument_status_payload(
+                payload, trader=trader, source_generation=_source_generation,
+                source_trading_day=_source_trading_day, source_spi=_source_spi,
+            )
+
+        def source_failed(generation: int, trading_day: object, spi: object) -> None:
+            # Native invokes this with its query lock held. Never reacquire it
+            # from here; session sampling elsewhere occurs outside this lock.
+            with self._instrument_status_lock:
+                scope = self._instrument_status_scope
+                if (not self._instrument_status_closed
+                        and self._instrument_status_listening_trader is trader
+                        and self._instrument_status_listener is listener
+                        and self._feed.trader_client is trader
+                        and scope is not None and scope[:2] == (str(generation), trading_day)
+                        and scope[2] is spi and self._instrument_status_bridge is not None):
+                    # Invalidate previously issued gateway snapshots even if
+                    # an exceptional bridge cannot record its stale state.
+                    self._instrument_status_version += 1
+                    self._instrument_status_bridge.mark_source_unavailable()
 
         # Native registration can take _query_state_lock. Never hold our lock
         # across it: managed callbacks may already hold the native lock.
-        add(listener)
+        add_provider = getattr(trader, "_add_instrument_status_provider_listener", None)
+        if callable(add_provider):
+            add_provider(listener, source_failed)
+        else:
+            add(listener)
         with self._instrument_status_lock:
             if self._instrument_status_closed or trader is not self._feed.trader_client:
                 old_trader, old_listener = trader, listener
@@ -714,8 +738,8 @@ class CtpDirectWriteProvider:
     # ------------------------------------------------------------------
     # iteration 67.06: read-only instrument-status observation (D67-08 B)
     # ------------------------------------------------------------------
-    def _instrument_status_session_facts(self) -> Optional[tuple[str, str]]:
-        """Return trusted (generation text, trading day) or ``None``.
+    def _instrument_status_session_facts(self) -> Optional[tuple[str, str, object]]:
+        """Return trusted generation, day and original SPI identity or ``None``.
 
         Both values come from the accepted login session facts the provider
         already uses for order identity.  They are never derived from the
@@ -727,10 +751,8 @@ class CtpDirectWriteProvider:
             trader = self._feed.trader_client
             if trader is None:
                 return None
-            if (
-                self._instrument_status_listening_trader is not None
-                and trader is not self._instrument_status_listening_trader
-            ):
+            listener = self._instrument_status_listener
+            if trader is not self._instrument_status_listening_trader or listener is None:
                 return None
             state = trader.get_session_state()
             if not isinstance(state, dict):
@@ -745,11 +767,25 @@ class CtpDirectWriteProvider:
                 or generation < 0
             ):
                 return None
-            return str(generation), day
+            health_reader = getattr(trader, "instrument_status_listener_state", None)
+            if not callable(health_reader):
+                return None
+            health = health_reader(listener)
+            if (type(health) is not tuple or len(health) != 5
+                    or type(health[0]) is not int or health[0] != generation
+                    or type(health[1]) is not str or health[1] != day
+                    or health[2] is not True or health[3] is not True or health[4] is None):
+                return None
+            return str(generation), day, health[4]
         except Exception:
             return None
 
-    def _instrument_status_switch_scope(self, facts: tuple[str, str]) -> Any:
+    @staticmethod
+    def _same_instrument_status_scope(first: object, second: object) -> bool:
+        return (type(first) is tuple and len(first) == 3 and type(second) is tuple and len(second) == 3
+                and first[:2] == second[:2] and first[2] is second[2])
+
+    def _instrument_status_switch_scope(self, facts: tuple[str, str, object]) -> Any:
         """Create or advance the ledger for the current trusted scope."""
 
         from bt_api_ctp.instrument_status_ingress import InstrumentStatusIngressBridge
@@ -764,15 +800,43 @@ class CtpDirectWriteProvider:
                 self._instrument_status_version += 1
                 return bridge
             bridge = self._instrument_status_bridge
-            if self._instrument_status_scope != facts:
+            previous = self._instrument_status_scope
+            if previous is not None and previous[2] is not facts[2]:
+                bridge.mark_source_unavailable()
+                bridge = InstrumentStatusIngressBridge(session_generation=facts[0], trading_day=facts[1])
+                self._instrument_status_bridge = bridge
+                self._instrument_status_scope = facts
+                self._instrument_status_version += 1
+            elif not self._same_instrument_status_scope(previous, facts):
                 bridge.begin_session_generation(facts[0], facts[1])
                 self._instrument_status_scope = facts
                 self._instrument_status_version += 1
             return bridge
 
-    def _on_instrument_status_payload(self, payload: object, *, trader: Any) -> None:
+    @staticmethod
+    def _instrument_status_old_payload(
+        payload: object, generation: str, *, check_generation: bool = True
+    ) -> bool:
+        """Ignore only a complete, independently validated old native record."""
+        from bt_api_ctp.ctp.callback_ingress import CtpTraderCallbackPhase
+        from bt_api_ctp.instrument_status_ingress import _record_from_snapshot, _snapshot_payload
+
+        try:
+            record = _record_from_snapshot(_snapshot_payload(payload))
+            return (record.callback_name == "OnRtnInstrumentStatus" and record.capture_complete
+                    and ((check_generation and str(record.connection_generation) != generation)
+                         or record.source_phase is not CtpTraderCallbackPhase.ACTIVE))
+        except Exception:
+            return False
+
+    def _on_instrument_status_payload(
+        self, payload: object, *, trader: Any, source_generation: object = None,
+        source_trading_day: object = None, source_spi: object = None,
+    ) -> object:
         """Consume one native ingress payload; never raise into the callback."""
 
+        version = None
+        facts = None
         try:
             for _ in range(3):
                 with self._instrument_status_lock:
@@ -795,12 +859,28 @@ class CtpDirectWriteProvider:
                         continue
                     bridge = self._instrument_status_bridge
                     if facts is None:
+                        if (source_generation is not None and self._instrument_status_scope is not None
+                                and ((str(source_generation), source_trading_day)
+                                     != self._instrument_status_scope[:2]
+                                     or source_spi is not self._instrument_status_scope[2])):
+                            return
                         if bridge is not None:
                             bridge.mark_source_unavailable()
                             self._instrument_status_version += 1
                         return
+                    if source_generation is not None and (
+                        type(source_generation) is not int
+                        or (str(source_generation), source_trading_day) != facts[:2]
+                        or source_spi is not facts[2]
+                    ):
+                        return
                     bridge = self._instrument_status_switch_scope(facts)
-                    bridge.observe_payload(payload)
+                    version = self._instrument_status_version
+                    result = bridge.observe_payload(payload)
+                    if (not result.applied and result.action not in {"duplicate", "out_of_order"}
+                            and not self._instrument_status_old_payload(
+                                payload, facts[0], check_generation=source_generation is None)):
+                        bridge.mark_source_unavailable()
                     self._instrument_status_version += 1
                     version = self._instrument_status_version
                 current = self._instrument_status_session_facts()
@@ -813,7 +893,7 @@ class CtpDirectWriteProvider:
                     if current is None:
                         bridge.mark_source_unavailable()
                         self._instrument_status_version += 1
-                    elif current != facts:
+                    elif not self._same_instrument_status_scope(current, facts):
                         self._instrument_status_switch_scope(current)
                 return
             with self._instrument_status_lock:
@@ -822,20 +902,49 @@ class CtpDirectWriteProvider:
                     and trader is self._feed.trader_client
                     and not self._instrument_status_closed
                     and self._instrument_status_bridge is not None
+                    and self._instrument_status_scope is not None
+                    and (source_generation is None or (
+                        type(source_generation) is int
+                        and (str(source_generation), source_trading_day) == self._instrument_status_scope[:2]
+                        and source_spi is self._instrument_status_scope[2]))
                 ):
                     # Revalidate ordering against the current ledger. Only a
                     # newer candidate can have been lost during contention.
                     # Unavailable remains sticky for this scope; a new session
                     # generation/day or trader binding is needed to recover.
                     bridge = self._instrument_status_bridge
-                    if bridge.observe_payload(payload).applied:
+                    facts = self._instrument_status_scope
+                    version = self._instrument_status_version
+                    result = bridge.observe_payload(payload)
+                    if (result.applied or (result.action not in {"duplicate", "out_of_order"}
+                            and not self._instrument_status_old_payload(
+                                payload, self._instrument_status_scope[0],
+                                check_generation=source_generation is None))):
                         bridge.mark_source_unavailable()
                         self._instrument_status_version += 1
-        except Exception:
+        except BaseException:
             # A callback thread must never surface provider text or an
-            # exception.  The ledger keeps its previous scope; an unreadable
-            # session is handled above as an explicit source-unavailable.
-            _logger.debug("ctp direct instrument-status callback was not usable")
+            # exception. Only the still-matching version and scope may be
+            # invalidated: a newer callback may already have advanced them.
+            try:
+                with self._instrument_status_lock:
+                    scope = self._instrument_status_scope
+                    if (source_generation is None and scope is not None
+                            and version == self._instrument_status_version
+                            and (facts is None or self._same_instrument_status_scope(scope, facts))
+                            and trader is self._instrument_status_listening_trader
+                            and trader is self._feed.trader_client
+                            and not self._instrument_status_closed
+                            and self._instrument_status_bridge is not None):
+                        self._instrument_status_bridge.mark_source_unavailable()
+                        self._instrument_status_version += 1
+            except BaseException:
+                pass
+            try:
+                _logger.debug("ctp direct instrument-status callback was not usable")
+            except BaseException:
+                pass
+            return False
 
     def instrument_status_view(self, venue: object, native_symbol: object) -> Any:
         """Return the provider ledger's view for one identity.
@@ -873,7 +982,7 @@ class CtpDirectWriteProvider:
                     bridge.mark_source_unavailable()
                     self._instrument_status_version += 1
                     return bridge.view(venue, native_symbol)
-                if current != facts:
+                if not self._same_instrument_status_scope(current, facts):
                     bridge = self._instrument_status_switch_scope(current)
                     return bridge.view(venue, native_symbol)
                 return view

@@ -198,7 +198,7 @@ def test_corrupted_digest_cannot_overwrite_current_halt():
     wrong["digest"] = "0" * 64
     trader.status_listeners[0](wrong)
     view = provider.instrument_status_view(VENUE, SYMBOL)
-    assert (view.usable, view.effective_status_category) == (True, STATUS_CLOSED)
+    assert (view.usable, view.reason_code) == (False, "ctp_instrument_status_source_unavailable")
 
 
 def test_registration_generation_can_predate_current_connection():
@@ -231,7 +231,7 @@ def test_invalid_source_tag_is_refused_even_with_recomputed_digest(field, value)
     _resign(wrong)
     trader.status_listeners[0](wrong)
     view = provider.instrument_status_view(VENUE, SYMBOL)
-    assert (view.usable, view.effective_status_category) == (True, STATUS_CLOSED)
+    assert (view.usable, view.reason_code) == (False, "ctp_instrument_status_source_unavailable")
 
 
 @pytest.mark.parametrize(
@@ -275,7 +275,7 @@ def test_malformed_snapshot_is_refused_even_when_digest_is_recomputed(mutation):
     _resign(wrong)
     trader.status_listeners[0](wrong)
     view = provider.instrument_status_view(VENUE, SYMBOL)
-    assert (view.usable, view.effective_status_category) == (True, STATUS_CLOSED)
+    assert (view.usable, view.reason_code) == (False, "ctp_instrument_status_source_unavailable")
 
 
 def test_external_payload_mutation_cannot_change_the_detached_projection(monkeypatch):
@@ -323,7 +323,7 @@ def test_missing_source_tag_cannot_overwrite_current_halt(field):
     wrong["digest"] = ingress._digest_payload(unsigned)
     trader.status_listeners[0](wrong)
     view = provider.instrument_status_view(VENUE, SYMBOL)
-    assert (view.usable, view.effective_status_category) == (True, STATUS_CLOSED)
+    assert (view.usable, view.reason_code) == (False, "ctp_instrument_status_source_unavailable")
 
 
 def test_delayed_prior_trader_cannot_override_halt_at_same_generation():
