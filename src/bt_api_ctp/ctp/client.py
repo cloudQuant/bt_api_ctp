@@ -2306,6 +2306,7 @@ class _QueryAccumulator:
     callback_dispatch_lock: Any = dataclass_field(
         default_factory=threading.RLock, repr=False
     )
+    gateway_order_cut: Any = dataclass_field(default=None, repr=False)
 
     def record_completion_origin(self, origin: str) -> None:
         if type(origin) is not str or origin not in QUERY_COMPLETION_ORIGINS:
@@ -2434,6 +2435,7 @@ class _NonblockingQuery:
     record_limit: int | None
     answer_by: float = 0.0
     accumulator: _QueryAccumulator | None = None
+    gateway_order_cut: Any = None
 
 
 # ===========================================================================
@@ -11395,6 +11397,8 @@ class TraderClient:
                     except (TypeError, ValueError):
                         accumulator.source_records_sha256 = None
                     accumulator.sealed = True
+                    if accumulator.gateway_order_cut is not None:
+                        accumulator.gateway_order_cut.invalid = True
                     accumulator.event.set()
                     return
                 snapshot = _restrict_query_record(request_type, _snapshot_query_record(record))
@@ -11438,6 +11442,14 @@ class TraderClient:
                         # callers, but cannot be promoted by the strict
                         # evidence consumer without a bound digest.
                         accumulator.source_records_sha256 = None
+                if accumulator.gateway_order_cut is not None:
+                    try:
+                        if terminal_origin == "success":
+                            accumulator.gateway_order_cut.end_locked(self, accumulator)
+                        else:
+                            accumulator.gateway_order_cut.invalid = True
+                    except Exception:
+                        accumulator.gateway_order_cut.invalid = True
                 accumulator.event.set()
 
     def _handle_query_error(self, rsp_info: Any, request_id: int, is_last: bool) -> None:
@@ -12445,7 +12457,10 @@ class TraderClient:
             accumulator.completed_monotonic = time.monotonic()
         accumulator.sealed = True
         accumulator.event.set()
-        return accumulator.result()
+        result = accumulator.result()
+        if state.gateway_order_cut is not None and not result.complete:
+            state.gateway_order_cut.invalid = True
+        return result
 
     def begin_query(
         self, kind: str, *, timeout: float, max_records: int | None = None
@@ -12546,6 +12561,17 @@ class TraderClient:
                     )
                     self._last_query_submitted_at = time.monotonic()
                     state.accumulator = accumulator
+                    if state.gateway_order_cut is not None:
+                        accumulator.gateway_order_cut = state.gateway_order_cut
+                        try:
+                            state.gateway_order_cut.begin_locked(self, accumulator)
+                        except Exception:
+                            state.gateway_order_cut.invalid = True
+                        if state.gateway_order_cut.invalid:
+                            self._release_query_slot_locked(accumulator.request_id, state.kind)
+                            return self._nonblocking_finish_locked(
+                                handle, state, origin="local_preflight", error_code=-1,
+                                message="gateway_order_cut_unavailable")
                 finally:
                     self._query_state_lock.release()
             finally:

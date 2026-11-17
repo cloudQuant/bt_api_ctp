@@ -720,3 +720,21 @@ does not establish a UTC timestamp, clock freshness or actual per-fill fees.
 Order, cancel-error and placement-error fact versions keep their prior contracts.
 The changed projection requires the matching Base/Gateway/SDK protocol versions;
 local synthetic validation does not establish real-account behavior.
+
+
+### Local order query and return window
+
+`CtpGatewaySession.begin_order_query_cut`, `poll_order_query_cut`,
+`verify_order_query_cut` and `close_order_query_cut` provide an explicit
+owner-bound query over the existing default futures account filters. The
+original rate-limited query pins the return buffer sequence before native
+submission and seals its successful terminal packet with the exact query-row
+digest and ending sequence. A separate bounded pin retains accepted records
+while normal offer/ACK processing continues. A gap, overflow, source change,
+invalid terminal or expired result prevents verification; uncertain cancellation
+retains the original pin and prevents confirmed session closure.
+
+This is only a local accepted-record window. It does not establish earlier
+acknowledged history, other ingress completeness, venue snapshot atomicity or
+Risk/trading authority. Synthetic native and source tests validate these local
+contracts; actual account integration remains unaccepted.

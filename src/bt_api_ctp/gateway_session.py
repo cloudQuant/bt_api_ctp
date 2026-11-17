@@ -178,6 +178,7 @@ class CtpGatewaySession:
         self._account_binding: str | None = None
         self._direct: CtpDirectWriteProvider | None = None
         self._connection_owner: _ConnectionOwner | None = None
+        self._order_query_cut = None
         self._reader = CtpReadOnlyAccountSessionProvider(
             self._checked_feed, stop_timeout_seconds=self._stop_timeout,
             account_observation_issuer=observation_issuer,
@@ -412,9 +413,17 @@ class CtpGatewaySession:
         owner = self._connection_owner
         if not self._connection_owner_matches(owner):
             raise CtpGatewaySessionError("SESSION_CHANGED")
-        trader, feed, spi = owner.trader, owner.feed, owner.spi
-        if not trader._query_state_lock.acquire(blocking=False):
+        if not owner.query_lock.acquire(blocking=False):
             return "busy"
+        try:
+            return self._connection_status_locked(owner)
+        finally:
+            owner.query_lock.release()
+
+    def _connection_status_locked(self, owner: _ConnectionOwner) -> str:
+        """Apply the owner binding checks with its original query lock held."""
+
+        trader, feed, spi = owner.trader, owner.feed, owner.spi
         try:
             source_tags = trader._query_source_tags_locked()
             if (not self._connection_owner_matches(owner)
@@ -471,8 +480,6 @@ class CtpGatewaySession:
             raise
         except Exception:
             raise CtpGatewaySessionError("SESSION_CHANGED") from None
-        finally:
-            trader._query_state_lock.release()
 
     def _calendar_session_current_locked(self, owner: _ConnectionOwner, binding: object) -> bool:
         """Validate under the owner's already-held, reentrant query-state lock."""
@@ -774,6 +781,166 @@ class CtpGatewaySession:
             raise CtpGatewaySessionError("SESSION_CHANGED")
         return self._reader.read_account(generation=generation, timeout=_timeout(timeout, 300.0))
 
+    def begin_order_query_cut(self, *, timeout: float):
+        """Begin one optional whole-account order query with a local return window.
+
+        The window covers only records accepted into this session's return buffer
+        after query reservation and through its terminal callback. It does not
+        cover earlier acknowledged history or any other ingress, and grants no
+        Risk or trading authority.
+        """
+        from bt_api_ctp.gateway_order_query_cut import CtpGatewayOrderQueryCutHandle, _OrderCutState
+
+        self._check_owner()
+        owner = self._connection_owner
+        if self._order_query_cut is not None or not self._connection_owner_matches(owner):
+            raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE")
+        if not owner.query_lock.acquire(blocking=False):
+            raise CtpGatewaySessionError("ORDER_CUT_BUSY")
+        state = None
+        try:
+            if self.connection_status() != "ready":
+                raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE")
+            handle = CtpGatewayOrderQueryCutHandle()
+            state = _OrderCutState(self, owner, handle, None, None, self._return_buffer)
+            self._order_query_cut = state
+            query_handle = owner.trader.begin_query("orders", timeout=_timeout(timeout, 300.0))
+            state.query_handle = query_handle
+            query_state = owner.trader._nonblocking_queries[query_handle]
+            state.query_state = query_state
+            query_state.gateway_order_cut = state
+            return handle
+        except Exception:
+            if state is not None:
+                state.invalid = True
+                if state.query_handle is None:
+                    self._order_query_cut = None
+                else:
+                    try:
+                        owner.trader.cancel_query(state.query_handle)
+                    except Exception:
+                        pass  # retain custody; session.close must retry cancellation
+                    else:
+                        self._order_query_cut = None
+            raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE") from None
+        finally:
+            owner.query_lock.release()
+
+    def poll_order_query_cut(self, handle: object):
+        """Poll the original rate-limited query; None means not complete yet."""
+        from bt_api_ctp.query import QueryResult
+
+        self._check_owner()
+        state = self._order_query_cut
+        if state is None or state.handle is not handle or state.cancelled:
+            raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE")
+        if state.result is not None:
+            return state.result
+        if not self._connection_owner_matches(state.owner):
+            state.invalid = True
+            raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE")
+        try:
+            result = state.owner.trader.poll_query(state.query_handle)
+        except Exception:
+            state.invalid = True
+            raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE") from None
+        if result is not None:
+            if type(result) is not QueryResult:
+                state.invalid = True
+                raise CtpGatewaySessionError("ORDER_CUT_UNAVAILABLE")
+            state.result = result
+            if not result.complete or not state.ended:
+                state.invalid = True
+        return result
+
+    def verify_order_query_cut(self, handle: object, result: object):
+        """Verify this exact result and pinned local window, or return None."""
+        from bt_api_ctp.gateway_order_query_cut import CtpGatewayOrderQueryCutView
+
+        self._check_owner()
+        state = self._order_query_cut
+        if (state is None or state.handle is not handle or state.invalid or state.cancelled
+                or not state.ended or state.result is not result or state.window is None):
+            return None
+        owner = state.owner
+        if not self._connection_owner_matches(owner) or not owner.query_lock.acquire(blocking=False):
+            return None
+        try:
+            if (not state._same_owner_locked(owner.trader)
+                    or not self._calendar_session_current_locked(owner, state.binding)):
+                return None
+            scope = owner.trader.get_query_session_scope()
+            self._reader._validate_query_result(
+                result, query_name="orders", trader=owner.trader,
+                scope=scope, now_monotonic=time.monotonic(),
+            )
+            self._reader._validate_account_query_scope(result, "orders", scope)
+            source = result.query_source
+            if (result.request_id != state.request_id
+                    or result.completion_origin != "success"
+                    or not (result.submit_code is None or (
+                        type(result.submit_code) is int and result.submit_code == 0))
+                    or source.records_sha256 != state.records_digest
+                    or source.source_tags != state.binding._source_tags):
+                return None
+            pinned = state.buffer._read_order_cut_window(state.window)
+            if pinned is None:
+                return None
+            begin, end, records = pinned
+            if any(
+                record.source_ref != state.binding.source_ref
+                or record.source_tags != state.binding._source_tags
+                or record.connection_generation != state.binding.connection_generation
+                or record.reception_trading_day != state.binding.trading_day
+                or record.login_request_id != state.query_state.login.request_id
+                for record in records
+            ):
+                return None
+            if not self._calendar_session_current_locked(owner, state.binding):
+                return None
+            return CtpGatewayOrderQueryCutView(begin, end, records)
+        except Exception:
+            return None
+        finally:
+            owner.query_lock.release()
+
+    def close_order_query_cut(self, handle: object) -> bool:
+        """Retire only after local cancellation/terminal and pin release are confirmed."""
+        self._check_owner()
+        state = self._order_query_cut
+        if state is None or state.handle is not handle:
+            return False
+        state.invalid = True
+        trader = state.owner.trader
+        if not state.owner.query_lock.acquire(blocking=False):
+            return False
+        try:
+            if state.result is None and not state.cancelled:
+                try:
+                    trader.cancel_query(state.query_handle)
+                    state.cancelled = True
+                except Exception:
+                    return False
+            slot = trader._query_native_inflight
+            if (state.accumulator is not None and (
+                    not state.accumulator.sealed
+                    or (slot is not None and slot[0] == state.request_id))):
+                return False
+            if state.window is not None and not state.buffer._close_order_cut_window(state.window):
+                return False
+            if state.accumulator is not None and state.accumulator.gateway_order_cut is state:
+                state.accumulator.gateway_order_cut = None
+            if state.query_state is not None and state.query_state.gateway_order_cut is state:
+                state.query_state.gateway_order_cut = None
+            state.window = None
+            state.result = None
+            self._order_query_cut = None
+            return True
+        except Exception:
+            return False
+        finally:
+            state.owner.query_lock.release()
+
     def begin_read_account(self, *, generation: str, timeout: float) -> Any:
         """Start ``read_account`` as request and response; no native I/O (I63-E130).
 
@@ -834,6 +1001,9 @@ class CtpGatewaySession:
     def close(self) -> bool:
         """Retain ownership of every unconfirmed stop for owner-thread retry."""
         self._check_owner()
+        if self._order_query_cut is not None:
+            if not self.close_order_query_cut(self._order_query_cut.handle):
+                return False
         if self._state == "closed":
             return True
         self._state = "closing"

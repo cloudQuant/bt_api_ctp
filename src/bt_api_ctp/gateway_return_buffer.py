@@ -71,6 +71,17 @@ class CtpGatewayReturnStatus:
     gap_reason: str | None
 
 
+@dataclass(slots=True, eq=False)
+class _OrderCutWindow:
+    """One bounded, explicitly held copy of a local return sequence window."""
+
+    begin_sequence: int
+    records: list[tuple[CtpGatewayReturnRecord, int]] = field(default_factory=list, repr=False)
+    byte_count: int = 0
+    end_sequence: int | None = None
+    invalid: bool = False
+
+
 def _text_bytes(value: object, limit: int, *, nonempty: bool = False) -> int:
     if type(value) is not str or len(value) > limit or (nonempty and not value):
         raise ValueError
@@ -182,6 +193,7 @@ class CtpGatewayReturnBuffer:
         self._ticket_records: tuple[CtpGatewayReturnRecord, ...] | None = None
         self._ticket_record_ids: frozenset[int] = frozenset()
         self._ticket_count = 0
+        self._order_cut_window: _OrderCutWindow | None = None
 
     def _check_owner(self) -> None:
         if os.getpid() != self._pid or threading.current_thread() is not self._owner_thread:
@@ -190,6 +202,54 @@ class CtpGatewayReturnBuffer:
     def _set_gap_locked(self, code: str) -> None:
         if self._gap_reason is None:
             self._gap_reason = code
+        if self._order_cut_window is not None:
+            self._order_cut_window.invalid = True
+
+    def _begin_order_cut_window(self) -> _OrderCutWindow:
+        """Pin records after the present sequence, without consuming prior rows."""
+        self._check_owner()
+        with self._lock:
+            if (self._order_cut_window is not None or self._gap_reason is not None
+                    or type(self._last_sequence) is not int
+                    or not 0 <= self._last_sequence <= _MAX_INT):
+                raise CtpGatewayReturnBufferError("ORDER_CUT_UNAVAILABLE")
+            window = _OrderCutWindow(self._last_sequence)
+            self._order_cut_window = window
+            return window
+
+    def _finish_order_cut_window(self, window: _OrderCutWindow) -> bool:
+        """Seal the callback boundary; callable from the native callback thread."""
+        if os.getpid() != self._pid:
+            return False
+        with self._lock:
+            if (self._order_cut_window is not window or window.invalid
+                    or window.end_sequence is not None or self._gap_reason is not None):
+                return False
+            window.end_sequence = self._last_sequence
+            return True
+
+    def _read_order_cut_window(self, window: _OrderCutWindow):
+        self._check_owner()
+        with self._lock:
+            if (self._order_cut_window is not window or window.invalid
+                    or window.end_sequence is None or self._gap_reason is not None):
+                return None
+            records = tuple(record for record, _ in window.records)
+            if (len(records) != window.end_sequence - window.begin_sequence
+                    or any(record.sequence != window.begin_sequence + index + 1
+                           for index, record in enumerate(records))):
+                window.invalid = True
+                return None
+            return window.begin_sequence, window.end_sequence, records
+
+    def _close_order_cut_window(self, window: _OrderCutWindow) -> bool:
+        self._check_owner()
+        with self._lock:
+            if self._order_cut_window is not window:
+                return False
+            window.invalid = True
+            self._order_cut_window = None
+            return True
 
     def _mark_gap(self, code: str) -> None:
         if type(code) is not str or code not in _GAP_CODES:
@@ -261,6 +321,14 @@ class CtpGatewayReturnBuffer:
             self._rows.append((record, size))
             self._byte_count += size
             self._last_sequence = sequence
+            window = self._order_cut_window
+            if window is not None and window.end_sequence is None and not window.invalid:
+                if (sequence > _MAX_INT or len(window.records) >= self._capacity
+                        or size > self._max_bytes - window.byte_count):
+                    window.invalid = True
+                else:
+                    window.records.append((record, size))
+                    window.byte_count += size
             return True
 
     def offer(self, *, limit: int = 256) -> CtpGatewayReturnBatch:
