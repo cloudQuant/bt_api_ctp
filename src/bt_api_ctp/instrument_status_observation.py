@@ -64,12 +64,17 @@ __all__ = (
     "InstrumentStatusApplyResult",
     "InstrumentStatusGenerationResult",
     "InstrumentStatusLedger",
+    "InstrumentStatusListenerHealth",
     "InstrumentStatusObservation",
+    "InstrumentStatusPriorPause",
+    "InstrumentStatusRecoveryState",
     "InstrumentStatusSessionFacts",
     "InstrumentStatusView",
     "NATIVE_ENTER_REASONS",
     "NATIVE_STATUS_CATEGORIES",
+    "NON_TRADABLE_STATUS_CATEGORIES",
     "OBSERVATION_SCHEMA",
+    "PAUSED_STATUS_CATEGORIES",
     "RECEIVE_CLOCK_MONOTONIC_NS",
     "RECEIVE_CLOCK_UTC_ISO8601",
     "STATE_CURRENT",
@@ -112,6 +117,17 @@ NATIVE_STATUS_CATEGORIES = MappingProxyType(
         "7": STATUS_TRANSACTION_PROCESSING,
     }
 )
+PAUSED_STATUS_CATEGORIES = frozenset(
+    {
+        STATUS_BEFORE_TRADING,
+        STATUS_NO_TRADING,
+        STATUS_AUCTION_ORDERING,
+        STATUS_AUCTION_BALANCE,
+        STATUS_AUCTION_MATCH,
+        STATUS_TRANSACTION_PROCESSING,
+    }
+)
+NON_TRADABLE_STATUS_CATEGORIES = PAUSED_STATUS_CATEGORIES | frozenset({STATUS_CLOSED})
 
 ENTER_REASON_AUTOMATIC = "automatic"
 ENTER_REASON_MANUAL = "manual"
@@ -299,6 +315,59 @@ class InstrumentStatusGenerationResult:
 
 
 @dataclass(frozen=True)
+class InstrumentStatusPriorPause:
+    """Tracked non-tradable status from an earlier observation (D67-16)."""
+
+    venue: str
+    native_symbol: str
+    status_category: str
+    native_status_code: str
+    enter_reason: str
+    session_generation: str
+    trading_day: str
+    source_sequence: int
+    invalidated: bool
+    invalidation_reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InstrumentStatusListenerHealth:
+    """Same-generation status listener binding and health sample."""
+
+    healthy: bool
+    trader_bound: bool
+    listener_registered: bool
+    session_generation: Optional[str] = None
+    trading_day: Optional[str] = None
+    trader_id: Optional[str] = None
+    listener_id: Optional[str] = None
+    spi_id: Optional[str] = None
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InstrumentStatusRecoveryState:
+    """Provider-local D67-16 recovery and listener-health sample."""
+
+    venue: Optional[str]
+    native_symbol: Optional[str]
+    session_generation: Optional[str]
+    trading_day: Optional[str]
+    prior_pause_observed: bool
+    prior_pause_invalidated: bool
+    prior_pause_generation: Optional[str]
+    prior_pause_trading_day: Optional[str]
+    prior_pause_status: Optional[str]
+    return_recovery_completed: bool
+    listener_healthy: bool
+    trader_id: Optional[str]
+    listener_id: Optional[str]
+    spi_id: Optional[str]
+    recovery_fence: Optional[str]
+    reason_code: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class InstrumentStatusView:
     """Effective scope answer for one instrument.
 
@@ -318,6 +387,8 @@ class InstrumentStatusView:
     observation: Optional[InstrumentStatusObservation]
     session_generation: Optional[str]
     trading_day: Optional[str]
+    prior_pause: Optional[InstrumentStatusPriorPause] = None
+    recovery_state: Optional[InstrumentStatusRecoveryState] = None
 
 
 @dataclass(frozen=True)
@@ -628,7 +699,23 @@ class InstrumentStatusLedger:
         self._trading_day = trading_day
         self._source_available = True
         self._entries: dict[tuple[str, str], _Entry] = {}
+        self._prior_pauses: dict[tuple[str, str], InstrumentStatusPriorPause] = {}
         self._last_sequence: dict[tuple[str, str], int] = {}
+
+    def _invalidate_prior_pauses_locked(self, reason: str) -> None:
+        for key, prior in list(self._prior_pauses.items()):
+            self._prior_pauses[key] = InstrumentStatusPriorPause(
+                venue=prior.venue,
+                native_symbol=prior.native_symbol,
+                status_category=prior.status_category,
+                native_status_code=prior.native_status_code,
+                enter_reason=prior.enter_reason,
+                session_generation=prior.session_generation,
+                trading_day=prior.trading_day,
+                source_sequence=prior.source_sequence,
+                invalidated=True,
+                invalidation_reason=reason,
+            )
 
     def begin_session_generation(
         self, session_generation: object, trading_day: object
@@ -660,6 +747,7 @@ class InstrumentStatusLedger:
             )
             for key, entry in self._entries.items():
                 self._entries[key] = _Entry(entry.observation, STATE_STALE, reason)
+            self._invalidate_prior_pauses_locked(reason)
             self._session_generation = session_generation
             self._trading_day = trading_day
             self._source_available = True
@@ -713,6 +801,21 @@ class InstrumentStatusLedger:
                 )
             self._entries[key] = _Entry(observation, STATE_CURRENT, None)
             self._last_sequence[key] = observation.source_sequence
+            if observation.status_category == STATUS_CONTINUOUS:
+                self._prior_pauses.pop(key, None)
+            elif observation.status_category in NON_TRADABLE_STATUS_CATEGORIES:
+                self._prior_pauses[key] = InstrumentStatusPriorPause(
+                    venue=observation.venue,
+                    native_symbol=observation.native_symbol,
+                    status_category=observation.status_category,
+                    native_status_code=observation.native_status_code,
+                    enter_reason=observation.enter_reason,
+                    session_generation=observation.session_generation,
+                    trading_day=observation.trading_day,
+                    source_sequence=observation.source_sequence,
+                    invalidated=False,
+                    invalidation_reason=None,
+                )
             return InstrumentStatusApplyResult(True, ACTION_APPLIED)
 
     def mark_source_unavailable(self) -> None:
@@ -722,6 +825,125 @@ class InstrumentStatusLedger:
             self._source_available = False
             for key, entry in self._entries.items():
                 self._entries[key] = _Entry(entry.observation, STATE_STALE, CODE_SOURCE_UNAVAILABLE)
+            self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
+
+    def prior_pause(
+        self, venue: object, native_symbol: object
+    ) -> Optional[InstrumentStatusPriorPause]:
+        """Return any un-superseded prior trusted pause for one instrument."""
+
+        if not _identifier(venue, _MAX_EXCHANGE_ID_LENGTH) or not _identifier(
+            native_symbol, _MAX_INSTRUMENT_ID_LENGTH
+        ):
+            return None
+        with self._lock:
+            return self._prior_pauses.get((venue, native_symbol))
+
+    def export_prior_pauses(self) -> tuple[InstrumentStatusPriorPause, ...]:
+        """Return all un-superseded prior trusted pauses in this ledger."""
+
+        with self._lock:
+            return tuple(self._prior_pauses.values())
+
+    def seed_prior_pauses(
+        self,
+        prior_pauses: object,
+        *,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Seed invalidated prior pauses across bridge/SPI replacement."""
+
+        if not prior_pauses:
+            return
+        with self._lock:
+            for prior in prior_pauses:
+                if type(prior) is not InstrumentStatusPriorPause:
+                    continue
+                key = (prior.venue, prior.native_symbol)
+                existing = self._entries.get(key)
+                if (
+                    existing is not None
+                    and existing.state == STATE_CURRENT
+                    and existing.observation.status_category == STATUS_CONTINUOUS
+                ):
+                    continue
+                if key in self._prior_pauses:
+                    continue
+                inv_reason = reason
+                if inv_reason is None:
+                    if prior.session_generation != self._session_generation:
+                        inv_reason = CODE_STALE_GENERATION
+                    elif prior.trading_day != self._trading_day:
+                        inv_reason = CODE_STALE_TRADING_DAY
+                    else:
+                        inv_reason = prior.invalidation_reason or CODE_SOURCE_UNAVAILABLE
+                self._prior_pauses[key] = InstrumentStatusPriorPause(
+                    venue=prior.venue,
+                    native_symbol=prior.native_symbol,
+                    status_category=prior.status_category,
+                    native_status_code=prior.native_status_code,
+                    enter_reason=prior.enter_reason,
+                    session_generation=prior.session_generation,
+                    trading_day=prior.trading_day,
+                    source_sequence=prior.source_sequence,
+                    invalidated=True,
+                    invalidation_reason=inv_reason,
+                )
+
+    def carry_forward_from(
+        self,
+        previous: object,
+        *,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Carry forward stale observations and prior pauses from an older ledger."""
+
+        if type(previous) is not InstrumentStatusLedger or previous is self:
+            return
+        with previous._lock:
+            prev_gen = previous._session_generation
+            prev_day = previous._trading_day
+            prev_priors = tuple(previous._prior_pauses.values())
+            prev_entries = tuple(previous._entries.items())
+        with self._lock:
+            inv_reason = reason
+            if inv_reason is None:
+                if prev_gen != self._session_generation:
+                    inv_reason = CODE_STALE_GENERATION
+                elif prev_day != self._trading_day:
+                    inv_reason = CODE_STALE_TRADING_DAY
+                else:
+                    inv_reason = CODE_SOURCE_UNAVAILABLE
+            for key, prev_entry in prev_entries:
+                if key not in self._entries:
+                    self._entries[key] = _Entry(prev_entry.observation, STATE_STALE, inv_reason)
+            for prior in prev_priors:
+                key = (prior.venue, prior.native_symbol)
+                existing = self._entries.get(key)
+                if (
+                    existing is not None
+                    and existing.state == STATE_CURRENT
+                    and existing.observation.status_category == STATUS_CONTINUOUS
+                ):
+                    continue
+                if key not in self._prior_pauses:
+                    self._prior_pauses[key] = InstrumentStatusPriorPause(
+                        venue=prior.venue,
+                        native_symbol=prior.native_symbol,
+                        status_category=prior.status_category,
+                        native_status_code=prior.native_status_code,
+                        enter_reason=prior.enter_reason,
+                        session_generation=prior.session_generation,
+                        trading_day=prior.trading_day,
+                        source_sequence=prior.source_sequence,
+                        invalidated=True,
+                        invalidation_reason=inv_reason,
+                    )
+
+    @property
+    def source_available(self) -> bool:
+        with self._lock:
+            return self._source_available
 
     def view(self, venue: object, native_symbol: object) -> InstrumentStatusView:
         """Return the effective, fail-closed answer for one instrument."""
@@ -745,7 +967,22 @@ class InstrumentStatusLedger:
         key = (venue, native_symbol)
         with self._lock:
             entry = self._entries.get(key)
+            prior = self._prior_pauses.get(key)
             if entry is None:
+                if prior is not None:
+                    return InstrumentStatusView(
+                        venue,
+                        native_symbol,
+                        STATE_STALE,
+                        STATUS_UNKNOWN,
+                        prior.status_category,
+                        False,
+                        prior.invalidation_reason or CODE_SOURCE_UNAVAILABLE,
+                        None,
+                        self._session_generation,
+                        self._trading_day,
+                        prior_pause=prior,
+                    )
                 return InstrumentStatusView(
                     venue,
                     native_symbol,
@@ -757,6 +994,7 @@ class InstrumentStatusLedger:
                     None,
                     self._session_generation,
                     self._trading_day,
+                    prior_pause=None,
                 )
             if entry.state == STATE_CURRENT:
                 observed = entry.observation.status_category
@@ -772,6 +1010,7 @@ class InstrumentStatusLedger:
                         entry.observation,
                         self._session_generation,
                         self._trading_day,
+                        prior_pause=prior,
                     )
                 return InstrumentStatusView(
                     venue,
@@ -784,6 +1023,7 @@ class InstrumentStatusLedger:
                     entry.observation,
                     self._session_generation,
                     self._trading_day,
+                    prior_pause=prior,
                 )
             return InstrumentStatusView(
                 venue,
@@ -796,4 +1036,5 @@ class InstrumentStatusLedger:
                 entry.observation,
                 self._session_generation,
                 self._trading_day,
+                prior_pause=prior,
             )

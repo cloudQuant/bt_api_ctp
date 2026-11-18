@@ -32,7 +32,7 @@ import time
 import weakref
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -596,6 +596,13 @@ class CtpDirectWriteProvider:
         self._instrument_status_scope: Optional[tuple[str, str, object]] = None
         self._instrument_status_listening_trader: Any = None
         self._instrument_status_listener: Any = None
+        self._instrument_status_prior_pauses: dict[tuple[str, str], Any] = {}
+        self._instrument_status_recovery_scope: Optional[tuple[Any, str, str, Any, str]] = None
+        self._instrument_status_recovery_fence: Any = None
+        self._instrument_status_instance_tokens: weakref.WeakKeyDictionary[Any, str] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._instrument_status_fallback_tokens: dict[int, tuple[Any, str]] = {}
         # A leaf lock: the status tap runs on the native callback thread and
         # must never wait behind a write or settlement read that holds _lock.
         self._instrument_status_lock = threading.RLock()
@@ -696,6 +703,8 @@ class CtpDirectWriteProvider:
         def source_failed(generation: int, trading_day: object, spi: object) -> None:
             # Native invokes this with its query lock held. Never reacquire it
             # from here; session sampling elsewhere occurs outside this lock.
+            from bt_api_ctp.instrument_status_observation import CODE_SOURCE_UNAVAILABLE
+
             with self._instrument_status_lock:
                 scope = self._instrument_status_scope
                 if (not self._instrument_status_closed
@@ -706,6 +715,7 @@ class CtpDirectWriteProvider:
                         and scope[2] is spi and self._instrument_status_bridge is not None):
                     # Invalidate previously issued gateway snapshots even if
                     # an exceptional bridge cannot record its stale state.
+                    self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                     self._instrument_status_version += 1
                     self._instrument_status_bridge.mark_source_unavailable()
 
@@ -720,12 +730,17 @@ class CtpDirectWriteProvider:
             if self._instrument_status_closed or trader is not self._feed.trader_client:
                 old_trader, old_listener = trader, listener
             else:
+                from bt_api_ctp.instrument_status_observation import CODE_SOURCE_UNAVAILABLE
+
                 old_trader = self._instrument_status_listening_trader
                 old_listener = self._instrument_status_listener
+                if old_trader is not None and old_trader is not trader:
+                    self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                 self._instrument_status_listening_trader = trader
                 self._instrument_status_listener = listener
                 self._instrument_status_bridge = None
                 self._instrument_status_scope = None
+                self._instrument_status_recovery_scope = None
                 self._instrument_status_version += 1
         if old_trader is not None and old_listener is not None:
             remove = getattr(old_trader, "remove_instrument_status_listener", None)
@@ -785,31 +800,114 @@ class CtpDirectWriteProvider:
         return (type(first) is tuple and len(first) == 3 and type(second) is tuple and len(second) == 3
                 and first[:2] == second[:2] and first[2] is second[2])
 
+    def _instrument_status_token_locked(self, prefix: str, obj: Any) -> Optional[str]:
+        if obj is None:
+            return None
+        try:
+            token = self._instrument_status_instance_tokens.get(obj)
+            if token is None:
+                token = f"{prefix}-{uuid4().hex[:16]}"
+                self._instrument_status_instance_tokens[obj] = token
+            return token
+        except TypeError:
+            entry = self._instrument_status_fallback_tokens.get(id(obj))
+            if entry is not None and entry[0] is obj:
+                return entry[1]
+            token = f"{prefix}-{uuid4().hex[:16]}"
+            self._instrument_status_fallback_tokens[id(obj)] = (obj, token)
+            return token
+
+    def _invalidate_prior_pauses_locked(self, reason: str) -> None:
+        from bt_api_ctp.instrument_status_observation import InstrumentStatusPriorPause
+
+        bridge = self._instrument_status_bridge
+        if bridge is not None:
+            self._sync_prior_pauses_locked(bridge)
+        for key, prior in list(self._instrument_status_prior_pauses.items()):
+            self._instrument_status_prior_pauses[key] = InstrumentStatusPriorPause(
+                venue=prior.venue,
+                native_symbol=prior.native_symbol,
+                status_category=prior.status_category,
+                native_status_code=prior.native_status_code,
+                enter_reason=prior.enter_reason,
+                session_generation=prior.session_generation,
+                trading_day=prior.trading_day,
+                source_sequence=prior.source_sequence,
+                invalidated=True,
+                invalidation_reason=reason,
+            )
+        self._instrument_status_recovery_scope = None
+
+    def _sync_prior_pauses_locked(self, bridge: Any) -> None:
+        for key in list(self._instrument_status_prior_pauses):
+            current_view = bridge.view(key[0], key[1])
+            if (
+                current_view.state == "current"
+                and current_view.effective_status_category == "continuous"
+            ):
+                self._instrument_status_prior_pauses.pop(key, None)
+        for prior in bridge.export_prior_pauses():
+            self._instrument_status_prior_pauses[(prior.venue, prior.native_symbol)] = prior
+
     def _instrument_status_switch_scope(self, facts: tuple[str, str, object]) -> Any:
         """Create or advance the ledger for the current trusted scope."""
 
         from bt_api_ctp.instrument_status_ingress import InstrumentStatusIngressBridge
+        from bt_api_ctp.instrument_status_observation import (
+            CODE_SOURCE_UNAVAILABLE,
+            CODE_STALE_GENERATION,
+            CODE_STALE_TRADING_DAY,
+        )
 
         with self._instrument_status_lock:
             if self._instrument_status_bridge is None:
                 bridge = InstrumentStatusIngressBridge(
                     session_generation=facts[0], trading_day=facts[1]
                 )
+                if self._instrument_status_prior_pauses:
+                    self._invalidate_prior_pauses_locked(CODE_STALE_GENERATION)
+                    bridge.seed_prior_pauses(self._instrument_status_prior_pauses.values())
                 self._instrument_status_bridge = bridge
                 self._instrument_status_scope = facts
+                self._instrument_status_recovery_scope = None
                 self._instrument_status_version += 1
                 return bridge
             bridge = self._instrument_status_bridge
             previous = self._instrument_status_scope
             if previous is not None and previous[2] is not facts[2]:
+                reason = (
+                    CODE_STALE_GENERATION
+                    if previous[0] != facts[0]
+                    else CODE_STALE_TRADING_DAY
+                    if previous[1] != facts[1]
+                    else CODE_SOURCE_UNAVAILABLE
+                )
                 bridge.mark_source_unavailable()
-                bridge = InstrumentStatusIngressBridge(session_generation=facts[0], trading_day=facts[1])
-                self._instrument_status_bridge = bridge
+                self._invalidate_prior_pauses_locked(reason)
+                next_bridge = InstrumentStatusIngressBridge(
+                    session_generation=facts[0], trading_day=facts[1]
+                )
+                next_bridge.carry_forward_from(bridge, reason=reason)
+                next_bridge.seed_prior_pauses(
+                    self._instrument_status_prior_pauses.values(), reason=reason
+                )
+                self._sync_prior_pauses_locked(next_bridge)
+                self._instrument_status_bridge = next_bridge
                 self._instrument_status_scope = facts
+                self._instrument_status_recovery_scope = None
                 self._instrument_status_version += 1
-            elif not self._same_instrument_status_scope(previous, facts):
+                return next_bridge
+            if not self._same_instrument_status_scope(previous, facts):
+                reason = (
+                    CODE_STALE_GENERATION
+                    if previous is None or previous[0] != facts[0]
+                    else CODE_STALE_TRADING_DAY
+                )
+                self._invalidate_prior_pauses_locked(reason)
                 bridge.begin_session_generation(facts[0], facts[1])
+                self._sync_prior_pauses_locked(bridge)
                 self._instrument_status_scope = facts
+                self._instrument_status_recovery_scope = None
                 self._instrument_status_version += 1
             return bridge
 
@@ -834,6 +932,8 @@ class CtpDirectWriteProvider:
         source_trading_day: object = None, source_spi: object = None,
     ) -> object:
         """Consume one native ingress payload; never raise into the callback."""
+
+        from bt_api_ctp.instrument_status_observation import CODE_SOURCE_UNAVAILABLE
 
         version = None
         facts = None
@@ -865,6 +965,7 @@ class CtpDirectWriteProvider:
                                      or source_spi is not self._instrument_status_scope[2])):
                             return
                         if bridge is not None:
+                            self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                             bridge.mark_source_unavailable()
                             self._instrument_status_version += 1
                         return
@@ -877,9 +978,12 @@ class CtpDirectWriteProvider:
                     bridge = self._instrument_status_switch_scope(facts)
                     version = self._instrument_status_version
                     result = bridge.observe_payload(payload)
+                    if result.applied:
+                        self._sync_prior_pauses_locked(bridge)
                     if (not result.applied and result.action not in {"duplicate", "out_of_order"}
                             and not self._instrument_status_old_payload(
                                 payload, facts[0], check_generation=source_generation is None)):
+                        self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                         bridge.mark_source_unavailable()
                     self._instrument_status_version += 1
                     version = self._instrument_status_version
@@ -891,6 +995,7 @@ class CtpDirectWriteProvider:
                     ):
                         return
                     if current is None:
+                        self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                         bridge.mark_source_unavailable()
                         self._instrument_status_version += 1
                     elif not self._same_instrument_status_scope(current, facts):
@@ -916,10 +1021,13 @@ class CtpDirectWriteProvider:
                     facts = self._instrument_status_scope
                     version = self._instrument_status_version
                     result = bridge.observe_payload(payload)
+                    if result.applied:
+                        self._sync_prior_pauses_locked(bridge)
                     if (result.applied or (result.action not in {"duplicate", "out_of_order"}
                             and not self._instrument_status_old_payload(
                                 payload, self._instrument_status_scope[0],
                                 check_generation=source_generation is None))):
+                        self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                         bridge.mark_source_unavailable()
                         self._instrument_status_version += 1
         except BaseException:
@@ -936,6 +1044,7 @@ class CtpDirectWriteProvider:
                             and trader is self._feed.trader_client
                             and not self._instrument_status_closed
                             and self._instrument_status_bridge is not None):
+                        self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                         self._instrument_status_bridge.mark_source_unavailable()
                         self._instrument_status_version += 1
             except BaseException:
@@ -946,6 +1055,311 @@ class CtpDirectWriteProvider:
                 pass
             return False
 
+    def bind_instrument_status_recovery_fence(self, fence: Any) -> None:
+        """Bind a same-generation return-recovery predicate for D67-16."""
+        if fence is not None and not callable(fence):
+            raise ValueError("instrument status recovery fence must be callable or None")
+        with self._instrument_status_lock:
+            self._instrument_status_recovery_fence = fence
+            self._instrument_status_version += 1
+
+    def mark_instrument_status_return_recovery_completed(
+        self,
+        *,
+        session_generation: object = None,
+        trading_day: object = None,
+        recovery_fence: str = "return_recovery_completed",
+    ) -> bool:
+        """Certify return/session recovery completion for the current session."""
+        from bt_api_ctp.instrument_status_observation import _identifier
+
+        if not _identifier(recovery_fence, 128):
+            return False
+        facts = self._instrument_status_session_facts()
+        if facts is None:
+            with self._instrument_status_lock:
+                self._instrument_status_recovery_scope = None
+            return False
+        if session_generation is not None and str(session_generation) != facts[0]:
+            return False
+        if trading_day is not None and trading_day != facts[1]:
+            return False
+        with self._instrument_status_lock:
+            if self._instrument_status_closed:
+                return False
+            trader = self._feed.trader_client
+            if (
+                trader is None
+                or trader is not self._instrument_status_listening_trader
+                or self._instrument_status_listener is None
+            ):
+                self._instrument_status_recovery_scope = None
+                return False
+            bridge = self._instrument_status_switch_scope(facts)
+            if not bridge.source_available:
+                self._instrument_status_recovery_scope = None
+                return False
+            self._instrument_status_recovery_scope = (
+                trader,
+                facts[0],
+                facts[1],
+                facts[2],
+                recovery_fence,
+            )
+            self._instrument_status_version += 1
+            return True
+
+    def clear_instrument_status_return_recovery(self) -> None:
+        """Clear any recorded same-generation return recovery proof."""
+        with self._instrument_status_lock:
+            self._instrument_status_recovery_scope = None
+            self._instrument_status_version += 1
+
+    def _sample_recovery_fence(self, facts: tuple[str, str, object]) -> tuple[bool, Optional[str]]:
+        from bt_api_ctp.instrument_status_observation import _identifier
+
+        with self._instrument_status_lock:
+            fence = self._instrument_status_recovery_fence
+            scope = self._instrument_status_recovery_scope
+            trader = self._instrument_status_listening_trader
+        if fence is not None:
+            try:
+                outcome = fence()
+            except Exception:
+                return False, None
+            if outcome is True:
+                return True, "bound_recovery_fence"
+            if type(outcome) is str and _identifier(outcome, 128):
+                return True, outcome
+            if type(outcome) is tuple and len(outcome) == 2:
+                gen_or_ok, fence_name = outcome
+                gen_ok = (
+                    gen_or_ok is True
+                    or (type(gen_or_ok) in (int, str) and str(gen_or_ok) == facts[0])
+                )
+                if gen_ok and _identifier(fence_name, 128):
+                    return True, fence_name
+            return False, None
+        if (
+            scope is not None
+            and trader is not None
+            and scope[0] is trader
+            and scope[1] == facts[0]
+            and scope[2] == facts[1]
+            and scope[3] is facts[2]
+            and _identifier(scope[4], 128)
+        ):
+            return True, scope[4]
+        return False, None
+
+    def _build_recovery_state_locked(
+        self,
+        venue: object,
+        native_symbol: object,
+        *,
+        facts: Optional[tuple[str, str, object]],
+        prior: Any,
+        recovered: bool,
+        fence_name: Optional[str],
+        listener_healthy: bool,
+        reason_code: Optional[str] = None,
+    ) -> Any:
+        from bt_api_ctp.instrument_status_observation import (
+            _MAX_EXCHANGE_ID_LENGTH,
+            _MAX_INSTRUMENT_ID_LENGTH,
+            InstrumentStatusRecoveryState,
+            _identifier,
+        )
+
+        valid_venue = venue if _identifier(venue, _MAX_EXCHANGE_ID_LENGTH) else None
+        valid_symbol = native_symbol if _identifier(native_symbol, _MAX_INSTRUMENT_ID_LENGTH) else None
+        trader = self._instrument_status_listening_trader
+        listener = self._instrument_status_listener
+        trader_id = self._instrument_status_token_locked("trader", trader) if facts is not None else None
+        listener_id = (
+            self._instrument_status_token_locked("listener", listener) if facts is not None else None
+        )
+        spi_id = self._instrument_status_token_locked("spi", facts[2]) if facts is not None else None
+        return InstrumentStatusRecoveryState(
+            venue=valid_venue,
+            native_symbol=valid_symbol,
+            session_generation=facts[0] if facts is not None else None,
+            trading_day=facts[1] if facts is not None else None,
+            prior_pause_observed=prior is not None,
+            prior_pause_invalidated=bool(prior.invalidated) if prior is not None else False,
+            prior_pause_generation=prior.session_generation if prior is not None else None,
+            prior_pause_trading_day=prior.trading_day if prior is not None else None,
+            prior_pause_status=prior.status_category if prior is not None else None,
+            return_recovery_completed=bool(recovered and listener_healthy and facts is not None),
+            listener_healthy=bool(listener_healthy and facts is not None),
+            trader_id=trader_id,
+            listener_id=listener_id,
+            spi_id=spi_id,
+            recovery_fence=fence_name if (recovered and listener_healthy and facts is not None) else None,
+            reason_code=reason_code,
+        )
+
+    def instrument_status_listener_health(self) -> Any:
+        """Return same-generation status listener binding and health."""
+        from bt_api_ctp.instrument_status_observation import (
+            CODE_SOURCE_UNAVAILABLE,
+            InstrumentStatusListenerHealth,
+        )
+
+        with self._instrument_status_lock:
+            if self._instrument_status_closed:
+                return InstrumentStatusListenerHealth(
+                    healthy=False,
+                    trader_bound=False,
+                    listener_registered=False,
+                    reason_code=CODE_SOURCE_UNAVAILABLE,
+                )
+        facts = self._instrument_status_session_facts()
+        with self._instrument_status_lock:
+            trader = self._feed.trader_client
+            listening_trader = self._instrument_status_listening_trader
+            listener = self._instrument_status_listener
+            trader_bound = trader is not None and trader is listening_trader
+            if self._instrument_status_closed or facts is None or not trader_bound or listener is None:
+                return InstrumentStatusListenerHealth(
+                    healthy=False,
+                    trader_bound=trader_bound,
+                    listener_registered=False,
+                    reason_code=CODE_SOURCE_UNAVAILABLE,
+                )
+            bridge = self._instrument_status_bridge
+            scope = self._instrument_status_scope
+            if (
+                bridge is not None
+                and self._same_instrument_status_scope(scope, facts)
+                and not bridge.source_available
+            ):
+                return InstrumentStatusListenerHealth(
+                    healthy=False,
+                    trader_bound=True,
+                    listener_registered=True,
+                    session_generation=facts[0],
+                    trading_day=facts[1],
+                    trader_id=self._instrument_status_token_locked("trader", listening_trader),
+                    listener_id=self._instrument_status_token_locked("listener", listener),
+                    spi_id=self._instrument_status_token_locked("spi", facts[2]),
+                    reason_code=CODE_SOURCE_UNAVAILABLE,
+                )
+            return InstrumentStatusListenerHealth(
+                healthy=True,
+                trader_bound=True,
+                listener_registered=True,
+                session_generation=facts[0],
+                trading_day=facts[1],
+                trader_id=self._instrument_status_token_locked("trader", listening_trader),
+                listener_id=self._instrument_status_token_locked("listener", listener),
+                spi_id=self._instrument_status_token_locked("spi", facts[2]),
+                reason_code=None,
+            )
+
+    def instrument_status_recovery_state(self, venue: object, native_symbol: object) -> Any:
+        """Sample same-generation D67-16 recovery and listener-health state."""
+        from bt_api_ctp.instrument_status_observation import (
+            _MAX_EXCHANGE_ID_LENGTH,
+            _MAX_INSTRUMENT_ID_LENGTH,
+            CODE_FIELDS_INVALID,
+            CODE_SOURCE_UNAVAILABLE,
+            _identifier,
+        )
+
+        if not _identifier(venue, _MAX_EXCHANGE_ID_LENGTH) or not _identifier(
+            native_symbol, _MAX_INSTRUMENT_ID_LENGTH
+        ):
+            with self._instrument_status_lock:
+                return self._build_recovery_state_locked(
+                    None,
+                    None,
+                    facts=None,
+                    prior=None,
+                    recovered=False,
+                    fence_name=None,
+                    listener_healthy=False,
+                    reason_code=CODE_FIELDS_INVALID,
+                )
+        key = (venue, native_symbol)
+        for _ in range(3):
+            with self._instrument_status_lock:
+                if self._instrument_status_closed:
+                    prior = self._instrument_status_prior_pauses.get(key)
+                    return self._build_recovery_state_locked(
+                        venue,
+                        native_symbol,
+                        facts=None,
+                        prior=prior,
+                        recovered=False,
+                        fence_name=None,
+                        listener_healthy=False,
+                        reason_code=CODE_SOURCE_UNAVAILABLE,
+                    )
+                version = self._instrument_status_version
+            facts = self._instrument_status_session_facts()
+            if facts is None:
+                with self._instrument_status_lock:
+                    if version != self._instrument_status_version:
+                        continue
+                    prior = self._instrument_status_prior_pauses.get(key)
+                    return self._build_recovery_state_locked(
+                        venue,
+                        native_symbol,
+                        facts=None,
+                        prior=prior,
+                        recovered=False,
+                        fence_name=None,
+                        listener_healthy=False,
+                        reason_code=CODE_SOURCE_UNAVAILABLE,
+                    )
+            recovered, fence_name = self._sample_recovery_fence(facts)
+            current = self._instrument_status_session_facts()
+            with self._instrument_status_lock:
+                if version != self._instrument_status_version:
+                    continue
+                if current is None or not self._same_instrument_status_scope(current, facts):
+                    prior = self._instrument_status_prior_pauses.get(key)
+                    return self._build_recovery_state_locked(
+                        venue,
+                        native_symbol,
+                        facts=None,
+                        prior=prior,
+                        recovered=False,
+                        fence_name=None,
+                        listener_healthy=False,
+                        reason_code=CODE_SOURCE_UNAVAILABLE,
+                    )
+                bridge = self._instrument_status_switch_scope(facts)
+                self._sync_prior_pauses_locked(bridge)
+                prior = bridge.prior_pause(venue, native_symbol) or self._instrument_status_prior_pauses.get(key)
+                listener_healthy = bridge.source_available and (
+                    self._feed.trader_client is self._instrument_status_listening_trader
+                    and self._instrument_status_listener is not None
+                )
+                return self._build_recovery_state_locked(
+                    venue,
+                    native_symbol,
+                    facts=facts,
+                    prior=prior,
+                    recovered=recovered,
+                    fence_name=fence_name,
+                    listener_healthy=listener_healthy,
+                    reason_code=None if listener_healthy else CODE_SOURCE_UNAVAILABLE,
+                )
+        with self._instrument_status_lock:
+            prior = self._instrument_status_prior_pauses.get(key)
+            return self._build_recovery_state_locked(
+                venue,
+                native_symbol,
+                facts=None,
+                prior=prior,
+                recovered=False,
+                fence_name=None,
+                listener_healthy=False,
+                reason_code=CODE_SOURCE_UNAVAILABLE,
+            )
+
     def instrument_status_view(self, venue: object, native_symbol: object) -> Any:
         """Return the provider ledger's view for one identity.
 
@@ -954,23 +1368,117 @@ class CtpDirectWriteProvider:
         whose session facts can no longer be read is marked unavailable so its
         observations become stale instead of being reused.
         """
+        from bt_api_ctp.instrument_status_observation import (
+            _MAX_EXCHANGE_ID_LENGTH,
+            _MAX_INSTRUMENT_ID_LENGTH,
+            CODE_SOURCE_UNAVAILABLE,
+            STATE_STALE,
+            STATUS_UNKNOWN,
+            InstrumentStatusView,
+            _identifier,
+        )
+
+        valid_key = (
+            (venue, native_symbol)
+            if _identifier(venue, _MAX_EXCHANGE_ID_LENGTH)
+            and _identifier(native_symbol, _MAX_INSTRUMENT_ID_LENGTH)
+            else None
+        )
         for _ in range(3):
             with self._instrument_status_lock:
                 bridge = self._instrument_status_bridge
                 if self._instrument_status_closed:
-                    return None if bridge is None else bridge.view(venue, native_symbol)
+                    if bridge is None:
+                        prior = (
+                            self._instrument_status_prior_pauses.get(valid_key)
+                            if valid_key is not None
+                            else None
+                        )
+                        if prior is None:
+                            return None
+                        rec = self._build_recovery_state_locked(
+                            venue,
+                            native_symbol,
+                            facts=None,
+                            prior=prior,
+                            recovered=False,
+                            fence_name=None,
+                            listener_healthy=False,
+                            reason_code=CODE_SOURCE_UNAVAILABLE,
+                        )
+                        return InstrumentStatusView(
+                            venue,
+                            native_symbol,
+                            STATE_STALE,
+                            STATUS_UNKNOWN,
+                            prior.status_category,
+                            False,
+                            prior.invalidation_reason or CODE_SOURCE_UNAVAILABLE,
+                            None,
+                            None,
+                            None,
+                            prior_pause=prior,
+                            recovery_state=rec,
+                        )
+                    return bridge.view(venue, native_symbol)
                 version = self._instrument_status_version
             facts = self._instrument_status_session_facts()
+            if facts is None:
+                with self._instrument_status_lock:
+                    if version != self._instrument_status_version:
+                        continue
+                    bridge = self._instrument_status_bridge
+                    self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
+                    if bridge is None:
+                        prior = (
+                            self._instrument_status_prior_pauses.get(valid_key)
+                            if valid_key is not None
+                            else None
+                        )
+                        if prior is None:
+                            return None
+                        rec = self._build_recovery_state_locked(
+                            venue,
+                            native_symbol,
+                            facts=None,
+                            prior=prior,
+                            recovered=False,
+                            fence_name=None,
+                            listener_healthy=False,
+                            reason_code=CODE_SOURCE_UNAVAILABLE,
+                        )
+                        return InstrumentStatusView(
+                            venue,
+                            native_symbol,
+                            STATE_STALE,
+                            STATUS_UNKNOWN,
+                            prior.status_category,
+                            False,
+                            prior.invalidation_reason or CODE_SOURCE_UNAVAILABLE,
+                            None,
+                            None,
+                            None,
+                            prior_pause=prior,
+                            recovery_state=rec,
+                        )
+                    bridge.mark_source_unavailable()
+                    self._instrument_status_version += 1
+                    view = bridge.view(venue, native_symbol)
+                    rec = self._build_recovery_state_locked(
+                        venue,
+                        native_symbol,
+                        facts=None,
+                        prior=view.prior_pause,
+                        recovered=False,
+                        fence_name=None,
+                        listener_healthy=False,
+                        reason_code=CODE_SOURCE_UNAVAILABLE,
+                    )
+                    return replace(view, recovery_state=rec)
+            recovered, fence_name = self._sample_recovery_fence(facts)
             with self._instrument_status_lock:
                 if version != self._instrument_status_version:
                     continue
-                bridge = self._instrument_status_bridge
-                if facts is None:
-                    if bridge is None:
-                        return None
-                    bridge.mark_source_unavailable()
-                    self._instrument_status_version += 1
-                    return bridge.view(venue, native_symbol)
                 bridge = self._instrument_status_switch_scope(facts)
                 view = bridge.view(venue, native_symbol)
                 version = self._instrument_status_version
@@ -979,13 +1487,46 @@ class CtpDirectWriteProvider:
                 if version != self._instrument_status_version:
                     continue
                 if current is None:
+                    self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
                     bridge.mark_source_unavailable()
                     self._instrument_status_version += 1
-                    return bridge.view(venue, native_symbol)
+                    view = bridge.view(venue, native_symbol)
+                    rec = self._build_recovery_state_locked(
+                        venue,
+                        native_symbol,
+                        facts=None,
+                        prior=view.prior_pause,
+                        recovered=False,
+                        fence_name=None,
+                        listener_healthy=False,
+                        reason_code=CODE_SOURCE_UNAVAILABLE,
+                    )
+                    return replace(view, recovery_state=rec)
                 if not self._same_instrument_status_scope(current, facts):
                     bridge = self._instrument_status_switch_scope(current)
-                    return bridge.view(venue, native_symbol)
-                return view
+                    view = bridge.view(venue, native_symbol)
+                    facts = current
+                    recovered = False
+                    fence_name = None
+                listener_healthy = bridge.source_available and (
+                    self._feed.trader_client is self._instrument_status_listening_trader
+                    and self._instrument_status_listener is not None
+                )
+                self._sync_prior_pauses_locked(bridge)
+                prior = view.prior_pause
+                if prior is None and valid_key is not None:
+                    prior = self._instrument_status_prior_pauses.get(valid_key)
+                rec = self._build_recovery_state_locked(
+                    venue,
+                    native_symbol,
+                    facts=facts,
+                    prior=prior,
+                    recovered=recovered,
+                    fence_name=fence_name,
+                    listener_healthy=listener_healthy,
+                    reason_code=None if listener_healthy else CODE_SOURCE_UNAVAILABLE,
+                )
+                return replace(view, prior_pause=prior, recovery_state=rec)
         return None
 
     def ensure_listening(self) -> None:
@@ -3161,8 +3702,11 @@ class CtpDirectWriteProvider:
                 if self._owner_thread_only:
                     return False
         with self._instrument_status_lock:
+            from bt_api_ctp.instrument_status_observation import CODE_SOURCE_UNAVAILABLE
+
             self._instrument_status_closed = True
             self._instrument_status_version += 1
+            self._invalidate_prior_pauses_locked(CODE_SOURCE_UNAVAILABLE)
             bridge = self._instrument_status_bridge
             if bridge is not None:
                 bridge.mark_source_unavailable()

@@ -9743,8 +9743,25 @@ class TraderClient:
             failed = self._instrument_status_unavailable_scope
             unavailable = (type(failed) is tuple and len(failed) == 3
                            and failed[:2] == (generation, day) and failed[2] is spi)
+            ingress_poisoned = (
+                self._callback_ingress is not None
+                and bool(getattr(self._callback_ingress, "poisoned", False))
+            )
+            spi_current = (
+                spi is not None and spi._native_api is self._api and spi._is_current_locked()
+            )
+            healthy = (
+                bool(self._connected)
+                and type(generation) is int
+                and generation >= 0
+                and type(day) is str
+                and bool(day)
+                and spi_current
+                and not unavailable
+                and not ingress_poisoned
+            )
             return (generation, day, any(item is listener for item in self._instrument_status_listeners),
-                    not unavailable, spi)
+                    healthy, spi)
 
     def _emit_instrument_status_payload(
         self, payload: Any, *, source_generation: int, source_trading_day: Any, origin_spi: Any

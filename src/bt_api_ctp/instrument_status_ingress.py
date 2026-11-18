@@ -47,6 +47,7 @@ from bt_api_ctp.instrument_status_observation import (
     InstrumentStatusApplyResult,
     InstrumentStatusGenerationResult,
     InstrumentStatusLedger,
+    InstrumentStatusPriorPause,
     InstrumentStatusSessionFacts,
     InstrumentStatusView,
     native_fields_from_ingress_payload,
@@ -267,3 +268,30 @@ class InstrumentStatusIngressBridge:
         """Return the fail-closed effective answer for one instrument."""
 
         return self._ledger.view(venue, native_symbol)
+
+    @property
+    def source_available(self) -> bool:
+        return self._ledger.source_available
+
+    def prior_pause(
+        self, venue: object, native_symbol: object
+    ) -> InstrumentStatusPriorPause | None:
+        return self._ledger.prior_pause(venue, native_symbol)
+
+    def export_prior_pauses(self) -> tuple[InstrumentStatusPriorPause, ...]:
+        return self._ledger.export_prior_pauses()
+
+    def seed_prior_pauses(
+        self, prior_pauses: object, *, reason: str | None = None
+    ) -> None:
+        with self._lock:
+            self._ledger.seed_prior_pauses(prior_pauses, reason=reason)
+
+    def carry_forward_from(
+        self, previous_bridge: object, *, reason: str | None = None
+    ) -> None:
+        if type(previous_bridge) is not InstrumentStatusIngressBridge or previous_bridge is self:
+            return
+        previous_ledger = previous_bridge._ledger
+        with self._lock:
+            self._ledger.carry_forward_from(previous_ledger, reason=reason)
